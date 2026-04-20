@@ -1,0 +1,56 @@
+# Build output
+/build/
+/out/
+/cmake-build-*/
+
+# IDE / Editor
+/.vs/
+/.vscode/
+/.idea/
+/.cache/
+*.user
+*.suo
+*.sdf
+*.opendb
+CMakeUserPresets.json
+
+# vcpkg
+/vcpkg_installed/
+/vcpkg/
+
+# CMake generated
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+Testing/
+
+# Qt generated
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*_automoc.cpp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.exp
+*.ilk
+*.log
+
+# Project artifacts
+*.pvj.thumbs/
