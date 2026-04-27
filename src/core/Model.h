@@ -1,0 +1,321 @@
+#pragma once
+
+#include <QHash>
+#include <QList>
+#include <QString>
+#include <QUuid>
+#include <optional>
+
+namespace pvj::core {
+
+// Enums
+
+enum class BankSetType : int {
+    TypeA = 0,  // GrandVJ "Type 0" - main cells
+    TypeB = 1,  // GrandVJ "Type 1" - secondary cells
+};
+
+enum class VisualType {
+    Empty,
+    Media,       // reference to MediaItem by uuid
+    Generator,   // built-in source (feedback, test pattern, spout, ...)
+};
+
+enum class GeneratorKind {
+    None,
+    InputSpout,
+    InputSyphon,
+    InputNdi,
+    SolidColor,
+    TestPattern,
+    Feedback,
+};
+
+// Blend / copy modes. Values 0–7 are legacy; 8+ mirror TouchDesigner Composite TOP
+// operations (docs.derivative.ca/Composite_TOP) for interoperability.
+enum class CopyMode : int {
+    Normal = 0,
+    Add = 1,
+    Multiply = 2,
+    Screen = 3,
+    Lighten = 4,
+    Darken = 5,
+    Difference = 6,
+    Overlay = 7,
+
+    Atop = 8,
+    Average = 9,
+    Brightest = 10,
+    BurnColor = 11,
+    BurnLinear = 12,
+    ChromaDifference = 13,
+    ColorBlend = 14,
+    DarkerColor = 15,
+    Dimmest = 16,
+    Divide = 17,
+    Dodge = 18,
+    Exclude = 19,
+    Freeze = 20,
+    Glow = 21,
+    HardLight = 22,
+    HardMix = 23,
+    Heat = 24,
+    HueBlend = 25,
+    Inside = 26,
+    InsideLuminance = 27,
+    Inverse = 28,
+    LighterColor = 29,
+    LuminanceDifference = 30,
+    Maximum = 31,
+    Minimum = 32,
+    Negate = 33,
+    Outside = 34,
+    OutsideLuminance = 35,
+    Over = 36,
+    Pinlight = 37,
+    Reflect = 38,
+    SoftLight = 39,
+    LinearLight = 40,
+    StencilLuminance = 41,
+    Subtract = 42,
+    Subtractive = 43,
+    Under = 44,
+    VividLight = 45,
+    Xor = 46,
+    YFilm = 47,
+    ZFilm = 48,
+    DifferenceVivid = 49,
+    DifferenceRgb = 50,
+};
+
+enum class MaskType {
+    None,
+    Rectangle,
+    Circle,
+    SoftEdge,
+    Ellipse,
+    Custom,
+};
+
+enum class WrapMode {
+    Clamp,
+    Repeat,
+    Mirror,
+    Tile,
+};
+
+/// Clip playback behaviour (GrandVJ-style toolbar). Only a subset is enforced by the engine today.
+enum class PlayMode : int {
+    LoopForward = 0,
+    LoopReverse,
+    Once,
+    PingPong,
+    Shuffle,
+    TimecodeSync,
+    LoopSegment,
+    HoldLastFrame,
+    PlayBackwardOnce,
+    RandomAccess,
+    StepFrame,
+};
+
+enum class LayerBand : int {
+    Back = 0,
+    Mid,
+    Front,
+};
+
+enum class InputType {
+    None,
+    MidiNote,
+    MidiCC,
+    Key,
+    Osc,
+};
+
+/// How a `PropertyMapping` reacts to MIDI note (or key) input vs CC faders.
+enum class PropertyButtonMode {
+    Continuous, ///< CC fader: value scaled with min/max (default for legacy mappings).
+    Toggle,     ///< Note: flip boolean or invert normalized value around midpoint.
+    SetOnPress, ///< Note: set to `buttonValue` (e.g. enum index, or 0/1 for bool).
+};
+
+enum class TriggerTarget {
+    Cell,
+    BankNext,
+    BankPrev,
+    BankSelect,
+    BankSetSwitch,
+    Property,
+};
+
+// Small value types
+
+struct MediaItem {
+    QUuid id;
+    QString path;         // absolute path on disk
+    QString displayName;  // optional user-friendly name, falls back to filename
+};
+
+struct EffectParam {
+    QString name;
+    double value = 0.0;
+};
+
+struct Effect {
+    QString name;
+    QList<EffectParam> params;  // up to 4
+};
+
+// Ordered post-processing chain for a cell (node editor). Execution order is list order.
+struct CellFilterNode {
+    QUuid   id = QUuid::createUuid();
+    QString typeId; // e.g. blur, color, glow (render pipeline uses this in later milestones)
+    QList<EffectParam> params;
+};
+
+struct PictureParams {
+    double zoom           = 0.0; // -1 (out) .. +1 (in)
+    double rotationDeg    = 0.0; // -180 .. +180
+    double brightness     = 0.0; // -1 .. +1
+    double contrast       = 1.0; // 0 .. 2
+    double saturation     = 1.0; // 0 .. 2
+    double circularMotion = 0.0; // 0 .. 1 (strength of circular drift)
+};
+
+struct FeedbackParams {
+    bool   enabled     = false;
+    double strength    = 0.9;   // 0 .. 1   blending weight of previous frame
+    double zoom        = 1.02;  // 0.5 .. 2 per-frame scale around cell center
+    double rotationDeg = 0.0;   // -180 .. +180: fixed °/frame when !rotationAnimated; °/s when animated
+    /// When true, feedback rotation runs continuously (circular motion); `rotationDeg` is speed in °/s.
+    bool   rotationAnimated = false;
+    double decay       = 0.03;  // -0.1 .. +0.1 attenuation applied to previous frame
+    double brightness  = 0.0;   // -1 .. +1 additive brightness on feedback history
+    double saturation  = 1.0;   // 0 .. 2 saturation multiplier
+    double gamma       = 1.0;   // 0.1 .. 4 gamma correction
+    double contrast    = 1.0;   // 0 .. 2 contrast multiplier
+    // Additional grading applied to the feedback-layer output after media/history mix.
+    double layerBrightness = 0.0; // -1 .. +1
+    double layerSaturation = 1.0; // 0 .. 2
+    double layerGamma      = 1.0; // 0.1 .. 4
+    double layerContrast   = 1.0; // 0 .. 2
+    WrapMode wrapMode  = WrapMode::Clamp;
+};
+
+struct CellProps {
+    int     priority      = 0;
+    double  transparency  = 1.0;
+    /// Per-clip audio fader (linear, typically 0–2). Video opacity uses `transparency`.
+    double  audioGain     = 1.0;
+    double  movieSpeed    = 1.0;
+    double  fade          = 0.0;
+    MaskType maskType     = MaskType::None;
+    double  maskWidth     = 0.0;
+    double  maskSmoothness = 0.0;
+    double  rotationZ     = 0.0;
+    CopyMode copyMode     = CopyMode::Normal;
+    /// Last Mixing preset row chosen in the inspector (0 = Custom).
+    int     mixingPresetIndex = 0;
+    /// Preferred mixer depth band (mapped to a fixed 4-layer block in the engine).
+    LayerBand layerBand = LayerBand::Mid;
+    /// Key/matte RGB weights (0–1, UI often shows as %). Reserved for GPU keying; defaults 1 = full.
+    double  keyChannelR   = 1.0;
+    double  keyChannelG   = 1.0;
+    double  keyChannelB   = 1.0;
+
+    PlayMode playMode        = PlayMode::LoopForward;
+    bool     clipPaused      = false;
+    /// Segment trim as normalized times in the source (0 = start, 1 = end).
+    double   segmentInU      = 0.0;
+    double   segmentOutU     = 1.0;
+    /// Manual playhead position 0–1 for scratch / jog (applied on seek).
+    double   scratchHeadU    = 0.5;
+    QString  overlayText;
+    QString  tcStart         = QStringLiteral("00:00:00:00");
+    PictureParams  picture;
+    FeedbackParams feedback;
+};
+
+struct VisualRef {
+    VisualType   type      = VisualType::Empty;
+    QUuid        mediaId;                 // when type == Media
+    GeneratorKind generator = GeneratorKind::None;  // when type == Generator
+};
+
+struct PropertyMapping {
+    QString    property;  // e.g. "transparency", "movieSpeed"
+    InputType  input = InputType::None;
+    int        channel = 0;
+    int        number  = 0;     // CC number / note number
+    double     minValue = 0.0;
+    double     maxValue = 1.0;
+    PropertyButtonMode buttonMode = PropertyButtonMode::Continuous;
+    /// Meaningful when `buttonMode == SetOnPress` (e.g. enum index, 1.0 for bool true).
+    double     buttonValue = 1.0;
+};
+
+struct TriggerMapping {
+    InputType     input = InputType::None;
+    int           channel = 0;
+    int           number  = 0;    // midi number / key code
+    QString       keyText;        // for KEY targets, the Qt key-sequence string
+    TriggerTarget target = TriggerTarget::Cell;
+    int           bankSetIndex = 0;
+    int           bankIndex    = 0;
+    int           cellIndex    = 0;
+    QString       propertyName; // for TriggerTarget::Property
+};
+
+struct Cell {
+    int         index = 0;  // 0..N inside its bank (depends on grid size)
+    VisualRef   visual;
+    CellProps   props;
+    std::optional<Effect> effect;
+    QList<PropertyMapping> propertyMappings;
+    /// Filter chain stored only on this bank-grid cell (node editor). The mixer applies it
+    /// when this cell occupies a mix-layer slot; clip peek and inspector thumbnails stay raw.
+    QList<CellFilterNode> filterChain;
+};
+
+struct Bank {
+    int     index = 0;
+    QString name;
+    QList<Cell> cells;
+};
+
+struct BankSet {
+    BankSetType type = BankSetType::TypeA;
+    QList<Bank> banks;
+};
+
+struct AudioSettings {
+    QString driver       = QStringLiteral("auto"); // auto/wasapi/asio/coreaudio/pulse/jack/alsa
+    QString inputDevice;
+    QString outputDevice;
+    int     bufferSize   = 512;
+    int     sampleRate   = 48000;
+};
+
+struct UiSettings {
+    bool mediaLibraryVisible = true;
+    bool bankPanelVisible    = true;
+    bool parameterTabsVisible = true;
+    int  mediaLibraryWidth   = 320;
+    int  bankPanelHeight     = 260;
+};
+
+struct MatrixSettings {
+    int width  = 1920;
+    int height = 1080;
+    int gridRows = 4;
+    int gridCols = 12;
+};
+
+struct Settings {
+    AudioSettings  audio;
+    UiSettings     ui;
+    MatrixSettings matrix;
+};
+
+} // namespace pvj::core

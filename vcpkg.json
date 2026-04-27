@@ -1,0 +1,23 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "name": "performanievj",
+    "version-string": "0.1.0",
+    "description": "Visual Mats for Video Performance",
+    "builtin-baseline": "5e6578b62d9e4ac5a563e816802a56818540cd2e",
+    "dependencies": [
+        {
+            "name": "qtbase",
+            "default-features": false,
+            "features": ["gui", "widgets", "concurrent", "testlib"]
+        },
+        "qtshadertools",
+        {
+            "name": "ffmpeg",
+            "default-features": false,
+            "features": ["avcodec", "avformat", "swscale", "swresample"]
+        },
+        "lz4",
+        "miniaudio",
+        "rtmidi"
+    ]
+}

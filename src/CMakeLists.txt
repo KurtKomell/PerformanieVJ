@@ -1,0 +1,7 @@
+add_subdirectory(core)
+add_subdirectory(video)
+add_subdirectory(audio)
+add_subdirectory(render)
+add_subdirectory(app)
+add_subdirectory(input)
+# add_subdirectory(interop)
