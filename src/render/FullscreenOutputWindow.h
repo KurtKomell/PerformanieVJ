@@ -31,6 +31,8 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    QScreen* resolveTargetScreen() const;
+
     RhiMixerWidget* m_mixer = nullptr;
     QScreen*          m_screen = nullptr;
 };

@@ -211,19 +211,6 @@ QHash<QString, FilterNodeSpec> buildSchemas()
     setParams("replicate", { floatParam("count", "Count", 1.0, 32.0, 4.0), percentParam("spread", "Spread", 0.25) });
     setParams("echo", { percentParam("amount", "Amount", 0.5), floatParam("delay", "Delay", 0.0, 2.0, 0.2) });
     setParams("slit_scanner", { floatParam("speed", "Speed", -4.0, 4.0, 0.5), enumParam("axis", "Axis", { "Horizontal", "Vertical" }, 0) });
-    setParams("feedback",
-        { percentParam("strength", "Strength", 0.9), floatParam("zoom", "Zoom", 0.5, 2.0, 1.02),
-            angleParam("rotation", "Rotation", 0.0), floatParam("decay", "Decay", -0.1, 0.1, 0.03) });
-    setParams("feedback_rotated",
-        { percentParam("strength", "Strength", 0.9), floatParam("zoom", "Zoom", 0.5, 2.0, 1.02),
-            angleParam("rotation", "Rotation", 8.0), floatParam("decay", "Decay", -0.1, 0.1, 0.03) });
-    setParams("feedback_pro",
-        { percentParam("strength", "Strength", 0.9), floatParam("brightness", "Brightness", -1.0, 1.0, 0.0),
-            floatParam("saturation", "Saturation", 0.0, 2.0, 1.0), floatParam("gamma", "Gamma", 0.1, 4.0, 1.0) });
-    setParams("warped_feedback",
-        { percentParam("strength", "Strength", 0.9), floatParam("zoom", "Zoom", 0.5, 2.0, 1.02),
-            angleParam("rotation", "Rotation", 0.0), percentParam("amount", "Warp", 0.5) });
-
     // Stylize / film
     for (const char* id : { "edges", "emboss", "find_edges", "glow_edges", "cartoon", "watercolor", "oil_paint" }) {
         setParams(id, { percentParam("amount", "Amount", 0.6), floatParam("detail", "Detail", 0.0, 4.0, 1.0) });
@@ -248,7 +235,11 @@ QHash<QString, FilterNodeSpec> buildSchemas()
             percentParam("brightness", "Level / center", 0.5), percentParam("threshold", "Tolerance", 0.25),
             percentParam("softness", "Feather", 0.12) });
     setParams("linear_mask", { angleParam("angle", "Angle", 0.0), percentParam("softness", "Softness", 0.2) });
-    setParams("mask", { percentParam("amount", "Amount", 1.0) });
+    setParams("mask",
+        { enumParam("mode", "Mask mode", { "None", "Rectangle", "Circle", "Soft edge", "Ellipse", "Custom" }, 0),
+          percentParam("sizeX", "Size X", 1.0),
+          percentParam("sizeY", "Size Y", 1.0),
+          percentParam("feather", "Feather", 0.1) });
     setParams("crop", { percentParam("left", "Left", 0.0), percentParam("top", "Top", 0.0), percentParam("right", "Right", 1.0), percentParam("bottom", "Bottom", 1.0) });
     setParams("crop_rectangle", { percentParam("x", "X", 0.0), percentParam("y", "Y", 0.0), percentParam("width", "Width", 1.0), percentParam("height", "Height", 1.0) });
 

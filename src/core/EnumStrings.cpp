@@ -148,24 +148,56 @@ MaskType maskTypeFromString(const QString& s, MaskType fallback)
     return fallback;
 }
 
-QString toString(WrapMode w)
+QString toString(LayerMatteRole r)
 {
-    switch (w) {
-    case WrapMode::Clamp:  return QStringLiteral("clamp");
-    case WrapMode::Repeat: return QStringLiteral("repeat");
-    case WrapMode::Mirror: return QStringLiteral("mirror");
-    case WrapMode::Tile:   return QStringLiteral("tile");
+    switch (r) {
+    case LayerMatteRole::None:      return QStringLiteral("none");
+    case LayerMatteRole::LumaMatte: return QStringLiteral("lumaMatte");
+    case LayerMatteRole::AlphaMatte:return QStringLiteral("alphaMatte");
+    case LayerMatteRole::KnockOut:  return QStringLiteral("knockOut");
     }
-    return QStringLiteral("clamp");
+    return QStringLiteral("none");
 }
 
-WrapMode wrapModeFromString(const QString& s, WrapMode fallback)
+LayerMatteRole layerMatteRoleFromString(const QString& s, LayerMatteRole fallback)
 {
+    bool ok = false;
+    const int asInt = s.toInt(&ok);
+    if (ok && asInt >= 0 && asInt <= 3) {
+        return static_cast<LayerMatteRole>(asInt);
+    }
     const QString k = s.toLower();
-    if (k == QLatin1String("clamp"))  return WrapMode::Clamp;
-    if (k == QLatin1String("repeat")) return WrapMode::Repeat;
-    if (k == QLatin1String("mirror")) return WrapMode::Mirror;
-    if (k == QLatin1String("tile"))   return WrapMode::Tile;
+    if (k == QLatin1String("none"))      return LayerMatteRole::None;
+    if (k == QLatin1String("lumamatte")) return LayerMatteRole::LumaMatte;
+    if (k == QLatin1String("alphamatte"))return LayerMatteRole::AlphaMatte;
+    if (k == QLatin1String("knockout"))  return LayerMatteRole::KnockOut;
+    return fallback;
+}
+
+QString toString(KeyingMode m)
+{
+    switch (m) {
+    case KeyingMode::Luma:   return QStringLiteral("luma");
+    case KeyingMode::Chroma: return QStringLiteral("chroma");
+    }
+    return QStringLiteral("luma");
+}
+
+KeyingMode keyingModeFromString(const QString& s, KeyingMode fallback)
+{
+    bool ok = false;
+    const int asInt = s.toInt(&ok);
+    if (ok && asInt >= 0 && asInt <= 1) {
+        return static_cast<KeyingMode>(asInt);
+    }
+
+    const QString k = s.toLower();
+    if (k == QLatin1String("luma") || k == QLatin1String("sw")) {
+        return KeyingMode::Luma;
+    }
+    if (k == QLatin1String("chroma") || k == QLatin1String("color") || k == QLatin1String("farbe")) {
+        return KeyingMode::Chroma;
+    }
     return fallback;
 }
 
@@ -197,7 +229,6 @@ QString toString(GeneratorKind g)
     case GeneratorKind::InputNdi:       return QStringLiteral("inputNdi");
     case GeneratorKind::SolidColor:     return QStringLiteral("solidColor");
     case GeneratorKind::TestPattern:    return QStringLiteral("testPattern");
-    case GeneratorKind::Feedback:       return QStringLiteral("feedback");
     }
     return QStringLiteral("none");
 }
@@ -211,7 +242,6 @@ GeneratorKind generatorFromString(const QString& s, GeneratorKind fallback)
     if (k == QLatin1String("inputndi"))       return GeneratorKind::InputNdi;
     if (k == QLatin1String("solidcolor"))     return GeneratorKind::SolidColor;
     if (k == QLatin1String("testpattern"))    return GeneratorKind::TestPattern;
-    if (k == QLatin1String("feedback"))       return GeneratorKind::Feedback;
     return fallback;
 }
 

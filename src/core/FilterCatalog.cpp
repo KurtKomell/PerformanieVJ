@@ -101,10 +101,6 @@ QVector<FilterCatalogEntry> buildCatalog()
     add("Generate & blend", "replicate", "Replicate");
     add("Generate & blend", "echo", "Echo");
     add("Generate & blend", "slit_scanner", "Slit Scanner");
-    add("Generate & blend", "feedback", "Feedback");
-    add("Generate & blend", "feedback_rotated", "Feedback Rotated");
-    add("Generate & blend", "feedback_pro", "Feedback Pro");
-    add("Generate & blend", "warped_feedback", "Warped Feedback");
 
     // --- Stylize & film ---
     add("Stylize & film", "edges", "Edges");

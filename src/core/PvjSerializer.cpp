@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
+#include <QtGlobal>
 
 namespace pvj::core {
 
@@ -35,15 +36,33 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     w.writeAttribute(QStringLiteral("movieSpeed"),    QString::number(p.movieSpeed,   'g', 6));
     w.writeAttribute(QStringLiteral("fade"),          QString::number(p.fade,         'g', 6));
     w.writeAttribute(QStringLiteral("maskType"),       enums::toString(p.maskType));
+    w.writeAttribute(QStringLiteral("matteRole"),      enums::toString(p.matteRole));
+    w.writeAttribute(QStringLiteral("maskFeather"),    QString::number(p.maskFeather,    'g', 6));
+    w.writeAttribute(QStringLiteral("maskRectWidth"),  QString::number(p.maskRectWidth,  'g', 6));
+    w.writeAttribute(QStringLiteral("maskRectHeight"), QString::number(p.maskRectHeight, 'g', 6));
+    w.writeAttribute(QStringLiteral("maskRadius"),     QString::number(p.maskRadius,     'g', 6));
+    w.writeAttribute(QStringLiteral("maskEllipseX"),   QString::number(p.maskEllipseX,   'g', 6));
+    w.writeAttribute(QStringLiteral("maskEllipseY"),   QString::number(p.maskEllipseY,   'g', 6));
     w.writeAttribute(QStringLiteral("maskWidth"),      QString::number(p.maskWidth,      'g', 6));
     w.writeAttribute(QStringLiteral("maskSmoothness"), QString::number(p.maskSmoothness, 'g', 6));
     w.writeAttribute(QStringLiteral("rotationZ"),      QString::number(p.rotationZ,      'g', 6));
     w.writeAttribute(QStringLiteral("copyMode"),       enums::toString(p.copyMode));
     w.writeAttribute(QStringLiteral("mixingPresetIndex"), QString::number(p.mixingPresetIndex));
-    w.writeAttribute(QStringLiteral("layerBand"), QString::number(int(p.layerBand)));
+    w.writeAttribute(QStringLiteral("preferredLayer"), QString::number(qBound(0, p.preferredLayer, 11)));
     w.writeAttribute(QStringLiteral("keyChannelR"),   QString::number(p.keyChannelR,   'g', 6));
     w.writeAttribute(QStringLiteral("keyChannelG"),   QString::number(p.keyChannelG,   'g', 6));
     w.writeAttribute(QStringLiteral("keyChannelB"),   QString::number(p.keyChannelB,   'g', 6));
+    w.writeAttribute(QStringLiteral("keyingMode"),    enums::toString(p.keyingMode));
+    w.writeAttribute(QStringLiteral("keyingEnabled"), p.keyingEnabled ? QStringLiteral("true")
+                                                                       : QStringLiteral("false"));
+    w.writeAttribute(QStringLiteral("keyLumaCenter"), QString::number(p.keyLumaCenter, 'g', 6));
+    w.writeAttribute(QStringLiteral("keyLumaInvert"), p.keyLumaInvert ? QStringLiteral("true")
+                                                                       : QStringLiteral("false"));
+    w.writeAttribute(QStringLiteral("keyThreshold"), QString::number(p.keyThreshold, 'g', 6));
+    w.writeAttribute(QStringLiteral("keySoftness"), QString::number(p.keySoftness, 'g', 6));
+    w.writeAttribute(QStringLiteral("keyChromaHue"),  QString::number(p.keyChromaHue, 'g', 6));
+    w.writeAttribute(QStringLiteral("keyChromaInvert"), p.keyChromaInvert ? QStringLiteral("true")
+                                                                           : QStringLiteral("false"));
     w.writeAttribute(QStringLiteral("playMode"),       QString::number(int(p.playMode)));
     w.writeAttribute(QStringLiteral("clipPaused"),    p.clipPaused ? QStringLiteral("true") : QStringLiteral("false"));
     w.writeAttribute(QStringLiteral("segmentInU"),   QString::number(p.segmentInU,   'g', 6));
@@ -59,26 +78,6 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     w.writeAttribute(QStringLiteral("contrast"),       QString::number(p.picture.contrast,       'g', 6));
     w.writeAttribute(QStringLiteral("saturation"),     QString::number(p.picture.saturation,     'g', 6));
     w.writeAttribute(QStringLiteral("circularMotion"), QString::number(p.picture.circularMotion, 'g', 6));
-    w.writeEndElement();
-
-    w.writeStartElement(QStringLiteral("Feedback"));
-    w.writeAttribute(QStringLiteral("enabled"),     p.feedback.enabled ? QStringLiteral("true")
-                                                                      : QStringLiteral("false"));
-    w.writeAttribute(QStringLiteral("strength"),    QString::number(p.feedback.strength,    'g', 6));
-    w.writeAttribute(QStringLiteral("zoom"),        QString::number(p.feedback.zoom,        'g', 6));
-    w.writeAttribute(QStringLiteral("rotationDeg"), QString::number(p.feedback.rotationDeg, 'g', 6));
-    w.writeAttribute(QStringLiteral("rotationAnimated"), p.feedback.rotationAnimated ? QStringLiteral("true")
-                                                                                      : QStringLiteral("false"));
-    w.writeAttribute(QStringLiteral("decay"),       QString::number(p.feedback.decay,       'g', 6));
-    w.writeAttribute(QStringLiteral("brightness"),  QString::number(p.feedback.brightness,  'g', 6));
-    w.writeAttribute(QStringLiteral("saturation"),  QString::number(p.feedback.saturation,  'g', 6));
-    w.writeAttribute(QStringLiteral("gamma"),       QString::number(p.feedback.gamma,       'g', 6));
-    w.writeAttribute(QStringLiteral("contrast"),    QString::number(p.feedback.contrast,    'g', 6));
-    w.writeAttribute(QStringLiteral("layerBrightness"), QString::number(p.feedback.layerBrightness, 'g', 6));
-    w.writeAttribute(QStringLiteral("layerSaturation"), QString::number(p.feedback.layerSaturation, 'g', 6));
-    w.writeAttribute(QStringLiteral("layerGamma"),      QString::number(p.feedback.layerGamma,      'g', 6));
-    w.writeAttribute(QStringLiteral("layerContrast"),   QString::number(p.feedback.layerContrast,   'g', 6));
-    w.writeAttribute(QStringLiteral("wrapMode"),    enums::toString(p.feedback.wrapMode));
     w.writeEndElement();
 
     w.writeEndElement();
@@ -168,13 +167,27 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.fade == 0.0
             && c.props.priority == 0
             && c.props.maskType == MaskType::None
+            && c.props.matteRole == LayerMatteRole::None
+            && c.props.maskFeather == 0.1
+            && c.props.maskRectWidth == 1.0
+            && c.props.maskRectHeight == 1.0
+            && c.props.maskRadius == 0.5
+            && c.props.maskEllipseX == 0.6
+            && c.props.maskEllipseY == 0.45
             && c.props.copyMode == CopyMode::Normal
             && c.props.rotationZ == 0.0
             && c.props.mixingPresetIndex == 0
-            && c.props.layerBand == LayerBand::Mid
+            && c.props.preferredLayer == 4
             && c.props.keyChannelR == 1.0
             && c.props.keyChannelG == 1.0
             && c.props.keyChannelB == 1.0
+            && c.props.keyingMode == KeyingMode::Luma
+            && c.props.keyLumaCenter == 0.5
+            && !c.props.keyLumaInvert
+            && c.props.keyThreshold == 0.25
+            && c.props.keySoftness == 0.12
+            && c.props.keyChromaHue == 0.33
+            && !c.props.keyChromaInvert
             && c.props.audioGain == 1.0
             && c.props.playMode == PlayMode::LoopForward
             && !c.props.clipPaused
@@ -188,22 +201,7 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.picture.brightness == 0.0
             && c.props.picture.contrast == 1.0
             && c.props.picture.saturation == 1.0
-            && c.props.picture.circularMotion == 0.0
-            && !c.props.feedback.enabled
-            && c.props.feedback.strength == 0.9
-            && c.props.feedback.zoom == 1.02
-            && c.props.feedback.rotationDeg == 0.0
-            && !c.props.feedback.rotationAnimated
-            && c.props.feedback.decay == 0.03
-            && c.props.feedback.brightness == 0.0
-            && c.props.feedback.saturation == 1.0
-            && c.props.feedback.gamma == 1.0
-            && c.props.feedback.contrast == 1.0
-            && c.props.feedback.layerBrightness == 0.0
-            && c.props.feedback.layerSaturation == 1.0
-            && c.props.feedback.layerGamma == 1.0
-            && c.props.feedback.layerContrast == 1.0
-            && c.props.feedback.wrapMode == WrapMode::Clamp;
+            && c.props.picture.circularMotion == 0.0;
         if (isDefault) {
             continue;
         }
@@ -318,6 +316,28 @@ CellProps readProps(QXmlStreamReader& r)
     p.movieSpeed     = a.value(QStringLiteral("movieSpeed")).toDouble();
     p.fade           = a.value(QStringLiteral("fade")).toDouble();
     p.maskType       = enums::maskTypeFromString(a.value(QStringLiteral("maskType")).toString());
+    if (a.hasAttribute(QStringLiteral("matteRole"))) {
+        p.matteRole = enums::layerMatteRoleFromString(
+            a.value(QStringLiteral("matteRole")).toString(), LayerMatteRole::None);
+    }
+    if (a.hasAttribute(QStringLiteral("maskFeather"))) {
+        p.maskFeather = a.value(QStringLiteral("maskFeather")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("maskRectWidth"))) {
+        p.maskRectWidth = a.value(QStringLiteral("maskRectWidth")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("maskRectHeight"))) {
+        p.maskRectHeight = a.value(QStringLiteral("maskRectHeight")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("maskRadius"))) {
+        p.maskRadius = a.value(QStringLiteral("maskRadius")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("maskEllipseX"))) {
+        p.maskEllipseX = a.value(QStringLiteral("maskEllipseX")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("maskEllipseY"))) {
+        p.maskEllipseY = a.value(QStringLiteral("maskEllipseY")).toDouble();
+    }
     p.maskWidth      = a.value(QStringLiteral("maskWidth")).toDouble();
     p.maskSmoothness = a.value(QStringLiteral("maskSmoothness")).toDouble();
     p.rotationZ      = a.value(QStringLiteral("rotationZ")).toDouble();
@@ -325,10 +345,17 @@ CellProps readProps(QXmlStreamReader& r)
     if (a.hasAttribute(QStringLiteral("mixingPresetIndex"))) {
         p.mixingPresetIndex = a.value(QStringLiteral("mixingPresetIndex")).toInt();
     }
-    if (a.hasAttribute(QStringLiteral("layerBand"))) {
+    if (a.hasAttribute(QStringLiteral("preferredLayer"))) {
+        p.preferredLayer = qBound(0, a.value(QStringLiteral("preferredLayer")).toInt(), 11);
+    } else if (a.hasAttribute(QStringLiteral("layerBand"))) {
+        // Legacy migration: old bands Back/Mid/Front map to first slot of each 4-layer block.
         const int lb = a.value(QStringLiteral("layerBand")).toInt();
-        if (lb >= int(LayerBand::Back) && lb <= int(LayerBand::Front)) {
-            p.layerBand = static_cast<LayerBand>(lb);
+        if (lb == int(LayerBand::Back)) {
+            p.preferredLayer = 0;
+        } else if (lb == int(LayerBand::Front)) {
+            p.preferredLayer = 8;
+        } else {
+            p.preferredLayer = 4;
         }
     }
     if (a.hasAttribute(QStringLiteral("keyChannelR"))) {
@@ -339,6 +366,39 @@ CellProps readProps(QXmlStreamReader& r)
     }
     if (a.hasAttribute(QStringLiteral("keyChannelB"))) {
         p.keyChannelB = a.value(QStringLiteral("keyChannelB")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("keyingMode"))) {
+        p.keyingMode = enums::keyingModeFromString(a.value(QStringLiteral("keyingMode")).toString(), KeyingMode::Luma);
+    }
+    if (a.hasAttribute(QStringLiteral("keyingEnabled"))) {
+        const QString v = a.value(QStringLiteral("keyingEnabled")).toString().toLower();
+        p.keyingEnabled = (v == QLatin1String("1") || v == QLatin1String("true") || v == QLatin1String("yes"));
+    }
+    if (a.hasAttribute(QStringLiteral("keyLumaCenter"))) {
+        p.keyLumaCenter = a.value(QStringLiteral("keyLumaCenter")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("keyLumaInvert"))) {
+        const QString v = a.value(QStringLiteral("keyLumaInvert")).toString().toLower();
+        p.keyLumaInvert = (v == QLatin1String("1") || v == QLatin1String("true") || v == QLatin1String("yes"));
+    }
+    if (a.hasAttribute(QStringLiteral("keyThreshold"))) {
+        p.keyThreshold = a.value(QStringLiteral("keyThreshold")).toDouble();
+    } else if (a.hasAttribute(QStringLiteral("maskWidth"))) {
+        // Legacy migration: key threshold used to share maskWidth.
+        p.keyThreshold = a.value(QStringLiteral("maskWidth")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("keySoftness"))) {
+        p.keySoftness = a.value(QStringLiteral("keySoftness")).toDouble();
+    } else if (a.hasAttribute(QStringLiteral("maskSmoothness"))) {
+        // Legacy migration: key softness used to share maskSmoothness.
+        p.keySoftness = a.value(QStringLiteral("maskSmoothness")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("keyChromaHue"))) {
+        p.keyChromaHue = a.value(QStringLiteral("keyChromaHue")).toDouble();
+    }
+    if (a.hasAttribute(QStringLiteral("keyChromaInvert"))) {
+        const QString v = a.value(QStringLiteral("keyChromaInvert")).toString().toLower();
+        p.keyChromaInvert = (v == QLatin1String("1") || v == QLatin1String("true") || v == QLatin1String("yes"));
     }
     if (a.hasAttribute(QStringLiteral("playMode"))) {
         const int pm = a.value(QStringLiteral("playMode")).toInt();
@@ -392,55 +452,6 @@ CellProps readProps(QXmlStreamReader& r)
             }
             r.skipCurrentElement();
         } else if (r.name() == QLatin1String("Feedback")) {
-            const auto feedbackAttrs = r.attributes();
-            if (feedbackAttrs.hasAttribute(QStringLiteral("enabled"))) {
-                const auto v = feedbackAttrs.value(QStringLiteral("enabled")).toString().toLower();
-                p.feedback.enabled = (v == QLatin1String("true") || v == QLatin1String("1"));
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("strength"))) {
-                p.feedback.strength = feedbackAttrs.value(QStringLiteral("strength")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("zoom"))) {
-                p.feedback.zoom = feedbackAttrs.value(QStringLiteral("zoom")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("rotationDeg"))) {
-                p.feedback.rotationDeg = feedbackAttrs.value(QStringLiteral("rotationDeg")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("rotationAnimated"))) {
-                const auto v = feedbackAttrs.value(QStringLiteral("rotationAnimated")).toString().toLower();
-                p.feedback.rotationAnimated = (v == QLatin1String("true") || v == QLatin1String("1"));
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("decay"))) {
-                p.feedback.decay = feedbackAttrs.value(QStringLiteral("decay")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("brightness"))) {
-                p.feedback.brightness = feedbackAttrs.value(QStringLiteral("brightness")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("saturation"))) {
-                p.feedback.saturation = feedbackAttrs.value(QStringLiteral("saturation")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("gamma"))) {
-                p.feedback.gamma = feedbackAttrs.value(QStringLiteral("gamma")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("contrast"))) {
-                p.feedback.contrast = feedbackAttrs.value(QStringLiteral("contrast")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("layerBrightness"))) {
-                p.feedback.layerBrightness = feedbackAttrs.value(QStringLiteral("layerBrightness")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("layerSaturation"))) {
-                p.feedback.layerSaturation = feedbackAttrs.value(QStringLiteral("layerSaturation")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("layerGamma"))) {
-                p.feedback.layerGamma = feedbackAttrs.value(QStringLiteral("layerGamma")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("layerContrast"))) {
-                p.feedback.layerContrast = feedbackAttrs.value(QStringLiteral("layerContrast")).toDouble();
-            }
-            if (feedbackAttrs.hasAttribute(QStringLiteral("wrapMode"))) {
-                p.feedback.wrapMode = enums::wrapModeFromString(
-                    feedbackAttrs.value(QStringLiteral("wrapMode")).toString(), WrapMode::Clamp);
-            }
             r.skipCurrentElement();
         } else {
             r.skipCurrentElement();

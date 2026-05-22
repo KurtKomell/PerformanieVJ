@@ -27,7 +27,6 @@ namespace {
 
 // UserRole for source combo (must match graph context menu).
 constexpr int kSourceMedia       = 0;
-constexpr int kSourceFeedback    = 6;
 constexpr int kSourceTestPattern = 2;
 constexpr int kSourceSolid       = 3;
 constexpr int kSourceSpout       = 4;
@@ -51,7 +50,6 @@ FilterNodeEditorWindow::FilterNodeEditorWindow(QWidget* parent)
     m_sourceHint->setStyleSheet(QStringLiteral("color: #9aa3b8;"));
     m_sourceCombo = new QComboBox(this);
     m_sourceCombo->addItem(tr("Media clip (project)"), kSourceMedia);
-    m_sourceCombo->addItem(tr("Feedback"), kSourceFeedback);
     m_sourceCombo->addItem(tr("Test pattern"), kSourceTestPattern);
     m_sourceCombo->addItem(tr("Solid color"), kSourceSolid);
     m_sourceCombo->addItem(tr("Spout (Windows)"), kSourceSpout);
@@ -196,7 +194,6 @@ void FilterNodeEditorWindow::syncSourceComboFromCell()
         role = kSourceMedia;
     } else if (m_cell->visual.type == VisualType::Generator) {
         switch (m_cell->visual.generator) {
-        case GeneratorKind::Feedback:     role = kSourceFeedback;    break;
         case GeneratorKind::TestPattern:  role = kSourceTestPattern; break;
         case GeneratorKind::SolidColor:   role = kSourceSolid;       break;
         case GeneratorKind::InputSpout:   role = kSourceSpout;       break;
@@ -229,11 +226,6 @@ void FilterNodeEditorWindow::applySourceToCell()
     case kSourceTestPattern:
         m_cell->visual.type = VisualType::Generator;
         m_cell->visual.generator = GeneratorKind::TestPattern;
-        m_cell->visual.mediaId = {};
-        break;
-    case kSourceFeedback:
-        m_cell->visual.type = VisualType::Generator;
-        m_cell->visual.generator = GeneratorKind::Feedback;
         m_cell->visual.mediaId = {};
         break;
     case kSourceSolid:

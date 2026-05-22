@@ -134,7 +134,6 @@ QString NodeGraphWidget::sourceTitleLine() const
     }
     if (m_cell->visual.type == pvj::core::VisualType::Generator) {
         switch (m_cell->visual.generator) {
-        case pvj::core::GeneratorKind::Feedback:     return tr("Feedback");
         case pvj::core::GeneratorKind::TestPattern:  return tr("Test pattern");
         case pvj::core::GeneratorKind::SolidColor:   return tr("Solid color");
         case pvj::core::GeneratorKind::InputSpout:   return tr("Spout");
@@ -697,7 +696,6 @@ void NodeGraphWidget::contextMenuEvent(QContextMenuEvent* event)
             });
         };
         addSrc(tr("Media clip (project)"), 0);
-        addSrc(tr("Feedback"), 6);
         addSrc(tr("Test pattern"), 2);
         addSrc(tr("Solid color"), 3);
         addSrc(tr("Spout (Windows)"), 4);

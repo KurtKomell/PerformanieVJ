@@ -24,7 +24,7 @@ layout(std140, binding = 0) uniform Block {
     // fragment path; kept in the UBO so the binding layout stays stable).
     vec4 picUvA[12];
     vec4 picColor[12];
-    vec4 mixerCfg; // x: mixer phase (0 = video prepass, 1 = feedback-over-under)
+    vec4 mixerCfg; // reserved mixer configuration
 } ubuf;
 
 // Mode indices must match pvj::core::CopyMode (Model.h) exactly: 0–50
@@ -79,6 +79,10 @@ const int MODE_Y_FILM              = 47;
 const int MODE_Z_FILM              = 48;
 const int MODE_DIFFERENCE_VIVID    = 49;
 const int MODE_DIFFERENCE_RGB      = 50;
+const int MATTE_NONE               = 0;
+const int MATTE_LUMA               = 1;
+const int MATTE_ALPHA              = 2;
+const int MATTE_KNOCKOUT           = 3;
 
 const vec3 kBg = vec3(0.047, 0.047, 0.047);
 const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
@@ -345,28 +349,13 @@ vec4 sampleLayer(int i)
 
 void main()
 {
-    float mixPass = ubuf.mixerCfg.x;
-    bool splitFeedback = mixPass > 0.5;
-    vec3 dst = splitFeedback ? texture(u_under, v_uv).rgb : kBg;
-    bool hasBase = splitFeedback;
+    vec3 dst = kBg;
+    bool hasBase = false;
 
     for (int i = 0; i < 12; i++) {
         vec4 lp = ubuf.layers[i];
         if (lp.z < 0.5) {
             continue;
-        }
-        bool isFeedbackLayer = lp.w > 0.5;
-        bool isBackBandLayer = i < 4;
-        if (!splitFeedback) {
-            // Pass 0: non-feedback layers + feedback layers from Back band.
-            if (isFeedbackLayer && !isBackBandLayer) {
-                continue;
-            }
-        } else {
-            // Pass 1: feedback overlay only for Mid/Front bands.
-            if (!isFeedbackLayer || isBackBandLayer) {
-                continue;
-            }
         }
 
         vec4 c = sampleLayer(i);
@@ -376,6 +365,24 @@ void main()
         vec3 src = c.rgb;
         float alpha = clamp(c.a * op, 0.0, 1.0);
         int mode = int(lp.y + 0.5);
+        int matteRole = int(lp.w + 0.5);
+
+        if (matteRole == MATTE_LUMA) {
+            float m = mix(1.0, lum(src), alpha);
+            dst *= m;
+            hasBase = true;
+            continue;
+        }
+        if (matteRole == MATTE_ALPHA) {
+            dst *= (1.0 - alpha);
+            hasBase = true;
+            continue;
+        }
+        if (matteRole == MATTE_KNOCKOUT) {
+            dst *= (1.0 - alpha);
+            hasBase = true;
+            continue;
+        }
 
         if (!hasBase) {
             dst = compositeLayer(mode, kBg, src, alpha);

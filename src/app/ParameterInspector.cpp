@@ -35,16 +35,17 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <functional>
+
 namespace pvj::app {
 
 using pvj::core::CopyMode;
-using pvj::core::GeneratorKind;
-using pvj::core::LayerBand;
+using pvj::core::KeyingMode;
+using pvj::core::LayerMatteRole;
 using pvj::core::MaskType;
 using pvj::core::PlayMode;
 using pvj::core::Project;
 using pvj::core::VisualType;
-using pvj::core::WrapMode;
 
 class VisualThumbnailLabel final : public QWidget
 {
@@ -109,6 +110,161 @@ void VisualThumbnailLabel::paintEvent(QPaintEvent* event)
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     p.drawImage(dr, m_frame);
 }
+
+class KeyRangeWidget final : public QWidget
+{
+public:
+    enum class GradientMode {
+        Luma,
+        Hue,
+    };
+
+    explicit KeyRangeWidget(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setMinimumHeight(24);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setMouseTracking(true);
+    }
+
+    void setGradientMode(GradientMode mode)
+    {
+        if (m_mode == mode) {
+            return;
+        }
+        m_mode = mode;
+        update();
+    }
+
+    void setRange(double minV, double maxV)
+    {
+        const double lo = qBound(0.0, qMin(minV, maxV), 1.0);
+        const double hi = qBound(0.0, qMax(minV, maxV), 1.0);
+        if (qFuzzyCompare(m_min + 1.0, lo + 1.0) && qFuzzyCompare(m_max + 1.0, hi + 1.0)) {
+            return;
+        }
+        m_min = lo;
+        m_max = hi;
+        update();
+    }
+
+    double minValue() const { return m_min; }
+    double maxValue() const { return m_max; }
+
+    void setOnRangeChanged(std::function<void(double, double)> cb)
+    {
+        m_onRangeChanged = std::move(cb);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        Q_UNUSED(event);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF groove(4.0, 8.0, qMax(10.0, width() - 8.0), 10.0);
+        QLinearGradient grad(groove.left(), groove.top(), groove.right(), groove.top());
+        if (m_mode == GradientMode::Hue) {
+            grad.setColorAt(0.00, QColor::fromRgbF(1.0, 0.0, 0.0));
+            grad.setColorAt(0.17, QColor::fromRgbF(1.0, 1.0, 0.0));
+            grad.setColorAt(0.33, QColor::fromRgbF(0.0, 1.0, 0.0));
+            grad.setColorAt(0.50, QColor::fromRgbF(0.0, 1.0, 1.0));
+            grad.setColorAt(0.67, QColor::fromRgbF(0.0, 0.0, 1.0));
+            grad.setColorAt(0.83, QColor::fromRgbF(1.0, 0.0, 1.0));
+            grad.setColorAt(1.00, QColor::fromRgbF(1.0, 0.0, 0.0));
+        } else {
+            grad.setColorAt(0.0, QColor(10, 10, 10));
+            grad.setColorAt(1.0, QColor(245, 245, 245));
+        }
+        p.setPen(QPen(QColor(80, 88, 100), 1.0));
+        p.setBrush(grad);
+        p.drawRoundedRect(groove, 2.0, 2.0);
+
+        const double xMin = groove.left() + groove.width() * m_min;
+        const double xMax = groove.left() + groove.width() * m_max;
+        const QRectF selRect(xMin, groove.top(), qMax(2.0, xMax - xMin), groove.height());
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 255, 255, 55));
+        p.drawRect(selRect);
+
+        p.setPen(QPen(QColor(230, 230, 230), 1.5));
+        drawMarker(&p, xMin, groove.top() - 2.0, true);
+        drawMarker(&p, xMax, groove.bottom() + 2.0, false);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        const double x = event->position().x();
+        const double left = valueToX(m_min);
+        const double right = valueToX(m_max);
+        if (qAbs(x - left) <= qAbs(x - right)) {
+            m_draggingLeft = true;
+        } else {
+            m_draggingLeft = false;
+        }
+        handleDrag(x);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        if (!(event->buttons() & Qt::LeftButton)) {
+            return;
+        }
+        handleDrag(event->position().x());
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        Q_UNUSED(event);
+    }
+
+private:
+    static void drawMarker(QPainter* p, double x, double y, bool down)
+    {
+        QPolygonF tri;
+        if (down) {
+            tri << QPointF(x - 4.0, y - 4.0) << QPointF(x + 4.0, y - 4.0) << QPointF(x, y + 2.0);
+        } else {
+            tri << QPointF(x - 4.0, y + 4.0) << QPointF(x + 4.0, y + 4.0) << QPointF(x, y - 2.0);
+        }
+        p->drawPolygon(tri);
+    }
+
+    double valueToX(double v) const
+    {
+        const double left = 4.0;
+        const double w = qMax(10.0, width() - 8.0);
+        return left + qBound(0.0, v, 1.0) * w;
+    }
+
+    double xToValue(double x) const
+    {
+        const double left = 4.0;
+        const double w = qMax(10.0, width() - 8.0);
+        return qBound(0.0, (x - left) / w, 1.0);
+    }
+
+    void handleDrag(double x)
+    {
+        const double v = xToValue(x);
+        if (m_draggingLeft) {
+            m_min = qMin(v, m_max);
+        } else {
+            m_max = qMax(v, m_min);
+        }
+        update();
+        if (m_onRangeChanged) {
+            m_onRangeChanged(m_min, m_max);
+        }
+    }
+
+    GradientMode m_mode = GradientMode::Luma;
+    double m_min = 0.4;
+    double m_max = 0.6;
+    bool m_draggingLeft = true;
+    std::function<void(double, double)> m_onRangeChanged;
+};
 
 namespace {
 
@@ -198,22 +354,36 @@ QString playModeTip(pvj::core::PlayMode m)
 }
 
 struct MixPreset {
-    CopyMode cm;
-    MaskType mt;
+    CopyMode copyMode;
+    MaskType maskType;
+    KeyingMode keyingMode;
+    bool keyingEnabled;
+    bool keyLumaInvert;
+    double keyLumaCenter;
+    bool keyChromaInvert;
+    double keyChromaHue;
+    double keyChannelR;
+    double keyChannelG;
+    double keyChannelB;
     double transparency;
-    double maskW;
-    double maskS;
-    double kr;
-    double kg;
-    double kb;
+    double maskWidth;
+    double maskSmoothness;
 };
 
-// Stored preset row index = combo index (1-based into this table).
+// Stored preset row index = combo index (0-based into this table).
 static const MixPreset kMixPresets[] = {
-    { CopyMode::Normal, MaskType::None, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0 },
-    { CopyMode::Over, MaskType::None, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0 },
-    { CopyMode::Add, MaskType::None, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0 },
-    { CopyMode::Difference, MaskType::SoftEdge, 1.0, 0.55, 0.2, 1.0, 1.0, 1.0 },
+    { CopyMode::Normal, MaskType::None, KeyingMode::Luma, true, false, 0.50, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 }, // Default
+    { CopyMode::Normal, MaskType::None, KeyingMode::Luma, true, false, 0.20, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 }, // Reject Black
+    { CopyMode::Normal, MaskType::None, KeyingMode::Luma, true, true, 0.80, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 },  // Reject White
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, true, 0.00, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 }, // Reject Red
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, true, 0.33, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0 }, // Reject Green
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, true, 0.66, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0 }, // Reject Blue
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, false, 0.00, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 }, // Red
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, false, 0.33, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0 }, // Green
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, false, 0.66, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0 }, // Blue
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, false, 0.83, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0 }, // Purple
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, false, 0.16, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0 }, // Yellow
+    { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, false, 0.08, 1.0, 0.5, 0.0, 1.0, 0.0, 0.0 }, // Orange
 };
 
 constexpr int kMixPresetCount = int(sizeof(kMixPresets) / sizeof(kMixPresets[0]));
@@ -339,13 +509,6 @@ QWidget* ParameterInspector::buildVisualTab()
         connect(m_visualNextBtn, &QToolButton::clicked, this, [this] {
             emit visualSeekStepRequested(1);
         });
-        m_feedbackPresetApplyBtn = new QToolButton(visRow);
-        m_feedbackPresetApplyBtn->setText(QStringLiteral("FB"));
-        m_feedbackPresetApplyBtn->setAutoRaise(true);
-        m_feedbackPresetApplyBtn->setToolTip(
-            tr("Apply feedback source preset to this cell (without circular preset mode)."));
-        connect(m_feedbackPresetApplyBtn, &QToolButton::clicked,
-                this, &ParameterInspector::onFeedbackPresetApplyClicked);
         m_audioDial = new QDial(visRow);
         m_audioDial->setRange(0, 400);
         m_audioDial->setValue(100);
@@ -359,7 +522,6 @@ QWidget* ParameterInspector::buildVisualTab()
         vh->addWidget(m_visualPrevBtn);
         vh->addWidget(m_visualThumb, 0, Qt::AlignCenter);
         vh->addWidget(m_visualNextBtn);
-        vh->addWidget(m_feedbackPresetApplyBtn);
         vh->addWidget(m_audioDial);
         vh->addWidget(m_audioDialValue);
         vh->addStretch(1);
@@ -535,132 +697,22 @@ QWidget* ParameterInspector::buildVisualTab()
 
     stdLay->addWidget(m_visualClipSection);
 
-    m_feedbackGroup = new QGroupBox(tr("Feedback"), m_visualStandardSection);
-    auto* fbGrid = new QGridLayout(m_feedbackGroup);
-    int fr = 0;
-    m_feedbackEnabled = new QCheckBox(tr("Feedback enabled"), m_feedbackGroup);
-    connect(m_feedbackEnabled, &QCheckBox::toggled, this, &ParameterInspector::onFeedbackEnabledToggled);
-    fbGrid->addWidget(m_feedbackEnabled, fr++, 0, 1, 3);
-
-    auto addFbSlider = [&](const QString& lab, QSlider** sOut, QLabel** vOut, const QString& tip) {
-        fbGrid->addWidget(new QLabel(lab, m_feedbackGroup), fr, 0, Qt::AlignRight | Qt::AlignVCenter);
-        auto* s = new QSlider(Qt::Horizontal, m_feedbackGroup);
-        s->setRange(0, kUnitSliderMax);
-        s->setFocusPolicy(Qt::StrongFocus);
-        s->setToolTip(tip);
-        auto* v = new QLabel(QStringLiteral("0"), m_feedbackGroup);
-        v->setMinimumWidth(44);
-        v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        fbGrid->addWidget(s, fr, 1);
-        fbGrid->addWidget(v, fr, 2);
-        *sOut = s;
-        *vOut = v;
-        ++fr;
-    };
-
-    addFbSlider(tr("Strength"), &m_feedbackStrengthSlider, &m_feedbackStrengthValue,
-                tr("Blend weight of the feedback history (0–1)."));
-    connect(m_feedbackStrengthSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackStrengthChanged);
-    addFbSlider(tr("Zoom"), &m_feedbackZoomSlider, &m_feedbackZoomValue,
-                tr("Per-frame scale of the history sample (0.5–2)."));
-    connect(m_feedbackZoomSlider, &QSlider::valueChanged, this, &ParameterInspector::onFeedbackZoomChanged);
-    fbGrid->addWidget(new QLabel(tr("Rotation (°)"), m_feedbackGroup), fr, 0, Qt::AlignRight | Qt::AlignVCenter);
-    m_feedbackRotationSlider = new QSlider(Qt::Horizontal, m_feedbackGroup);
-    m_feedbackRotationSlider->setRange(0, kUnitSliderMax);
-    m_feedbackRotationSlider->setToolTip(
-        tr("Fixed ° per frame, or °/s when “Circular rotation” is on."));
-    m_feedbackRotationValue = new QLabel(QStringLiteral("0.00"), m_feedbackGroup);
-    m_feedbackRotationValue->setMinimumWidth(44);
-    m_feedbackRotationValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    connect(m_feedbackRotationSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackRotationChanged);
-    fbGrid->addWidget(m_feedbackRotationSlider, fr, 1);
-    fbGrid->addWidget(m_feedbackRotationValue, fr, 2);
-    ++fr;
-    m_feedbackRotationAnimated = new QCheckBox(tr("Circular rotation (°/s)"), m_feedbackGroup);
-    connect(m_feedbackRotationAnimated, &QCheckBox::toggled,
-            this, &ParameterInspector::onFeedbackRotationAnimatedToggled);
-    fbGrid->addWidget(m_feedbackRotationAnimated, fr++, 0, 1, 3);
-    addFbSlider(tr("Decay"), &m_feedbackDecaySlider, &m_feedbackDecayValue,
-                tr("Offset added to history (−0.1 … +0.1)."));
-    connect(m_feedbackDecaySlider, &QSlider::valueChanged, this, &ParameterInspector::onFeedbackDecayChanged);
-    addFbSlider(tr("Hist. brightness"), &m_feedbackBrightnessSlider, &m_feedbackBrightnessValue,
-                tr("Additive brightness on feedback history (−1 … +1)."));
-    connect(m_feedbackBrightnessSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackBrightnessChanged);
-    addFbSlider(tr("Hist. saturation"), &m_feedbackSaturationSlider, &m_feedbackSaturationValue,
-                tr("Saturation on history (0–2)."));
-    connect(m_feedbackSaturationSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackSaturationChanged);
-    addFbSlider(tr("Hist. gamma"), &m_feedbackGammaSlider, &m_feedbackGammaValue, tr("Gamma on history (0.1–4)."));
-    connect(m_feedbackGammaSlider, &QSlider::valueChanged, this, &ParameterInspector::onFeedbackGammaChanged);
-    addFbSlider(tr("Hist. contrast"), &m_feedbackContrastSlider, &m_feedbackContrastValue,
-                tr("Contrast on history (0–2)."));
-    connect(m_feedbackContrastSlider, &QSlider::valueChanged, this, &ParameterInspector::onFeedbackContrastChanged);
-
-    {
-        auto* layerHdr = new QLabel(tr("Layer output"), m_feedbackGroup);
-        QFont hf = layerHdr->font();
-        hf.setBold(true);
-        layerHdr->setFont(hf);
-        fbGrid->addWidget(layerHdr, fr++, 0, 1, 3);
-    }
-    addFbSlider(tr("Layer brightness"), &m_feedbackLayerBrightnessSlider, &m_feedbackLayerBrightnessValue,
-                tr("After mix (−1 … +1)."));
-    connect(m_feedbackLayerBrightnessSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackLayerBrightnessChanged);
-    addFbSlider(tr("Layer saturation"), &m_feedbackLayerSaturationSlider, &m_feedbackLayerSaturationValue,
-                tr("After mix (0–2)."));
-    connect(m_feedbackLayerSaturationSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackLayerSaturationChanged);
-    addFbSlider(tr("Layer gamma"), &m_feedbackLayerGammaSlider, &m_feedbackLayerGammaValue,
-                tr("After mix (0.1–4)."));
-    connect(m_feedbackLayerGammaSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackLayerGammaChanged);
-    addFbSlider(tr("Layer contrast"), &m_feedbackLayerContrastSlider, &m_feedbackLayerContrastValue,
-                tr("After mix (0–2)."));
-    connect(m_feedbackLayerContrastSlider, &QSlider::valueChanged,
-            this, &ParameterInspector::onFeedbackLayerContrastChanged);
-
-    fbGrid->addWidget(new QLabel(tr("Wrap mode"), m_feedbackGroup), fr, 0, Qt::AlignRight | Qt::AlignVCenter);
-    m_feedbackWrapMode = new QComboBox(m_feedbackGroup);
-    m_feedbackWrapMode->addItem(tr("Clamp"), int(WrapMode::Clamp));
-    m_feedbackWrapMode->addItem(tr("Repeat"), int(WrapMode::Repeat));
-    m_feedbackWrapMode->addItem(tr("Mirror"), int(WrapMode::Mirror));
-    m_feedbackWrapMode->addItem(tr("Tile"), int(WrapMode::Tile));
-    m_feedbackWrapMode->setToolTip(tr("UV addressing when sampling feedback history."));
-    connect(m_feedbackWrapMode, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, &ParameterInspector::onFeedbackWrapModeChanged);
-    fbGrid->addWidget(m_feedbackWrapMode, fr, 1, 1, 2);
-
-    m_feedbackGroup->setVisible(false);
-    stdLay->addWidget(m_feedbackGroup);
-
     root->addWidget(m_visualStandardSection);
     {
-        auto* layerBandRow = new QWidget(host);
-        auto* lbh = new QHBoxLayout(layerBandRow);
+        auto* layerRow = new QWidget(host);
+        auto* lbh = new QHBoxLayout(layerRow);
         lbh->setContentsMargins(0, 0, 0, 0);
-        lbh->addWidget(new QLabel(tr("Layer band"), layerBandRow));
-        m_layerBandGroup = new QButtonGroup(host);
-        m_layerBandGroup->setExclusive(true);
-        auto mkBand = [&](LayerBand value, const QString& text, const QString& tip) {
-            auto* tb = new QToolButton(layerBandRow);
-            tb->setCheckable(true);
-            tb->setAutoRaise(true);
-            tb->setText(text);
-            tb->setToolTip(tip);
-            m_layerBandGroup->addButton(tb, int(value));
-            lbh->addWidget(tb);
-        };
-        mkBand(LayerBand::Back, tr("Back"), tr("Uses mix layers 1-4"));
-        mkBand(LayerBand::Mid, tr("Mid"), tr("Uses mix layers 5-8 (default)"));
-        mkBand(LayerBand::Front, tr("Front"), tr("Uses mix layers 9-12"));
-        connect(m_layerBandGroup, &QButtonGroup::idClicked,
-                this, &ParameterInspector::onLayerBandGroupClicked);
+        lbh->addWidget(new QLabel(tr("Layer"), layerRow));
+        m_preferredLayerCombo = new QComboBox(layerRow);
+        m_preferredLayerCombo->setToolTip(tr("Preferred mix layer for this cell (1..12)."));
+        for (int layer = 1; layer <= 12; ++layer) {
+            m_preferredLayerCombo->addItem(QString::number(layer), layer - 1);
+        }
+        connect(m_preferredLayerCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, &ParameterInspector::onPreferredLayerChanged);
+        lbh->addWidget(m_preferredLayerCombo);
         lbh->addStretch(1);
-        root->addWidget(layerBandRow);
+        root->addWidget(layerRow);
     }
 
     return host;
@@ -674,7 +726,7 @@ QWidget* ParameterInspector::buildTransitionTab()
         tr("Clips triggered from the bank grid are mixed automatically: up to six videos "
            "composite in the mixer using transparency (alpha) and the Copy mode from the "
            "Mixing tab. "
-           "When all slots are busy, the clip with the lowest priority value is replaced."),
+           "Each cell can target a preferred mix layer (1-12) in the Visual tab."),
         host);
     note->setWordWrap(true);
     note->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -697,11 +749,18 @@ QWidget* ParameterInspector::buildMixingTab()
     addSection(tr("Preset"));
     m_mixingPreset = new QComboBox(host);
     m_mixingPreset->setMaxVisibleItems(16);
-    m_mixingPreset->addItem(tr("Custom"), 0);
-    m_mixingPreset->addItem(tr("Replace (Normal, no mask)"), 1);
-    m_mixingPreset->addItem(tr("Stack on top (Over)"), 2);
-    m_mixingPreset->addItem(tr("Additive glow (Add)"), 3);
-    m_mixingPreset->addItem(tr("Chroma-style (Difference + soft mask)"), 4);
+    m_mixingPreset->addItem(tr("Default"), 0);
+    m_mixingPreset->addItem(tr("Reject Black"), 1);
+    m_mixingPreset->addItem(tr("Reject White"), 2);
+    m_mixingPreset->addItem(tr("Reject Red"), 3);
+    m_mixingPreset->addItem(tr("Reject Green"), 4);
+    m_mixingPreset->addItem(tr("Reject Blue"), 5);
+    m_mixingPreset->addItem(tr("Red"), 6);
+    m_mixingPreset->addItem(tr("Green"), 7);
+    m_mixingPreset->addItem(tr("Blue"), 8);
+    m_mixingPreset->addItem(tr("Purple"), 9);
+    m_mixingPreset->addItem(tr("Yellow"), 10);
+    m_mixingPreset->addItem(tr("Orange"), 11);
     connect(m_mixingPreset, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &ParameterInspector::onMixingPresetChanged);
     root->addWidget(m_mixingPreset);
@@ -792,15 +851,165 @@ QWidget* ParameterInspector::buildMixingTab()
         h->addStretch(1);
         root->addWidget(row);
     }
-
-    addSection(tr("Keying range"));
     {
-        auto* hint = new QLabel(
-            tr("Drives geometric / luma mask strength: hardness → mask width, feather → mask smoothness."),
+        auto* row = new QWidget(host);
+        auto* h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->addWidget(new QLabel(tr("Layer role"), row));
+        m_matteRoleCombo = new QComboBox(row);
+        m_matteRoleCombo->addItem(tr("Normal"), int(LayerMatteRole::None));
+        m_matteRoleCombo->addItem(tr("Luma matte (below)"), int(LayerMatteRole::LumaMatte));
+        m_matteRoleCombo->addItem(tr("Alpha matte (below)"), int(LayerMatteRole::AlphaMatte));
+        m_matteRoleCombo->addItem(tr("Knockout (below)"), int(LayerMatteRole::KnockOut));
+        connect(m_matteRoleCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, &ParameterInspector::onMatteRoleChanged);
+        h->addWidget(m_matteRoleCombo, 1);
+        root->addWidget(row);
+    }
+    {
+        auto addMaskRow = [&](QWidget** rowOut, const QString& label, QSlider** sliderOut, QLabel** valueOut,
+                              void (ParameterInspector::*slot)(int)) {
+            auto* row = new QWidget(host);
+            auto* h   = new QHBoxLayout(row);
+            h->setContentsMargins(0, 0, 0, 0);
+            h->addWidget(new QLabel(label, row));
+            auto* slider = new QSlider(Qt::Horizontal, row);
+            slider->setRange(0, kUnitSliderMax);
+            slider->setSingleStep(10);
+            slider->setPageStep(50);
+            auto* value = new QLabel(formatUnit(0.0), row);
+            value->setMinimumWidth(44);
+            value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            connect(slider, &QSlider::valueChanged, this, slot);
+            h->addWidget(slider, 1);
+            h->addWidget(value);
+            *rowOut = row;
+            *sliderOut = slider;
+            *valueOut = value;
+            root->addWidget(row);
+        };
+        addMaskRow(&m_maskRectWidthRow, tr("Width"), &m_maskRectWidthSlider, &m_maskRectWidthValue,
+                   &ParameterInspector::onMaskRectWidthChanged);
+        addMaskRow(&m_maskRectHeightRow, tr("Height"), &m_maskRectHeightSlider, &m_maskRectHeightValue,
+                   &ParameterInspector::onMaskRectHeightChanged);
+        addMaskRow(&m_maskRadiusRow, tr("Radius"), &m_maskRadiusSlider, &m_maskRadiusValue,
+                   &ParameterInspector::onMaskRadiusChanged);
+        addMaskRow(&m_maskEllipseXRow, tr("Ellipse X"), &m_maskEllipseXSlider, &m_maskEllipseXValue,
+                   &ParameterInspector::onMaskEllipseXChanged);
+        addMaskRow(&m_maskEllipseYRow, tr("Ellipse Y"), &m_maskEllipseYSlider, &m_maskEllipseYValue,
+                   &ParameterInspector::onMaskEllipseYChanged);
+        addMaskRow(&m_maskFeatherRow, tr("Feather"), &m_maskFeatherSlider, &m_maskFeatherValue,
+                   &ParameterInspector::onMaskFeatherChanged);
+    }
+
+    addSection(tr("Keying"));
+    m_keyingEnabled = new QCheckBox(tr("Enable keying"), host);
+    m_keyingEnabled->setChecked(true);
+    connect(m_keyingEnabled, &QCheckBox::toggled,
+            this, &ParameterInspector::onKeyingEnabledToggled);
+    root->addWidget(m_keyingEnabled);
+    m_keyingMode = new QComboBox(host);
+    m_keyingMode->addItem(tr("B/W keying (Luma)"), int(KeyingMode::Luma));
+    m_keyingMode->addItem(tr("Color keying (Chroma)"), int(KeyingMode::Chroma));
+    connect(m_keyingMode, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ParameterInspector::onKeyingModeChanged);
+    root->addWidget(m_keyingMode);
+    {
+        m_keyLumaTargetRow = new QWidget(host);
+        auto* h = new QHBoxLayout(m_keyLumaTargetRow);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->addWidget(new QLabel(tr("Mask mode"), m_keyLumaTargetRow));
+        m_keyLumaTargetGroup = new QButtonGroup(m_keyLumaTargetRow);
+        m_keyLumaTargetGroup->setExclusive(true);
+        auto* blackBtn = new QToolButton(m_keyLumaTargetRow);
+        blackBtn->setText(tr("Black"));
+        blackBtn->setCheckable(true);
+        blackBtn->setAutoRaise(true);
+        blackBtn->setToolTip(tr("Key out dark areas"));
+        m_keyLumaTargetGroup->addButton(blackBtn, 0);
+        auto* whiteBtn = new QToolButton(m_keyLumaTargetRow);
+        whiteBtn->setText(tr("White"));
+        whiteBtn->setCheckable(true);
+        whiteBtn->setAutoRaise(true);
+        whiteBtn->setToolTip(tr("Key out bright areas"));
+        m_keyLumaTargetGroup->addButton(whiteBtn, 1);
+        connect(m_keyLumaTargetGroup, &QButtonGroup::idClicked,
+                this, &ParameterInspector::onKeyLumaTargetChanged);
+        h->addWidget(blackBtn);
+        h->addWidget(whiteBtn);
+        h->addStretch(1);
+        root->addWidget(m_keyLumaTargetRow);
+    }
+    {
+        m_keyRangeRow = new QWidget(host);
+        auto* h = new QHBoxLayout(m_keyRangeRow);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->addWidget(new QLabel(tr("Keying range"), m_keyRangeRow));
+        m_keyRangeSlider = new KeyRangeWidget(m_keyRangeRow);
+        m_keyRangeSlider->setGradientMode(KeyRangeWidget::GradientMode::Luma);
+        m_keyRangeValue = new QLabel(formatUnit(0.5), m_keyRangeRow);
+        m_keyRangeValue->setMinimumWidth(44);
+        m_keyRangeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_keyRangeSlider->setRange(0.25, 0.75);
+        m_keyRangeSlider->setOnRangeChanged([this](double minV, double maxV) {
+            onKeyLumaRangeChanged(minV, maxV);
+        });
+        h->addWidget(m_keyRangeSlider, 1);
+        h->addWidget(m_keyRangeValue);
+        root->addWidget(m_keyRangeRow);
+    }
+    {
+        m_keyChromaTargetRow = new QWidget(host);
+        auto* h = new QHBoxLayout(m_keyChromaTargetRow);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->addWidget(new QLabel(tr("Mask mode"), m_keyChromaTargetRow));
+        m_keyChromaTargetGroup = new QButtonGroup(m_keyChromaTargetRow);
+        m_keyChromaTargetGroup->setExclusive(true);
+        auto* colorBtn = new QToolButton(m_keyChromaTargetRow);
+        colorBtn->setText(tr("Color"));
+        colorBtn->setCheckable(true);
+        colorBtn->setAutoRaise(true);
+        colorBtn->setToolTip(tr("Key out selected hue"));
+        m_keyChromaTargetGroup->addButton(colorBtn, 0);
+        auto* invBtn = new QToolButton(m_keyChromaTargetRow);
+        invBtn->setText(tr("Invert"));
+        invBtn->setCheckable(true);
+        invBtn->setAutoRaise(true);
+        invBtn->setToolTip(tr("Keep selected hue and key out other colors"));
+        m_keyChromaTargetGroup->addButton(invBtn, 1);
+        connect(m_keyChromaTargetGroup, &QButtonGroup::idClicked,
+                this, &ParameterInspector::onKeyChromaTargetChanged);
+        h->addWidget(colorBtn);
+        h->addWidget(invBtn);
+        h->addStretch(1);
+        root->addWidget(m_keyChromaTargetRow);
+    }
+    {
+        m_keyChromaRangeRow = new QWidget(host);
+        auto* h = new QHBoxLayout(m_keyChromaRangeRow);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->addWidget(new QLabel(tr("Keying range"), m_keyChromaRangeRow));
+        m_keyChromaRangeSlider = new KeyRangeWidget(m_keyChromaRangeRow);
+        m_keyChromaRangeSlider->setGradientMode(KeyRangeWidget::GradientMode::Hue);
+        m_keyChromaRangeValue = new QLabel(formatUnit(0.33), m_keyChromaRangeRow);
+        m_keyChromaRangeValue->setMinimumWidth(44);
+        m_keyChromaRangeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_keyChromaRangeSlider->setRange(0.23, 0.43);
+        m_keyChromaRangeSlider->setOnRangeChanged([this](double minV, double maxV) {
+            onKeyChromaRangeChanged(minV, maxV);
+        });
+        h->addWidget(m_keyChromaRangeSlider, 1);
+        h->addWidget(m_keyChromaRangeValue);
+        root->addWidget(m_keyChromaRangeRow);
+    }
+
+    {
+        m_keyingHint = new QLabel(
+            tr("B/W keying controls the luma matte. Color keying also uses RGB channel weights."),
             host);
-        hint->setWordWrap(true);
-        hint->setStyleSheet(QStringLiteral("color: #8b92a3; font-size: 11px;"));
-        root->addWidget(hint);
+        m_keyingHint->setWordWrap(true);
+        m_keyingHint->setStyleSheet(QStringLiteral("color: #8b92a3; font-size: 11px;"));
+        root->addWidget(m_keyingHint);
         auto* row1 = new QWidget(host);
         auto* h1   = new QHBoxLayout(row1);
         h1->setContentsMargins(0, 0, 0, 0);
@@ -835,17 +1044,15 @@ QWidget* ParameterInspector::buildMixingTab()
         h2->addWidget(m_keyFeatherValue);
         root->addWidget(row2);
     }
-
-    addSection(tr("RGB key channels"));
     {
-        auto* rgbHint = new QLabel(
-            tr("Per-channel weights for future GPU keying (stored in the project; mixer shader can use them later)."),
+        m_keyRgbHint = new QLabel(
+            tr("RGB channel weights for color keying (chroma)."),
             host);
-        rgbHint->setWordWrap(true);
-        rgbHint->setStyleSheet(QStringLiteral("color: #8b92a3; font-size: 11px;"));
-        root->addWidget(rgbHint);
+        m_keyRgbHint->setWordWrap(true);
+        m_keyRgbHint->setStyleSheet(QStringLiteral("color: #8b92a3; font-size: 11px;"));
+        root->addWidget(m_keyRgbHint);
 
-        auto makeRgbRow = [&](const QString& letter, QSlider** slider, QLabel** value,
+        auto makeRgbRow = [&](QWidget** rowOut, const QString& letter, QSlider** slider, QLabel** value,
                               void (ParameterInspector::*slot)(int)) {
             auto* row = new QWidget(host);
             auto* h   = new QHBoxLayout(row);
@@ -861,13 +1068,16 @@ QWidget* ParameterInspector::buildMixingTab()
             connect(*slider, &QSlider::valueChanged, this, slot);
             h->addWidget(*slider, 1);
             h->addWidget(*value);
+            *rowOut = row;
             root->addWidget(row);
         };
-        makeRgbRow(tr("R"), &m_keyRSlider, &m_keyRValue, &ParameterInspector::onKeyChannelRChanged);
-        makeRgbRow(tr("G"), &m_keyGSlider, &m_keyGValue, &ParameterInspector::onKeyChannelGChanged);
-        makeRgbRow(tr("B"), &m_keyBSlider, &m_keyBValue, &ParameterInspector::onKeyChannelBChanged);
+        makeRgbRow(&m_keyRRow, tr("R"), &m_keyRSlider, &m_keyRValue, &ParameterInspector::onKeyChannelRChanged);
+        makeRgbRow(&m_keyGRow, tr("G"), &m_keyGSlider, &m_keyGValue, &ParameterInspector::onKeyChannelGChanged);
+        makeRgbRow(&m_keyBRow, tr("B"), &m_keyBSlider, &m_keyBValue, &ParameterInspector::onKeyChannelBChanged);
     }
 
+    syncMaskControlVisibility();
+    syncKeyingModeUi();
     root->addStretch(1);
     return host;
 }
@@ -998,22 +1208,28 @@ void ParameterInspector::markMixingCustom()
 
 void ParameterInspector::applyMixingPreset(int comboIndex)
 {
-    if (comboIndex <= 0 || comboIndex > kMixPresetCount) {
+    if (comboIndex < 0 || comboIndex >= kMixPresetCount) {
         return;
     }
     auto* cell = currentCell();
     if (!cell) {
         return;
     }
-    const MixPreset& pr = kMixPresets[comboIndex - 1];
-    cell->props.copyMode       = pr.cm;
-    cell->props.maskType       = pr.mt;
+    const MixPreset& pr = kMixPresets[comboIndex];
+    cell->props.copyMode       = pr.copyMode;
+    cell->props.maskType       = pr.maskType;
+    cell->props.keyingMode     = pr.keyingMode;
+    cell->props.keyingEnabled  = pr.keyingEnabled;
+    cell->props.keyLumaInvert  = pr.keyLumaInvert;
+    cell->props.keyLumaCenter  = pr.keyLumaCenter;
+    cell->props.keyChromaInvert = pr.keyChromaInvert;
+    cell->props.keyChromaHue    = pr.keyChromaHue;
+    cell->props.keyChannelR    = pr.keyChannelR;
+    cell->props.keyChannelG    = pr.keyChannelG;
+    cell->props.keyChannelB    = pr.keyChannelB;
     cell->props.transparency   = pr.transparency;
-    cell->props.maskWidth      = pr.maskW;
-    cell->props.maskSmoothness = pr.maskS;
-    cell->props.keyChannelR    = pr.kr;
-    cell->props.keyChannelG    = pr.kg;
-    cell->props.keyChannelB    = pr.kb;
+    cell->props.keyThreshold   = pr.maskWidth;
+    cell->props.keySoftness    = pr.maskSmoothness;
     cell->props.mixingPresetIndex = comboIndex;
 
     m_loading = true;
@@ -1025,6 +1241,10 @@ void ParameterInspector::applyMixingPreset(int comboIndex)
     QSignalBlocker b5(m_keyGSlider);
     QSignalBlocker b6(m_keyBSlider);
     QSignalBlocker b7(m_mixingPreset);
+    QSignalBlocker b8(m_keyingMode);
+    QSignalBlocker b8a(m_keyingEnabled);
+    QSignalBlocker b9(m_keyRangeSlider);
+    QSignalBlocker b10(m_keyChromaRangeSlider);
 
     m_transparencySlider->setValue(unitToSlider(cell->props.transparency));
     m_transparencyValue->setText(formatUnit(cell->props.transparency));
@@ -1037,18 +1257,42 @@ void ParameterInspector::applyMixingPreset(int comboIndex)
         }
     };
     setCombo(m_copyMode, int(cell->props.copyMode));
-    m_keyHardnessSlider->setValue(unitToSlider(cell->props.maskWidth));
-    m_keyHardnessValue->setText(formatUnit(cell->props.maskWidth));
-    m_keyFeatherSlider->setValue(unitToSlider(cell->props.maskSmoothness));
-    m_keyFeatherValue->setText(formatUnit(cell->props.maskSmoothness));
+    m_keyHardnessSlider->setValue(unitToSlider(cell->props.keyThreshold));
+    m_keyHardnessValue->setText(formatUnit(cell->props.keyThreshold));
+    m_keyFeatherSlider->setValue(unitToSlider(cell->props.keySoftness));
+    m_keyFeatherValue->setText(formatUnit(cell->props.keySoftness));
     m_keyRSlider->setValue(unitToSlider(cell->props.keyChannelR));
     m_keyRValue->setText(formatKeyPercent(cell->props.keyChannelR));
     m_keyGSlider->setValue(unitToSlider(cell->props.keyChannelG));
     m_keyGValue->setText(formatKeyPercent(cell->props.keyChannelG));
     m_keyBSlider->setValue(unitToSlider(cell->props.keyChannelB));
     m_keyBValue->setText(formatKeyPercent(cell->props.keyChannelB));
+    if (m_keyingEnabled) {
+        m_keyingEnabled->setChecked(cell->props.keyingEnabled);
+    }
+    setCombo(m_keyingMode, int(cell->props.keyingMode));
+    m_keyRangeSlider->setRange(
+        qBound(0.0, cell->props.keyLumaCenter - cell->props.keyThreshold, 1.0),
+        qBound(0.0, cell->props.keyLumaCenter + cell->props.keyThreshold, 1.0));
+    m_keyRangeValue->setText(formatUnit(cell->props.keyLumaCenter));
+    if (m_keyLumaTargetGroup) {
+        if (QAbstractButton* b = m_keyLumaTargetGroup->button(cell->props.keyLumaInvert ? 1 : 0)) {
+            b->setChecked(true);
+        }
+    }
+    m_keyChromaRangeSlider->setRange(
+        qBound(0.0, cell->props.keyChromaHue - cell->props.keyThreshold, 1.0),
+        qBound(0.0, cell->props.keyChromaHue + cell->props.keyThreshold, 1.0));
+    m_keyChromaRangeValue->setText(formatUnit(cell->props.keyChromaHue));
+    if (m_keyChromaTargetGroup) {
+        if (QAbstractButton* b = m_keyChromaTargetGroup->button(cell->props.keyChromaInvert ? 1 : 0)) {
+            b->setChecked(true);
+        }
+    }
     m_mixingPreset->setCurrentIndex(comboIndex);
     syncMaskTypeButtons();
+    syncMaskControlVisibility();
+    syncKeyingModeUi();
 
     m_loading = false;
     emitChanged();
@@ -1065,6 +1309,22 @@ void ParameterInspector::syncMaskTypeButtons()
     if (QAbstractButton* btn = m_maskTypeGroup->button(id)) {
         btn->setChecked(true);
     }
+}
+
+void ParameterInspector::syncMaskControlVisibility()
+{
+    const auto* cell = currentCell();
+    const MaskType mt = cell ? cell->props.maskType : MaskType::None;
+    const bool rectLike = (mt == MaskType::Rectangle || mt == MaskType::SoftEdge);
+    const bool circleLike = (mt == MaskType::Circle || mt == MaskType::Custom);
+    const bool ellipse = (mt == MaskType::Ellipse);
+    const bool hasMask = (mt != MaskType::None);
+    if (m_maskRectWidthRow) m_maskRectWidthRow->setVisible(rectLike);
+    if (m_maskRectHeightRow) m_maskRectHeightRow->setVisible(rectLike);
+    if (m_maskRadiusRow) m_maskRadiusRow->setVisible(circleLike);
+    if (m_maskEllipseXRow) m_maskEllipseXRow->setVisible(ellipse);
+    if (m_maskEllipseYRow) m_maskEllipseYRow->setVisible(ellipse);
+    if (m_maskFeatherRow) m_maskFeatherRow->setVisible(hasMask);
 }
 
 void ParameterInspector::syncPlayModeButtons()
@@ -1104,30 +1364,6 @@ void ParameterInspector::syncPriorityButtons()
     }
 }
 
-void ParameterInspector::syncVisualRowVisibility(const pvj::core::Cell* cell)
-{
-    const bool isFeedbackVisual = cell && cell->visual.type == VisualType::Generator
-        && cell->visual.generator == GeneratorKind::Feedback;
-    if (m_visualClipSection) {
-        m_visualClipSection->setVisible(!isFeedbackVisual);
-    }
-    if (m_feedbackGroup) {
-        m_feedbackGroup->setVisible(isFeedbackVisual);
-    }
-    if (m_visualPrevBtn) {
-        m_visualPrevBtn->setVisible(!isFeedbackVisual);
-    }
-    if (m_visualNextBtn) {
-        m_visualNextBtn->setVisible(!isFeedbackVisual);
-    }
-    if (m_audioDial) {
-        m_audioDial->setVisible(!isFeedbackVisual);
-    }
-    if (m_audioDialValue) {
-        m_audioDialValue->setVisible(!isFeedbackVisual);
-    }
-}
-
 void ParameterInspector::refreshFromCell()
 {
     m_loading = true;
@@ -1143,6 +1379,9 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b8(m_keyGSlider);
     QSignalBlocker b9(m_keyBSlider);
     QSignalBlocker b10(m_mixingPreset);
+    QSignalBlocker b11(m_keyingMode);
+    QSignalBlocker b11a(m_keyingEnabled);
+    QSignalBlocker b11b(m_matteRoleCombo);
     QSignalBlocker b12(m_audioDial);
     QSignalBlocker b13(m_segmentInSlider);
     QSignalBlocker b14(m_segmentOutSlider);
@@ -1150,28 +1389,12 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b16(m_pauseClipBtn);
     QSignalBlocker b17(m_overlayLineEdit);
     QSignalBlocker b18(m_tcStartEdit);
-    QSignalBlocker b33(m_layerBandGroup);
-    QSignalBlocker bfb0(m_feedbackEnabled);
-    QSignalBlocker bfb1(m_feedbackStrengthSlider);
-    QSignalBlocker bfb2(m_feedbackZoomSlider);
-    QSignalBlocker bfb3(m_feedbackDecaySlider);
-    QSignalBlocker bfb4(m_feedbackBrightnessSlider);
-    QSignalBlocker bfb5(m_feedbackSaturationSlider);
-    QSignalBlocker bfb6(m_feedbackGammaSlider);
-    QSignalBlocker bfb7(m_feedbackContrastSlider);
-    QSignalBlocker bfb8(m_feedbackLayerBrightnessSlider);
-    QSignalBlocker bfb9(m_feedbackLayerSaturationSlider);
-    QSignalBlocker bfb10(m_feedbackLayerGammaSlider);
-    QSignalBlocker bfb11(m_feedbackLayerContrastSlider);
-    QSignalBlocker bfb12(m_feedbackWrapMode);
-    QSignalBlocker bfb13(m_feedbackRotationSlider);
-    QSignalBlocker bfb14(m_feedbackRotationAnimated);
+    QSignalBlocker b19(m_keyRangeSlider);
+    QSignalBlocker b20(m_keyChromaRangeSlider);
+    QSignalBlocker b33(m_preferredLayerCombo);
 
     auto* cell = currentCell();
     const bool hasCell = (cell != nullptr);
-    const bool isFeedbackVisual = hasCell && cell->visual.type == VisualType::Generator
-        && cell->visual.generator == GeneratorKind::Feedback;
-    syncVisualRowVisibility(cell);
 
     for (auto* w : {static_cast<QWidget*>(m_visualPrevBtn),
                      static_cast<QWidget*>(m_visualNextBtn),
@@ -1184,8 +1407,17 @@ void ParameterInspector::refreshFromCell()
                      static_cast<QWidget*>(m_tcStartEdit),
                      static_cast<QWidget*>(m_fadeSlider),
                      static_cast<QWidget*>(m_fadeValue),
-                     static_cast<QWidget*>(m_rotation),
+                     static_cast<QWidget*>(m_audioDial),
+                     static_cast<QWidget*>(m_audioDialValue)}) {
+        if (w) {
+            w->setEnabled(hasCell);
+        }
+    }
+    for (auto* w : {static_cast<QWidget*>(m_rotation),
                      static_cast<QWidget*>(m_copyMode),
+                     static_cast<QWidget*>(m_keyingEnabled),
+                     static_cast<QWidget*>(m_keyingMode),
+                     static_cast<QWidget*>(m_matteRoleCombo),
                      static_cast<QWidget*>(m_transparencySlider),
                      static_cast<QWidget*>(m_transparencyValue),
                      static_cast<QWidget*>(m_mixingPreset),
@@ -1199,10 +1431,12 @@ void ParameterInspector::refreshFromCell()
                      static_cast<QWidget*>(m_keyRValue),
                      static_cast<QWidget*>(m_keyGValue),
                      static_cast<QWidget*>(m_keyBValue),
-                     static_cast<QWidget*>(m_audioDial),
-                     static_cast<QWidget*>(m_audioDialValue)}) {
+                     static_cast<QWidget*>(m_keyRangeSlider),
+                     static_cast<QWidget*>(m_keyRangeValue),
+                     static_cast<QWidget*>(m_keyChromaRangeSlider),
+                     static_cast<QWidget*>(m_keyChromaRangeValue)}) {
         if (w) {
-            w->setEnabled(hasCell && !isFeedbackVisual);
+            w->setEnabled(hasCell);
         }
     }
     if (m_visualThumb) {
@@ -1217,7 +1451,19 @@ void ParameterInspector::refreshFromCell()
     if (m_playModeGroup) {
         const auto buttons = m_playModeGroup->buttons();
         for (QAbstractButton* btn : buttons) {
-            btn->setEnabled(hasCell && !isFeedbackVisual);
+            btn->setEnabled(hasCell);
+        }
+    }
+    if (m_keyLumaTargetGroup) {
+        const auto buttons = m_keyLumaTargetGroup->buttons();
+        for (QAbstractButton* btn : buttons) {
+            btn->setEnabled(hasCell);
+        }
+    }
+    if (m_keyChromaTargetGroup) {
+        const auto buttons = m_keyChromaTargetGroup->buttons();
+        for (QAbstractButton* btn : buttons) {
+            btn->setEnabled(hasCell);
         }
     }
     if (m_priorityGroup) {
@@ -1226,45 +1472,9 @@ void ParameterInspector::refreshFromCell()
             btn->setEnabled(hasCell);
         }
     }
-    if (m_layerBandGroup) {
-        const auto buttons = m_layerBandGroup->buttons();
-        for (QAbstractButton* btn : buttons) {
-            btn->setEnabled(hasCell);
-        }
+    if (m_preferredLayerCombo) {
+        m_preferredLayerCombo->setEnabled(hasCell);
     }
-
-    const auto setFbEnabled = [hasCell, isFeedbackVisual](QWidget* w) {
-        if (w) {
-            w->setEnabled(hasCell && isFeedbackVisual);
-        }
-    };
-    setFbEnabled(m_feedbackEnabled);
-    setFbEnabled(m_feedbackStrengthSlider);
-    setFbEnabled(m_feedbackStrengthValue);
-    setFbEnabled(m_feedbackZoomSlider);
-    setFbEnabled(m_feedbackZoomValue);
-    setFbEnabled(m_feedbackRotationSlider);
-    setFbEnabled(m_feedbackRotationValue);
-    setFbEnabled(m_feedbackRotationAnimated);
-    setFbEnabled(m_feedbackDecaySlider);
-    setFbEnabled(m_feedbackDecayValue);
-    setFbEnabled(m_feedbackBrightnessSlider);
-    setFbEnabled(m_feedbackBrightnessValue);
-    setFbEnabled(m_feedbackSaturationSlider);
-    setFbEnabled(m_feedbackSaturationValue);
-    setFbEnabled(m_feedbackGammaSlider);
-    setFbEnabled(m_feedbackGammaValue);
-    setFbEnabled(m_feedbackContrastSlider);
-    setFbEnabled(m_feedbackContrastValue);
-    setFbEnabled(m_feedbackLayerBrightnessSlider);
-    setFbEnabled(m_feedbackLayerBrightnessValue);
-    setFbEnabled(m_feedbackLayerSaturationSlider);
-    setFbEnabled(m_feedbackLayerSaturationValue);
-    setFbEnabled(m_feedbackLayerGammaSlider);
-    setFbEnabled(m_feedbackLayerGammaValue);
-    setFbEnabled(m_feedbackLayerContrastSlider);
-    setFbEnabled(m_feedbackLayerContrastValue);
-    setFbEnabled(m_feedbackWrapMode);
 
     if (!hasCell) {
         m_visualLabel->setText(tr("(no cell selected)"));
@@ -1288,12 +1498,41 @@ void ParameterInspector::refreshFromCell()
         m_keyHardnessValue->setText(formatUnit(0.0));
         m_keyFeatherSlider->setValue(unitToSlider(0.0));
         m_keyFeatherValue->setText(formatUnit(0.0));
+        if (m_maskRectWidthSlider) m_maskRectWidthSlider->setValue(unitToSlider(1.0));
+        if (m_maskRectHeightSlider) m_maskRectHeightSlider->setValue(unitToSlider(1.0));
+        if (m_maskRadiusSlider) m_maskRadiusSlider->setValue(unitToSlider(0.5));
+        if (m_maskEllipseXSlider) m_maskEllipseXSlider->setValue(unitToSlider(0.6));
+        if (m_maskEllipseYSlider) m_maskEllipseYSlider->setValue(unitToSlider(0.45));
+        if (m_maskFeatherSlider) m_maskFeatherSlider->setValue(unitToSlider(0.1));
+        if (m_maskRectWidthValue) m_maskRectWidthValue->setText(formatUnit(1.0));
+        if (m_maskRectHeightValue) m_maskRectHeightValue->setText(formatUnit(1.0));
+        if (m_maskRadiusValue) m_maskRadiusValue->setText(formatUnit(0.5));
+        if (m_maskEllipseXValue) m_maskEllipseXValue->setText(formatUnit(0.6));
+        if (m_maskEllipseYValue) m_maskEllipseYValue->setText(formatUnit(0.45));
+        if (m_maskFeatherValue) m_maskFeatherValue->setText(formatUnit(0.1));
         m_keyRSlider->setValue(unitToSlider(1.0));
         m_keyGSlider->setValue(unitToSlider(1.0));
         m_keyBSlider->setValue(unitToSlider(1.0));
         m_keyRValue->setText(formatKeyPercent(1.0));
         m_keyGValue->setText(formatKeyPercent(1.0));
         m_keyBValue->setText(formatKeyPercent(1.0));
+        m_keyRangeSlider->setRange(0.25, 0.75);
+        m_keyRangeValue->setText(formatUnit(0.5));
+        if (m_keyingEnabled) {
+            m_keyingEnabled->setChecked(true);
+        }
+        if (m_keyLumaTargetGroup) {
+            if (QAbstractButton* b = m_keyLumaTargetGroup->button(0)) {
+                b->setChecked(true);
+            }
+        }
+        m_keyChromaRangeSlider->setRange(0.23, 0.43);
+        m_keyChromaRangeValue->setText(formatUnit(0.33));
+        if (m_keyChromaTargetGroup) {
+            if (QAbstractButton* b = m_keyChromaTargetGroup->button(0)) {
+                b->setChecked(true);
+            }
+        }
         m_mixingPreset->setCurrentIndex(0);
         const auto setCombo = [](QComboBox* cb, int value) {
             for (int i = 0; i < cb->count(); ++i) {
@@ -1303,55 +1542,16 @@ void ParameterInspector::refreshFromCell()
                 }
             }
         };
+        setCombo(m_keyingMode, int(KeyingMode::Luma));
         setCombo(m_copyMode, int(CopyMode::Normal));
+        setCombo(m_matteRoleCombo, int(LayerMatteRole::None));
         syncMaskTypeButtons();
+        syncMaskControlVisibility();
+        syncKeyingModeUi();
         syncPlayModeButtons();
         syncPriorityButtons();
-        if (m_layerBandGroup) {
-            if (QAbstractButton* btn = m_layerBandGroup->button(int(LayerBand::Mid))) {
-                btn->setChecked(true);
-            }
-        }
-        if (m_feedbackEnabled) {
-            const pvj::core::FeedbackParams d;
-            m_feedbackEnabled->setChecked(d.enabled);
-            m_feedbackStrengthSlider->setValue(unitToSlider(d.strength));
-            m_feedbackStrengthValue->setText(formatUnit(d.strength));
-            m_feedbackZoomSlider->setValue(rangeToSlider(d.zoom, 0.5, 2.0));
-            m_feedbackZoomValue->setText(QString::number(d.zoom, 'f', 3));
-            m_feedbackRotationSlider->setValue(rangeToSlider(d.rotationDeg, -180.0, 180.0));
-            m_feedbackRotationValue->setText(QString::number(d.rotationDeg, 'f', 2));
-            m_feedbackRotationAnimated->setChecked(d.rotationAnimated);
-            m_feedbackDecaySlider->setValue(rangeToSlider(d.decay, -0.1, 0.1));
-            m_feedbackDecayValue->setText(QString::number(d.decay, 'f', 3));
-            m_feedbackBrightnessSlider->setValue(rangeToSlider(d.brightness, -1.0, 1.0));
-            m_feedbackBrightnessValue->setText(formatSignedUnit(d.brightness));
-            m_feedbackSaturationSlider->setValue(rangeToSlider(d.saturation, 0.0, 2.0));
-            m_feedbackSaturationValue->setText(QString::number(d.saturation, 'f', 2));
-            m_feedbackGammaSlider->setValue(rangeToSlider(d.gamma, 0.1, 4.0));
-            m_feedbackGammaValue->setText(QString::number(d.gamma, 'f', 2));
-            m_feedbackContrastSlider->setValue(rangeToSlider(d.contrast, 0.0, 2.0));
-            m_feedbackContrastValue->setText(QString::number(d.contrast, 'f', 2));
-            m_feedbackLayerBrightnessSlider->setValue(rangeToSlider(d.layerBrightness, -1.0, 1.0));
-            m_feedbackLayerBrightnessValue->setText(formatSignedUnit(d.layerBrightness));
-            m_feedbackLayerSaturationSlider->setValue(rangeToSlider(d.layerSaturation, 0.0, 2.0));
-            m_feedbackLayerSaturationValue->setText(QString::number(d.layerSaturation, 'f', 2));
-            m_feedbackLayerGammaSlider->setValue(rangeToSlider(d.layerGamma, 0.1, 4.0));
-            m_feedbackLayerGammaValue->setText(QString::number(d.layerGamma, 'f', 2));
-            m_feedbackLayerContrastSlider->setValue(rangeToSlider(d.layerContrast, 0.0, 2.0));
-            m_feedbackLayerContrastValue->setText(QString::number(d.layerContrast, 'f', 2));
-            const auto setWrapCombo = [](QComboBox* cb, int value) {
-                for (int i = 0; i < cb->count(); ++i) {
-                    if (cb->itemData(i).toInt() == value) {
-                        cb->setCurrentIndex(i);
-                        return;
-                    }
-                }
-            };
-            setWrapCombo(m_feedbackWrapMode, int(d.wrapMode));
-        }
-        if (m_feedbackPresetApplyBtn) {
-            m_feedbackPresetApplyBtn->setEnabled(false);
+        if (m_preferredLayerCombo) {
+            m_preferredLayerCombo->setCurrentIndex(4);
         }
         m_loading = false;
         return;
@@ -1403,63 +1603,64 @@ void ParameterInspector::refreshFromCell()
     m_pauseClipBtn->setChecked(cell->props.clipPaused);
     m_overlayLineEdit->setText(cell->props.overlayText);
     m_tcStartEdit->setText(cell->props.tcStart);
-    m_keyHardnessSlider->setValue(unitToSlider(cell->props.maskWidth));
-    m_keyHardnessValue->setText(formatUnit(cell->props.maskWidth));
-    m_keyFeatherSlider->setValue(unitToSlider(cell->props.maskSmoothness));
-    m_keyFeatherValue->setText(formatUnit(cell->props.maskSmoothness));
+    m_keyHardnessSlider->setValue(unitToSlider(cell->props.keyThreshold));
+    m_keyHardnessValue->setText(formatUnit(cell->props.keyThreshold));
+    m_keyFeatherSlider->setValue(unitToSlider(cell->props.keySoftness));
+    m_keyFeatherValue->setText(formatUnit(cell->props.keySoftness));
     m_keyRSlider->setValue(unitToSlider(cell->props.keyChannelR));
     m_keyGSlider->setValue(unitToSlider(cell->props.keyChannelG));
     m_keyBSlider->setValue(unitToSlider(cell->props.keyChannelB));
     m_keyRValue->setText(formatKeyPercent(cell->props.keyChannelR));
     m_keyGValue->setText(formatKeyPercent(cell->props.keyChannelG));
     m_keyBValue->setText(formatKeyPercent(cell->props.keyChannelB));
+    m_keyRangeSlider->setRange(
+        qBound(0.0, cell->props.keyLumaCenter - cell->props.keyThreshold, 1.0),
+        qBound(0.0, cell->props.keyLumaCenter + cell->props.keyThreshold, 1.0));
+    m_keyRangeValue->setText(formatUnit(cell->props.keyLumaCenter));
+    if (m_keyLumaTargetGroup) {
+        if (QAbstractButton* b = m_keyLumaTargetGroup->button(cell->props.keyLumaInvert ? 1 : 0)) {
+            b->setChecked(true);
+        }
+    }
+    m_keyChromaRangeSlider->setRange(
+        qBound(0.0, cell->props.keyChromaHue - cell->props.keyThreshold, 1.0),
+        qBound(0.0, cell->props.keyChromaHue + cell->props.keyThreshold, 1.0));
+    m_keyChromaRangeValue->setText(formatUnit(cell->props.keyChromaHue));
+    if (m_keyChromaTargetGroup) {
+        if (QAbstractButton* b = m_keyChromaTargetGroup->button(cell->props.keyChromaInvert ? 1 : 0)) {
+            b->setChecked(true);
+        }
+    }
+    if (m_keyingEnabled) {
+        m_keyingEnabled->setChecked(cell->props.keyingEnabled);
+    }
+    setCombo(m_keyingMode, int(cell->props.keyingMode));
     setCombo(m_copyMode, int(cell->props.copyMode));
+    setCombo(m_matteRoleCombo, int(cell->props.matteRole));
+    if (m_maskRectWidthSlider) m_maskRectWidthSlider->setValue(unitToSlider(cell->props.maskRectWidth));
+    if (m_maskRectHeightSlider) m_maskRectHeightSlider->setValue(unitToSlider(cell->props.maskRectHeight));
+    if (m_maskRadiusSlider) m_maskRadiusSlider->setValue(unitToSlider(cell->props.maskRadius));
+    if (m_maskEllipseXSlider) m_maskEllipseXSlider->setValue(unitToSlider(cell->props.maskEllipseX));
+    if (m_maskEllipseYSlider) m_maskEllipseYSlider->setValue(unitToSlider(cell->props.maskEllipseY));
+    if (m_maskFeatherSlider) m_maskFeatherSlider->setValue(unitToSlider(cell->props.maskFeather));
+    if (m_maskRectWidthValue) m_maskRectWidthValue->setText(formatUnit(cell->props.maskRectWidth));
+    if (m_maskRectHeightValue) m_maskRectHeightValue->setText(formatUnit(cell->props.maskRectHeight));
+    if (m_maskRadiusValue) m_maskRadiusValue->setText(formatUnit(cell->props.maskRadius));
+    if (m_maskEllipseXValue) m_maskEllipseXValue->setText(formatUnit(cell->props.maskEllipseX));
+    if (m_maskEllipseYValue) m_maskEllipseYValue->setText(formatUnit(cell->props.maskEllipseY));
+    if (m_maskFeatherValue) m_maskFeatherValue->setText(formatUnit(cell->props.maskFeather));
     syncMaskTypeButtons();
+    syncMaskControlVisibility();
+    syncKeyingModeUi();
     syncPlayModeButtons();
     syncPriorityButtons();
-    if (m_layerBandGroup) {
-        const int band = qBound(int(LayerBand::Back), int(cell->props.layerBand), int(LayerBand::Front));
-        if (QAbstractButton* btn = m_layerBandGroup->button(band)) {
-            btn->setChecked(true);
-        }
+    if (m_preferredLayerCombo) {
+        const int preferredLayer = qBound(0, cell->props.preferredLayer, m_preferredLayerCombo->count() - 1);
+        m_preferredLayerCombo->setCurrentIndex(preferredLayer);
     }
 
     const int presetIdx = qBound(0, cell->props.mixingPresetIndex, m_mixingPreset->count() - 1);
     m_mixingPreset->setCurrentIndex(presetIdx);
-
-    if (m_feedbackEnabled) {
-        const pvj::core::FeedbackParams& fb = cell->props.feedback;
-        m_feedbackEnabled->setChecked(fb.enabled);
-        m_feedbackStrengthSlider->setValue(unitToSlider(fb.strength));
-        m_feedbackStrengthValue->setText(formatUnit(fb.strength));
-        m_feedbackZoomSlider->setValue(rangeToSlider(fb.zoom, 0.5, 2.0));
-        m_feedbackZoomValue->setText(QString::number(fb.zoom, 'f', 3));
-        m_feedbackRotationSlider->setValue(rangeToSlider(fb.rotationDeg, -180.0, 180.0));
-        m_feedbackRotationValue->setText(QString::number(fb.rotationDeg, 'f', 2));
-        m_feedbackRotationAnimated->setChecked(fb.rotationAnimated);
-        m_feedbackDecaySlider->setValue(rangeToSlider(fb.decay, -0.1, 0.1));
-        m_feedbackDecayValue->setText(QString::number(fb.decay, 'f', 3));
-        m_feedbackBrightnessSlider->setValue(rangeToSlider(fb.brightness, -1.0, 1.0));
-        m_feedbackBrightnessValue->setText(formatSignedUnit(fb.brightness));
-        m_feedbackSaturationSlider->setValue(rangeToSlider(fb.saturation, 0.0, 2.0));
-        m_feedbackSaturationValue->setText(QString::number(fb.saturation, 'f', 2));
-        m_feedbackGammaSlider->setValue(rangeToSlider(fb.gamma, 0.1, 4.0));
-        m_feedbackGammaValue->setText(QString::number(fb.gamma, 'f', 2));
-        m_feedbackContrastSlider->setValue(rangeToSlider(fb.contrast, 0.0, 2.0));
-        m_feedbackContrastValue->setText(QString::number(fb.contrast, 'f', 2));
-        m_feedbackLayerBrightnessSlider->setValue(rangeToSlider(fb.layerBrightness, -1.0, 1.0));
-        m_feedbackLayerBrightnessValue->setText(formatSignedUnit(fb.layerBrightness));
-        m_feedbackLayerSaturationSlider->setValue(rangeToSlider(fb.layerSaturation, 0.0, 2.0));
-        m_feedbackLayerSaturationValue->setText(QString::number(fb.layerSaturation, 'f', 2));
-        m_feedbackLayerGammaSlider->setValue(rangeToSlider(fb.layerGamma, 0.1, 4.0));
-        m_feedbackLayerGammaValue->setText(QString::number(fb.layerGamma, 'f', 2));
-        m_feedbackLayerContrastSlider->setValue(rangeToSlider(fb.layerContrast, 0.0, 2.0));
-        m_feedbackLayerContrastValue->setText(QString::number(fb.layerContrast, 'f', 2));
-        setCombo(m_feedbackWrapMode, int(fb.wrapMode));
-    }
-    if (m_feedbackPresetApplyBtn) {
-        m_feedbackPresetApplyBtn->setEnabled(true);
-    }
 
     m_loading = false;
 }
@@ -1474,11 +1675,7 @@ void ParameterInspector::onMixingPresetChanged(int idx)
     if (m_loading) {
         return;
     }
-    if (idx <= 0) {
-        if (auto* c = currentCell()) {
-            c->props.mixingPresetIndex = 0;
-            emitChanged();
-        }
+    if (idx < 0) {
         return;
     }
     applyMixingPreset(idx);
@@ -1541,14 +1738,15 @@ void ParameterInspector::onPriorityGroupClicked(int id)
     }
 }
 
-void ParameterInspector::onLayerBandGroupClicked(int id)
+void ParameterInspector::onPreferredLayerChanged(int idx)
 {
     if (m_loading) return;
     if (auto* c = currentCell()) {
-        if (id < int(LayerBand::Back) || id > int(LayerBand::Front)) {
-            id = int(LayerBand::Mid);
+        if (!m_preferredLayerCombo) {
+            return;
         }
-        c->props.layerBand = static_cast<LayerBand>(id);
+        const int data = m_preferredLayerCombo->itemData(idx).toInt();
+        c->props.preferredLayer = qBound(0, data, 11);
         emitChanged();
     }
 }
@@ -1604,226 +1802,6 @@ void ParameterInspector::onScratchSliderChanged(int v)
 void ParameterInspector::onScratchSliderReleased()
 {
     emit scratchApplyRequested();
-}
-
-void ParameterInspector::onFeedbackPresetApplyClicked()
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->visual.type = VisualType::Generator;
-        c->visual.generator = GeneratorKind::Feedback;
-        c->visual.mediaId = {};
-        c->props.feedback.enabled = true;
-        c->props.feedback.rotationAnimated = false;
-        emitChanged();
-        refreshFromCell();
-    }
-}
-
-void ParameterInspector::onFeedbackEnabledToggled(bool checked)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.enabled = checked;
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackStrengthChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.strength = sliderToUnit(v);
-        if (m_feedbackStrengthValue) {
-            m_feedbackStrengthValue->setText(formatUnit(c->props.feedback.strength));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackZoomChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.zoom = sliderToRange(v, 0.5, 2.0);
-        if (m_feedbackZoomValue) {
-            m_feedbackZoomValue->setText(QString::number(c->props.feedback.zoom, 'f', 3));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackRotationChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.rotationDeg = sliderToRange(v, -180.0, 180.0);
-        if (m_feedbackRotationValue) {
-            m_feedbackRotationValue->setText(QString::number(c->props.feedback.rotationDeg, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackRotationAnimatedToggled(bool checked)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.rotationAnimated = checked;
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackDecayChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.decay = sliderToRange(v, -0.1, 0.1);
-        if (m_feedbackDecayValue) {
-            m_feedbackDecayValue->setText(QString::number(c->props.feedback.decay, 'f', 3));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackBrightnessChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.brightness = sliderToRange(v, -1.0, 1.0);
-        if (m_feedbackBrightnessValue) {
-            m_feedbackBrightnessValue->setText(formatSignedUnit(c->props.feedback.brightness));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackSaturationChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.saturation = sliderToRange(v, 0.0, 2.0);
-        if (m_feedbackSaturationValue) {
-            m_feedbackSaturationValue->setText(QString::number(c->props.feedback.saturation, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackGammaChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.gamma = sliderToRange(v, 0.1, 4.0);
-        if (m_feedbackGammaValue) {
-            m_feedbackGammaValue->setText(QString::number(c->props.feedback.gamma, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackContrastChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.contrast = sliderToRange(v, 0.0, 2.0);
-        if (m_feedbackContrastValue) {
-            m_feedbackContrastValue->setText(QString::number(c->props.feedback.contrast, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackLayerBrightnessChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.layerBrightness = sliderToRange(v, -1.0, 1.0);
-        if (m_feedbackLayerBrightnessValue) {
-            m_feedbackLayerBrightnessValue->setText(formatSignedUnit(c->props.feedback.layerBrightness));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackLayerSaturationChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.layerSaturation = sliderToRange(v, 0.0, 2.0);
-        if (m_feedbackLayerSaturationValue) {
-            m_feedbackLayerSaturationValue->setText(QString::number(c->props.feedback.layerSaturation, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackLayerGammaChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.layerGamma = sliderToRange(v, 0.1, 4.0);
-        if (m_feedbackLayerGammaValue) {
-            m_feedbackLayerGammaValue->setText(QString::number(c->props.feedback.layerGamma, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackLayerContrastChanged(int v)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        c->props.feedback.layerContrast = sliderToRange(v, 0.0, 2.0);
-        if (m_feedbackLayerContrastValue) {
-            m_feedbackLayerContrastValue->setText(QString::number(c->props.feedback.layerContrast, 'f', 2));
-        }
-        emitChanged();
-    }
-}
-
-void ParameterInspector::onFeedbackWrapModeChanged(int /*idx*/)
-{
-    if (m_loading) {
-        return;
-    }
-    if (auto* c = currentCell()) {
-        if (!m_feedbackWrapMode) {
-            return;
-        }
-        c->props.feedback.wrapMode = static_cast<WrapMode>(m_feedbackWrapMode->currentData().toInt());
-        emitChanged();
-    }
 }
 
 void ParameterInspector::onOverlayTextEdited(const QString& t)
@@ -1893,11 +1871,111 @@ void ParameterInspector::onCopyModeChanged(int idx)
         emitChanged();
     }
 }
+
+void ParameterInspector::onKeyingModeChanged(int idx)
+{
+    if (m_loading) return;
+    if (auto* c = currentCell()) {
+        const int selectedMode = m_keyingMode->itemData(idx).toInt();
+        c->props.keyingMode = static_cast<KeyingMode>(selectedMode);
+        syncKeyingModeUi();
+        markMixingCustom();
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onKeyingEnabledToggled(bool checked)
+{
+    if (m_loading) return;
+    if (auto* c = currentCell()) {
+        c->props.keyingEnabled = checked;
+        syncKeyingModeUi();
+        markMixingCustom();
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onKeyLumaTargetChanged(int id)
+{
+    if (m_loading) return;
+    if (auto* c = currentCell()) {
+        c->props.keyLumaInvert = (id == 1);
+        markMixingCustom();
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onKeyLumaRangeChanged(double minV, double maxV)
+{
+    if (m_loading) return;
+    const double center = 0.5 * (minV + maxV);
+    const double width = 0.5 * qMax(0.0, maxV - minV);
+    if (m_keyRangeValue) {
+        m_keyRangeValue->setText(formatUnit(center));
+    }
+    if (m_keyHardnessSlider) {
+        QSignalBlocker b(m_keyHardnessSlider);
+        m_keyHardnessSlider->setValue(unitToSlider(width));
+    }
+    if (m_keyHardnessValue) {
+        m_keyHardnessValue->setText(formatUnit(width));
+    }
+    if (auto* c = currentCell()) {
+        c->props.keyLumaCenter = center;
+        c->props.keyThreshold = width;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onKeyChromaTargetChanged(int id)
+{
+    if (m_loading) return;
+    if (auto* c = currentCell()) {
+        c->props.keyChromaInvert = (id == 1);
+        markMixingCustom();
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onKeyChromaRangeChanged(double minV, double maxV)
+{
+    if (m_loading) return;
+    const double center = 0.5 * (minV + maxV);
+    const double width = 0.5 * qMax(0.0, maxV - minV);
+    if (m_keyChromaRangeValue) {
+        m_keyChromaRangeValue->setText(formatUnit(center));
+    }
+    if (m_keyHardnessSlider) {
+        QSignalBlocker b(m_keyHardnessSlider);
+        m_keyHardnessSlider->setValue(unitToSlider(width));
+    }
+    if (m_keyHardnessValue) {
+        m_keyHardnessValue->setText(formatUnit(width));
+    }
+    if (auto* c = currentCell()) {
+        c->props.keyChromaHue = center;
+        c->props.keyThreshold = width;
+        markMixingCustom();
+        emitChanged();
+    }
+}
 void ParameterInspector::onMaskTypeGroupIdClicked(int id)
 {
     if (m_loading) return;
     if (auto* c = currentCell()) {
         c->props.maskType = MaskType(id);
+        syncMaskControlVisibility();
+        markMixingCustom();
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onMatteRoleChanged(int idx)
+{
+    if (m_loading) return;
+    if (auto* c = currentCell()) {
+        c->props.matteRole = static_cast<LayerMatteRole>(qBound(0, idx, 3));
         markMixingCustom();
         emitChanged();
     }
@@ -1910,7 +1988,17 @@ void ParameterInspector::onKeyHardnessSliderChanged(int v)
         m_keyHardnessValue->setText(formatUnit(u));
     }
     if (auto* c = currentCell()) {
-        c->props.maskWidth = u;
+        c->props.keyThreshold = u;
+        if (m_keyRangeSlider) {
+            m_keyRangeSlider->setRange(
+                qBound(0.0, c->props.keyLumaCenter - u, 1.0),
+                qBound(0.0, c->props.keyLumaCenter + u, 1.0));
+        }
+        if (m_keyChromaRangeSlider) {
+            m_keyChromaRangeSlider->setRange(
+                qBound(0.0, c->props.keyChromaHue - u, 1.0),
+                qBound(0.0, c->props.keyChromaHue + u, 1.0));
+        }
         markMixingCustom();
         emitChanged();
     }
@@ -1923,7 +2011,73 @@ void ParameterInspector::onKeyFeatherSliderChanged(int v)
         m_keyFeatherValue->setText(formatUnit(u));
     }
     if (auto* c = currentCell()) {
-        c->props.maskSmoothness = u;
+        c->props.keySoftness = u;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+void ParameterInspector::onMaskRectWidthChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_maskRectWidthValue) m_maskRectWidthValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) {
+        c->props.maskRectWidth = u;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+void ParameterInspector::onMaskRectHeightChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_maskRectHeightValue) m_maskRectHeightValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) {
+        c->props.maskRectHeight = u;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+void ParameterInspector::onMaskRadiusChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_maskRadiusValue) m_maskRadiusValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) {
+        c->props.maskRadius = u;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+void ParameterInspector::onMaskEllipseXChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_maskEllipseXValue) m_maskEllipseXValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) {
+        c->props.maskEllipseX = u;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+void ParameterInspector::onMaskEllipseYChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_maskEllipseYValue) m_maskEllipseYValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) {
+        c->props.maskEllipseY = u;
+        markMixingCustom();
+        emitChanged();
+    }
+}
+void ParameterInspector::onMaskFeatherChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_maskFeatherValue) m_maskFeatherValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) {
+        c->props.maskFeather = u;
         markMixingCustom();
         emitChanged();
     }
@@ -1971,6 +2125,59 @@ void ParameterInspector::onKeyChannelBChanged(int v)
     }
 }
 
+void ParameterInspector::syncKeyingModeUi()
+{
+    if (!m_keyingMode) {
+        return;
+    }
+    const auto* cell = currentCell();
+    const bool keyingEnabled = cell ? cell->props.keyingEnabled : true;
+    const KeyingMode mode = cell ? cell->props.keyingMode : KeyingMode::Luma;
+    const bool chromaMode = (mode == KeyingMode::Chroma);
+    if (m_keyingMode) {
+        m_keyingMode->setEnabled(keyingEnabled);
+    }
+    if (m_keyingHint) {
+        m_keyingHint->setEnabled(keyingEnabled);
+    }
+    if (m_keyHardnessSlider) {
+        m_keyHardnessSlider->setEnabled(keyingEnabled);
+    }
+    if (m_keyHardnessValue) {
+        m_keyHardnessValue->setEnabled(keyingEnabled);
+    }
+    if (m_keyFeatherSlider) {
+        m_keyFeatherSlider->setEnabled(keyingEnabled);
+    }
+    if (m_keyFeatherValue) {
+        m_keyFeatherValue->setEnabled(keyingEnabled);
+    }
+    if (m_keyRgbHint) {
+        m_keyRgbHint->setVisible(keyingEnabled && chromaMode);
+    }
+    if (m_keyLumaTargetRow) {
+        m_keyLumaTargetRow->setVisible(keyingEnabled && !chromaMode);
+    }
+    if (m_keyRangeRow) {
+        m_keyRangeRow->setVisible(keyingEnabled && !chromaMode);
+    }
+    if (m_keyChromaTargetRow) {
+        m_keyChromaTargetRow->setVisible(keyingEnabled && chromaMode);
+    }
+    if (m_keyChromaRangeRow) {
+        m_keyChromaRangeRow->setVisible(keyingEnabled && chromaMode);
+    }
+    if (m_keyRRow) {
+        m_keyRRow->setVisible(keyingEnabled && chromaMode);
+    }
+    if (m_keyGRow) {
+        m_keyGRow->setVisible(keyingEnabled && chromaMode);
+    }
+    if (m_keyBRow) {
+        m_keyBRow->setVisible(keyingEnabled && chromaMode);
+    }
+}
+
 void ParameterInspector::tagMidiWidget(QWidget* w, const QString& propertyId, const QVariant& noteValue)
 {
     if (!w) {
@@ -2015,6 +2222,20 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_transparencySlider, QStringLiteral("transparency"));
     tagMidiWidget(m_mixingPreset, QStringLiteral("mixingPresetIndex"));
     tagMidiWidget(m_copyMode, QStringLiteral("copyMode"));
+    tagMidiWidget(m_keyingEnabled, QStringLiteral("keyingEnabled"));
+    tagMidiWidget(m_keyingMode, QStringLiteral("keyingMode"));
+    if (m_keyLumaTargetGroup) {
+        tagMidiWidget(qobject_cast<QWidget*>(m_keyLumaTargetGroup->button(0)),
+                      QStringLiteral("keyLumaInvert"), 0.0);
+        tagMidiWidget(qobject_cast<QWidget*>(m_keyLumaTargetGroup->button(1)),
+                      QStringLiteral("keyLumaInvert"), 1.0);
+    }
+    if (m_keyChromaTargetGroup) {
+        tagMidiWidget(qobject_cast<QWidget*>(m_keyChromaTargetGroup->button(0)),
+                      QStringLiteral("keyChromaInvert"), 0.0);
+        tagMidiWidget(qobject_cast<QWidget*>(m_keyChromaTargetGroup->button(1)),
+                      QStringLiteral("keyChromaInvert"), 1.0);
+    }
     if (m_maskTypeGroup) {
         constexpr int kMaskEnumLast = int(MaskType::Custom);
         const double maskDen = kMaskEnumLast > 0 ? double(kMaskEnumLast) : 1.0;
@@ -2025,27 +2246,19 @@ void ParameterInspector::registerMidiWidgets()
                           double(id) / maskDen);
         }
     }
-    tagMidiWidget(m_keyHardnessSlider, QStringLiteral("maskWidth"));
-    tagMidiWidget(m_keyFeatherSlider, QStringLiteral("maskSmoothness"));
+    tagMidiWidget(m_keyHardnessSlider, QStringLiteral("keyThreshold"));
+    tagMidiWidget(m_keyFeatherSlider, QStringLiteral("keySoftness"));
+    tagMidiWidget(m_keyRangeSlider, QStringLiteral("keyLumaCenter"));
+    tagMidiWidget(m_keyChromaRangeSlider, QStringLiteral("keyChromaHue"));
+    tagMidiWidget(m_maskRectWidthSlider, QStringLiteral("maskRectWidth"));
+    tagMidiWidget(m_maskRectHeightSlider, QStringLiteral("maskRectHeight"));
+    tagMidiWidget(m_maskRadiusSlider, QStringLiteral("maskRadius"));
+    tagMidiWidget(m_maskEllipseXSlider, QStringLiteral("maskEllipseX"));
+    tagMidiWidget(m_maskEllipseYSlider, QStringLiteral("maskEllipseY"));
+    tagMidiWidget(m_maskFeatherSlider, QStringLiteral("maskFeather"));
     tagMidiWidget(m_keyRSlider, QStringLiteral("keyChannelR"));
     tagMidiWidget(m_keyGSlider, QStringLiteral("keyChannelG"));
     tagMidiWidget(m_keyBSlider, QStringLiteral("keyChannelB"));
-
-    tagMidiWidget(m_feedbackEnabled, QStringLiteral("feedbackEnabled"));
-    tagMidiWidget(m_feedbackStrengthSlider, QStringLiteral("feedbackStrength"));
-    tagMidiWidget(m_feedbackZoomSlider, QStringLiteral("feedbackZoom"));
-    tagMidiWidget(m_feedbackRotationSlider, QStringLiteral("feedbackRotationDeg"));
-    tagMidiWidget(m_feedbackRotationAnimated, QStringLiteral("feedbackRotationAnimated"));
-    tagMidiWidget(m_feedbackDecaySlider, QStringLiteral("feedbackDecay"));
-    tagMidiWidget(m_feedbackBrightnessSlider, QStringLiteral("feedbackBrightness"));
-    tagMidiWidget(m_feedbackSaturationSlider, QStringLiteral("feedbackSaturation"));
-    tagMidiWidget(m_feedbackGammaSlider, QStringLiteral("feedbackGamma"));
-    tagMidiWidget(m_feedbackContrastSlider, QStringLiteral("feedbackContrast"));
-    tagMidiWidget(m_feedbackLayerBrightnessSlider, QStringLiteral("feedbackLayerBrightness"));
-    tagMidiWidget(m_feedbackLayerSaturationSlider, QStringLiteral("feedbackLayerSaturation"));
-    tagMidiWidget(m_feedbackLayerGammaSlider, QStringLiteral("feedbackLayerGamma"));
-    tagMidiWidget(m_feedbackLayerContrastSlider, QStringLiteral("feedbackLayerContrast"));
-    tagMidiWidget(m_feedbackWrapMode, QStringLiteral("feedbackWrapMode"));
 }
 
 void ParameterInspector::showMidiContextMenu(QWidget* w, const QPoint& globalPos)

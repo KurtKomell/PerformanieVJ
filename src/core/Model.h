@@ -18,7 +18,7 @@ enum class BankSetType : int {
 enum class VisualType {
     Empty,
     Media,       // reference to MediaItem by uuid
-    Generator,   // built-in source (feedback, test pattern, spout, ...)
+    Generator,   // built-in source (test pattern, spout, ...)
 };
 
 enum class GeneratorKind {
@@ -28,7 +28,6 @@ enum class GeneratorKind {
     InputNdi,
     SolidColor,
     TestPattern,
-    Feedback,
 };
 
 // Blend / copy modes. Values 0–7 are legacy; 8+ mirror TouchDesigner Composite TOP
@@ -97,11 +96,16 @@ enum class MaskType {
     Custom,
 };
 
-enum class WrapMode {
-    Clamp,
-    Repeat,
-    Mirror,
-    Tile,
+enum class LayerMatteRole : int {
+    None = 0,
+    LumaMatte = 1,
+    AlphaMatte = 2,
+    KnockOut = 3,
+};
+
+enum class KeyingMode : int {
+    Luma = 0,
+    Chroma = 1,
 };
 
 /// Clip playback behaviour (GrandVJ-style toolbar). Only a subset is enforced by the engine today.
@@ -183,26 +187,6 @@ struct PictureParams {
     double circularMotion = 0.0; // 0 .. 1 (strength of circular drift)
 };
 
-struct FeedbackParams {
-    bool   enabled     = false;
-    double strength    = 0.9;   // 0 .. 1   blending weight of previous frame
-    double zoom        = 1.02;  // 0.5 .. 2 per-frame scale around cell center
-    double rotationDeg = 0.0;   // -180 .. +180: fixed °/frame when !rotationAnimated; °/s when animated
-    /// When true, feedback rotation runs continuously (circular motion); `rotationDeg` is speed in °/s.
-    bool   rotationAnimated = false;
-    double decay       = 0.03;  // -0.1 .. +0.1 attenuation applied to previous frame
-    double brightness  = 0.0;   // -1 .. +1 additive brightness on feedback history
-    double saturation  = 1.0;   // 0 .. 2 saturation multiplier
-    double gamma       = 1.0;   // 0.1 .. 4 gamma correction
-    double contrast    = 1.0;   // 0 .. 2 contrast multiplier
-    // Additional grading applied to the feedback-layer output after media/history mix.
-    double layerBrightness = 0.0; // -1 .. +1
-    double layerSaturation = 1.0; // 0 .. 2
-    double layerGamma      = 1.0; // 0.1 .. 4
-    double layerContrast   = 1.0; // 0 .. 2
-    WrapMode wrapMode  = WrapMode::Clamp;
-};
-
 struct CellProps {
     int     priority      = 0;
     double  transparency  = 1.0;
@@ -211,18 +195,45 @@ struct CellProps {
     double  movieSpeed    = 1.0;
     double  fade          = 0.0;
     MaskType maskType     = MaskType::None;
+    LayerMatteRole matteRole = LayerMatteRole::None;
+    /// Common mask feather / edge softness (0..1).
+    double  maskFeather   = 0.1;
+    /// Rectangle / soft-edge mask size (0..1, full frame at 1).
+    double  maskRectWidth = 1.0;
+    double  maskRectHeight = 1.0;
+    /// Circle/custom mask radius (0..1).
+    double  maskRadius = 0.5;
+    /// Ellipse radii (0..1).
+    double  maskEllipseX = 0.6;
+    double  maskEllipseY = 0.45;
+    /// Legacy shared fields (kept for backward compatibility while migrating projects).
     double  maskWidth     = 0.0;
     double  maskSmoothness = 0.0;
     double  rotationZ     = 0.0;
     CopyMode copyMode     = CopyMode::Normal;
     /// Last Mixing preset row chosen in the inspector (0 = Custom).
     int     mixingPresetIndex = 0;
-    /// Preferred mixer depth band (mapped to a fixed 4-layer block in the engine).
-    LayerBand layerBand = LayerBand::Mid;
+    /// Preferred mixer layer slot (0..11 => UI 1..12).
+    int preferredLayer = 4;
     /// Key/matte RGB weights (0–1, UI often shows as %). Reserved for GPU keying; defaults 1 = full.
     double  keyChannelR   = 1.0;
     double  keyChannelG   = 1.0;
     double  keyChannelB   = 1.0;
+    /// Keying mode used by Mixing tab controls.
+    KeyingMode keyingMode = KeyingMode::Luma;
+    /// Enables/disables implicit keying from the Mixing tab.
+    bool    keyingEnabled = true;
+    /// Luma key center (0 = black .. 1 = white).
+    double  keyLumaCenter = 0.5;
+    /// False = key black/dark, true = key white/bright.
+    bool    keyLumaInvert = false;
+    /// Key threshold/range for luma/chroma keying.
+    double  keyThreshold = 0.25;
+    double  keySoftness = 0.12;
+    /// Chroma key hue center (0..1 around the color wheel).
+    double  keyChromaHue = 0.33;
+    /// False = key selected hue, true = invert and keep selected hue.
+    bool    keyChromaInvert = false;
 
     PlayMode playMode        = PlayMode::LoopForward;
     bool     clipPaused      = false;
@@ -234,7 +245,6 @@ struct CellProps {
     QString  overlayText;
     QString  tcStart         = QStringLiteral("00:00:00:00");
     PictureParams  picture;
-    FeedbackParams feedback;
 };
 
 struct VisualRef {

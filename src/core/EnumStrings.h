@@ -14,9 +14,13 @@ CopyMode copyModeFromString(const QString& s, CopyMode fallback = CopyMode::Norm
 QString toString(MaskType m);
 MaskType maskTypeFromString(const QString& s, MaskType fallback = MaskType::None);
 
-// WrapMode
-QString toString(WrapMode w);
-WrapMode wrapModeFromString(const QString& s, WrapMode fallback = WrapMode::Clamp);
+// LayerMatteRole
+QString toString(LayerMatteRole r);
+LayerMatteRole layerMatteRoleFromString(const QString& s, LayerMatteRole fallback = LayerMatteRole::None);
+
+// KeyingMode
+QString toString(KeyingMode m);
+KeyingMode keyingModeFromString(const QString& s, KeyingMode fallback = KeyingMode::Luma);
 
 // VisualType
 QString toString(VisualType v);

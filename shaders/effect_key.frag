@@ -2,7 +2,7 @@
 
 // Chroma / luma keying. UBO matches textured_quad.vert layout:
 // scaleOffset: xy quad scale, z = time, w = aspect (unused here)
-// rotation.xyz = per-cell RGB key channel weights (from inspector)
+// scaleOffset.z + rotation.yz = per-cell RGB key channel weights (from inspector)
 // rotation.w = 0 chroma_key, 1 luma_key
 // params: x = mode enum index, y = hue (chroma) or brightness center (luma),
 //         z = threshold, w = softness
@@ -83,7 +83,7 @@ void main()
     vec3 c = clamp(tex.rgb, vec3(0.0), vec3(1.0));
     float baseA = tex.a;
 
-    vec3 wRaw = max(ubuf.rotation.xyz, vec3(0.001));
+    vec3 wRaw = max(vec3(ubuf.scaleOffset.z, ubuf.rotation.y, ubuf.rotation.z), vec3(0.001));
     float wsum = wRaw.x + wRaw.y + wRaw.z;
     vec3 wN = wRaw / wsum;
 

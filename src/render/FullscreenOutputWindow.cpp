@@ -30,7 +30,11 @@ FullscreenOutputWindow::FullscreenOutputWindow(QWidget* parent)
 
 void FullscreenOutputWindow::setTargetScreen(QScreen* screen)
 {
-    if (screen) {
+    if (!screen) {
+        return;
+    }
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    if (screens.contains(screen)) {
         m_screen = screen;
     }
 }
@@ -38,32 +42,54 @@ void FullscreenOutputWindow::setTargetScreen(QScreen* screen)
 void FullscreenOutputWindow::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    if (m_screen) {
-        if (QWindow* w = windowHandle()) {
-            w->setScreen(m_screen);
-        }
-        setGeometry(m_screen->geometry());
+    QScreen* target = resolveTargetScreen();
+    if (!target) {
+        return;
     }
+    if (QWindow* w = windowHandle()) {
+        w->setScreen(target);
+    }
+    setGeometry(target->geometry());
 }
 
 void FullscreenOutputWindow::enterFullscreen()
 {
-    if (m_screen) {
-        setGeometry(m_screen->geometry());
+    QScreen* target = resolveTargetScreen();
+    if (!target) {
+        return;
     }
+    m_screen = target;
+
+    if (QWindow* w = windowHandle()) {
+        w->setScreen(target);
+    }
+    setGeometry(target->geometry());
     show();
     if (QWindow* w = windowHandle()) {
-        if (m_screen) {
-            w->setScreen(m_screen);
-            setGeometry(m_screen->geometry());
-        }
+        w->setScreen(target);
     }
+    setGeometry(target->geometry());
     showFullScreen();
 }
 
 void FullscreenOutputWindow::leaveFullscreen()
 {
     hide();
+}
+
+QScreen* FullscreenOutputWindow::resolveTargetScreen() const
+{
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    if (screens.isEmpty()) {
+        return nullptr;
+    }
+    if (m_screen && screens.contains(m_screen)) {
+        return m_screen;
+    }
+    if (QScreen* primary = QGuiApplication::primaryScreen()) {
+        return primary;
+    }
+    return screens.first();
 }
 
 } // namespace pvj::render

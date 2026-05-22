@@ -8,7 +8,6 @@ extern "C" {
 #include <libavutil/opt.h>
 }
 
-#include <QByteArray>
 #include <QElapsedTimer>
 #include <QThread>
 

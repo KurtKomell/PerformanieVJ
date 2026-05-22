@@ -12,7 +12,7 @@ layout(std140, binding = 0) uniform Block {
     vec4 layers[12];
     vec4 picUvA[12];
     vec4 picColor[12];
-    vec4 mixerCfg; // x: 0 = stack non-feedback layers only, 1 = stack feedback on u_underComposite
+    vec4 mixerCfg; // reserved mixer configuration
 } ubuf;
 
 void main()

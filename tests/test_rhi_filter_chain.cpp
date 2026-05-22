@@ -14,8 +14,6 @@ private slots:
     void mixer_accepts_filter_chains();
     /// Every catalog typeId resolves to a loadable :/shaders/*.qsb (including identity pass-through).
     void every_catalog_type_has_resolvable_shader_bundle();
-    /// `feedback` still uses a dedicated 2-tex / 64B-UBO path; keep explicit until the mixer prepass supports it.
-    void identity_fallback_is_only_expected_for_feedback();
 };
 
 void TestRhiFilterChain::shader_mapping_exists_for_common_types()
@@ -53,27 +51,6 @@ void TestRhiFilterChain::every_catalog_type_has_resolvable_shader_bundle()
         const QString path = effectFragmentShaderForType(entry.typeId);
         QVERIFY2(shaderBundleIsValid(path),
                  qPrintable(QStringLiteral("typeId=%1 path=%2").arg(entry.typeId, path)));
-    }
-}
-
-void TestRhiFilterChain::identity_fallback_is_only_expected_for_feedback()
-{
-    using pvj::core::filterCatalogEntries;
-    using pvj::render::effectFragmentShaderForType;
-
-    static const QString kIdentity = QStringLiteral(":/shaders/effect_identity.frag.qsb");
-    QStringList stillIdentity;
-    for (const auto& entry : filterCatalogEntries()) {
-        if (effectFragmentShaderForType(entry.typeId) == kIdentity) {
-            stillIdentity.append(entry.typeId);
-        }
-    }
-    stillIdentity.sort();
-    // `feedback` maps to identity in the current filter prepass implementation.
-    const QStringList knownIdentity = { QStringLiteral("feedback") };
-    for (const QString& id : stillIdentity) {
-        QVERIFY2(knownIdentity.contains(id),
-                 qPrintable(QStringLiteral("unexpected identity for %1; map it in ShaderLibrary or document here").arg(id)));
     }
 }
 

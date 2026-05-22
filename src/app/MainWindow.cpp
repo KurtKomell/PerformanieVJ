@@ -29,12 +29,9 @@
 #include <QByteArray>
 #include <QCloseEvent>
 #include <QDebug>
-#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QEvent>
 #include <QFrame>
 #include <QFileDialog>
@@ -71,7 +68,6 @@ using pvj::core::Cell;
 using pvj::core::PlayMode;
 using pvj::core::VisualType;
 using pvj::core::GeneratorKind;
-using pvj::core::LayerBand;
 
 namespace {
 constexpr const char* kPvjFilter = "PerformanieVJ Project (*.pvj)";
@@ -232,18 +228,100 @@ int mixSlotFromQtKey(int key)
     }
 }
 
-int layerBandFromCell(const Cell* c)
+int preferredLayerFromCell(const Cell* c)
 {
     if (!c) {
-        return int(LayerBand::Mid);
+        return 4;
     }
-    const int band = int(c->props.layerBand);
-    return qBound(int(LayerBand::Back), band, int(LayerBand::Front));
+    return qBound(0, c->props.preferredLayer, 11);
 }
 
-int bandStartSlot(int band)
+QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c)
 {
-    return band * 4;
+    if (!c) {
+        return {};
+    }
+    QList<pvj::core::CellFilterNode> chain = c->filterChain;
+    bool hasExplicitKeyNode = false;
+    bool hasExplicitMaskNode = false;
+    for (const auto& n : chain) {
+        const QString t = n.typeId.toLower();
+        if (t == QLatin1String("chroma_key") || t == QLatin1String("luma_key")) {
+            hasExplicitKeyNode = true;
+        }
+        if (t == QLatin1String("mask") || t == QLatin1String("linear_mask")
+            || t == QLatin1String("crop") || t == QLatin1String("crop_rectangle")) {
+            hasExplicitMaskNode = true;
+        }
+    }
+    if (!hasExplicitMaskNode && c->props.maskType != pvj::core::MaskType::None) {
+        pvj::core::CellFilterNode maskNode;
+        maskNode.typeId = QStringLiteral("mask");
+        const double feather = qBound(0.0, c->props.maskFeather, 1.0);
+        switch (c->props.maskType) {
+        case pvj::core::MaskType::Rectangle:
+        case pvj::core::MaskType::SoftEdge:
+            maskNode.params = {
+                { QStringLiteral("mode"), double(int(c->props.maskType)) },
+                { QStringLiteral("sizeX"), qBound(0.0, c->props.maskRectWidth, 1.0) },
+                { QStringLiteral("sizeY"), qBound(0.0, c->props.maskRectHeight, 1.0) },
+                { QStringLiteral("feather"), feather },
+            };
+            break;
+        case pvj::core::MaskType::Circle:
+        case pvj::core::MaskType::Custom:
+            maskNode.params = {
+                { QStringLiteral("mode"), double(int(c->props.maskType)) },
+                { QStringLiteral("sizeX"), qBound(0.0, c->props.maskRadius, 1.0) },
+                { QStringLiteral("sizeY"), qBound(0.0, c->props.maskRadius, 1.0) },
+                { QStringLiteral("feather"), feather },
+            };
+            break;
+        case pvj::core::MaskType::Ellipse:
+            maskNode.params = {
+                { QStringLiteral("mode"), double(int(c->props.maskType)) },
+                { QStringLiteral("sizeX"), qBound(0.0, c->props.maskEllipseX, 1.0) },
+                { QStringLiteral("sizeY"), qBound(0.0, c->props.maskEllipseY, 1.0) },
+                { QStringLiteral("feather"), feather },
+            };
+            break;
+        case pvj::core::MaskType::None:
+            break;
+        }
+        if (!maskNode.params.isEmpty()) {
+            chain.append(maskNode);
+        }
+    }
+    if (hasExplicitKeyNode) {
+        return chain;
+    }
+    if (!c->props.keyingEnabled) {
+        return chain;
+    }
+    if (c->props.maskType != pvj::core::MaskType::None) {
+        return chain;
+    }
+
+    pvj::core::CellFilterNode keyNode;
+    if (c->props.keyingMode == pvj::core::KeyingMode::Chroma) {
+        keyNode.typeId = QStringLiteral("chroma_key");
+        keyNode.params = {
+            { QStringLiteral("mode"), c->props.keyChromaInvert ? 1.0 : 0.0 },
+            { QStringLiteral("hue"), qBound(0.0, c->props.keyChromaHue, 1.0) },
+            { QStringLiteral("threshold"), qBound(0.0, c->props.keyThreshold, 1.0) },
+            { QStringLiteral("softness"), qBound(0.0, c->props.keySoftness, 1.0) },
+        };
+    } else {
+        keyNode.typeId = QStringLiteral("luma_key");
+        keyNode.params = {
+            { QStringLiteral("mode"), c->props.keyLumaInvert ? 1.0 : 0.0 },
+            { QStringLiteral("brightness"), qBound(0.0, c->props.keyLumaCenter, 1.0) },
+            { QStringLiteral("threshold"), qBound(0.0, c->props.keyThreshold, 1.0) },
+            { QStringLiteral("softness"), qBound(0.0, c->props.keySoftness, 1.0) },
+        };
+    }
+    chain.append(keyNode);
+    return chain;
 }
 
 } // namespace
@@ -970,9 +1048,7 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
     if (cellIndex >= bank.cells.size()) return;
 
     const auto& cell = bank.cells[cellIndex];
-    const bool isFeedbackSource = (cell.visual.type == VisualType::Generator
-                                   && cell.visual.generator == GeneratorKind::Feedback);
-    if ((cell.visual.type != VisualType::Media || cell.visual.mediaId.isNull()) && !isFeedbackSource) {
+    if (cell.visual.type != VisualType::Media || cell.visual.mediaId.isNull()) {
         const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
         if (layer < 0) {
             refreshPreviewForSelectedCell();
@@ -992,21 +1068,6 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
             clearClipPeek();
         }
         m_layerSlots[layer] = {};
-        updateMixerFromPlayingCells();
-        refreshPreviewForSelectedCell();
-        return;
-    }
-
-    if (isFeedbackSource) {
-        const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
-        if (playingLayer >= 0) {
-            m_layerSlots[playingLayer] = {};
-            updateMixerFromPlayingCells();
-            refreshPreviewForSelectedCell();
-            return;
-        }
-        const int layer = pickMixSlotForTrigger(bankSetIndex, bankIndex, cellIndex);
-        m_layerSlots[layer] = { bankSetIndex, bankIndex, cellIndex };
         updateMixerFromPlayingCells();
         refreshPreviewForSelectedCell();
         return;
@@ -1130,30 +1191,21 @@ const Cell* MainWindow::cellAtDeck(const DeckSlot& slot)
 
 void MainWindow::updateMixerFromPlayingCells()
 {
-    QElapsedTimer bench;
-    bench.start();
-    QElapsedTimer inner;
-    inner.start();
-    int decoderActualStops = 0;
-    int mediaLayerSyncCount  = 0;
     for (int i = 0; i < kMixLayers; ++i) {
         const Cell* c = cellAtDeck(m_layerSlots[i]);
         const bool mediaSource = c
             && c->visual.type == VisualType::Media
             && !c->visual.mediaId.isNull();
-        const bool feedbackSource = c
-            && c->visual.type == VisualType::Generator
-            && c->visual.generator == GeneratorKind::Feedback;
-        if (!c) {
+        if (!c || !mediaSource) {
             if (m_mixerSlotHadMedia[static_cast<size_t>(i)]) {
                 m_decoders[i]->stop();
                 m_audioDecoders[i]->close();
-                ++decoderActualStops;
             }
             m_mixerSlotHadMedia[static_cast<size_t>(i)] = false;
             m_layerFadeAnimating[static_cast<size_t>(i)] = false;
             m_previewB->setLayerActive(i, false);
             m_previewB->setLayerOpacity(i, 1.0f);
+            m_previewB->setLayerMatteRole(i, pvj::core::LayerMatteRole::None);
             m_previewB->setLayerFilterChain(i, {});
             m_previewB->setLayerKeyChannels(i, 1.f, 1.f, 1.f);
             if (m_audioEngine) {
@@ -1163,18 +1215,17 @@ void MainWindow::updateMixerFromPlayingCells()
         }
         m_previewB->setLayerActive(i, true);
         m_previewB->setLayerCopyMode(i, c->props.copyMode);
+        m_previewB->setLayerMatteRole(i, c->props.matteRole);
         m_previewB->setLayerPicture(i, c->props.picture);
-        m_previewB->setLayerFeedback(i, feedbackSource ? c->props.feedback : pvj::core::FeedbackParams{});
-        m_previewB->setLayerFilterChain(i, c->filterChain);
+        const QList<pvj::core::CellFilterNode> effectiveChain = effectiveFilterChainForMixer(c);
+        m_previewB->setLayerFilterChain(i, effectiveChain);
         m_previewB->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),
                                         float(c->props.keyChannelB));
-
         if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
             m_previewB->setLayerOpacity(i, float(c->props.transparency));
         }
 
         if (mediaSource) {
-            ++mediaLayerSyncCount;
             m_mixerSlotHadMedia[static_cast<size_t>(i)] = true;
             m_decoders[i]->setLooping(playModeUsesLoop(c->props.playMode));
             if (m_audioDecoders[i]->isOpen()) {
@@ -1186,7 +1237,6 @@ void MainWindow::updateMixerFromPlayingCells()
                 m_audioDecoders[i]->setPlaybackSpeed(c->props.movieSpeed);
             }
         } else if (m_mixerSlotHadMedia[static_cast<size_t>(i)]) {
-            ++decoderActualStops;
             m_decoders[i]->stop();
             m_audioDecoders[i]->close();
             m_mixerSlotHadMedia[static_cast<size_t>(i)] = false;
@@ -1199,35 +1249,10 @@ void MainWindow::updateMixerFromPlayingCells()
             m_audioEngine->setLayerActive(i, mediaSource && m_audioDecoders[i]->isOpen());
         }
     }
-    const qint64 innerLoopMs = inner.elapsed();
     updateDeckAPreviewRotation();
     syncMixerToFullscreen();
     syncMixSlotHighlightsToBankGrid();
 
-    // #region agent log
-    {
-        const qint64 elapsedMs = bench.elapsed();
-        QFile f(QStringLiteral("D:/PerformanieVJ/debug-7e0196.log"));
-        if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-            QJsonObject o;
-            o.insert(QStringLiteral("sessionId"), QStringLiteral("7e0196"));
-            o.insert(QStringLiteral("runId"), QStringLiteral("post-fix"));
-            o.insert(QStringLiteral("hypothesisId"), QStringLiteral("H1"));
-            o.insert(QStringLiteral("location"),
-                     QStringLiteral("MainWindow.cpp:updateMixerFromPlayingCells"));
-            o.insert(QStringLiteral("message"), QStringLiteral("updateMixer timing"));
-            QJsonObject d;
-            d.insert(QStringLiteral("elapsedMs"), double(elapsedMs));
-            d.insert(QStringLiteral("innerLoopMs"), double(innerLoopMs));
-            d.insert(QStringLiteral("decoderActualStops"), decoderActualStops);
-            d.insert(QStringLiteral("mediaLayerSyncCount"), mediaLayerSyncCount);
-            o.insert(QStringLiteral("data"), d);
-            o.insert(QStringLiteral("timestamp"), double(QDateTime::currentMSecsSinceEpoch()));
-            f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
-            f.write("\n");
-        }
-    }
-    // #endregion
 }
 
 void MainWindow::syncMixSlotHighlightsToBankGrid()
@@ -1379,9 +1404,8 @@ void MainWindow::syncMixerToFullscreen()
             dst->clearFrame(i);
         }
         dst->setLayerPicture(i, src->layerPicture(i));
-        dst->setLayerFeedback(i, src->layerFeedback(i));
         if (const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(i)])) {
-            dst->setLayerFilterChain(i, c->filterChain);
+            dst->setLayerFilterChain(i, effectiveFilterChainForMixer(c));
             dst->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),
                                      float(c->props.keyChannelB));
         } else {
@@ -1418,25 +1442,8 @@ int MainWindow::pickMixSlotForTrigger(int bankSet, int bank, int cell)
     if (existing >= 0) {
         return existing;
     }
-    const int band = layerBandFromCell(cellAtDeck(DeckSlot{bankSet, bank, cell}));
-    const int start = bandStartSlot(band);
-    const int end = qMin(start + 4, kMixLayers);
-    for (int i = start; i < end; ++i) {
-        if (m_layerSlots[static_cast<size_t>(i)].bankSet < 0) {
-            return i;
-        }
-    }
-    int replace = start;
-    int worstPri = std::numeric_limits<int>::max();
-    for (int i = start; i < end; ++i) {
-        const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(i)]);
-        const int pri = c ? c->props.priority : 0;
-        if (pri < worstPri) {
-            worstPri = pri;
-            replace = i;
-        }
-    }
-    return replace;
+    const int preferred = preferredLayerFromCell(cellAtDeck(DeckSlot{bankSet, bank, cell}));
+    return qBound(0, preferred, kMixLayers - 1);
 }
 
 void MainWindow::refreshPreviewForSelectedCell()

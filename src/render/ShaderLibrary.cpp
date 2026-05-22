@@ -45,6 +45,8 @@ QString effectFragmentShaderForType(const QString& typeId)
         add({ QStringLiteral("kaleido"), QStringLiteral("kaleidoscope"), QStringLiteral("mirror"),
               QStringLiteral("mirror_quad"), QStringLiteral("mirror_stripes"), QStringLiteral("multi_mirror") },
             QStringLiteral(":/shaders/effect_kaleido.frag.qsb"));
+        add({ QStringLiteral("mask"), QStringLiteral("linear_mask") },
+            QStringLiteral(":/shaders/effect_mask.frag.qsb"));
         add({ QStringLiteral("pixelate"), QStringLiteral("rgb_shift"), QStringLiteral("vignette"),
               QStringLiteral("scanlines"), QStringLiteral("film_grain"), QStringLiteral("glow"),
               QStringLiteral("bloom"), QStringLiteral("edges"), QStringLiteral("emboss"),
@@ -67,8 +69,8 @@ QString effectFragmentShaderForType(const QString& typeId)
               QStringLiteral("rainbow"), QStringLiteral("prismatic"), QStringLiteral("replicate"),
               QStringLiteral("echo"), QStringLiteral("find_edges"), QStringLiteral("glow_edges"),
               QStringLiteral("crt"), QStringLiteral("vhs"), QStringLiteral("vhsifyer"),
-              QStringLiteral("broadcast"), QStringLiteral("reducto"), QStringLiteral("linear_mask"),
-              QStringLiteral("mask"), QStringLiteral("crop"), QStringLiteral("add_subtract"),
+              QStringLiteral("broadcast"), QStringLiteral("reducto"),
+              QStringLiteral("crop"), QStringLiteral("add_subtract"),
               QStringLiteral("mix"), QStringLiteral("fade"), QStringLiteral("shift"),
               QStringLiteral("tilt_shift"), QStringLiteral("radar"), QStringLiteral("polka_dot"),
               QStringLiteral("stripes"), QStringLiteral("checkerboard"), QStringLiteral("dots"),
@@ -87,9 +89,6 @@ QString effectFragmentShaderForType(const QString& typeId)
               QStringLiteral("blend_darken"), QStringLiteral("blend_lighten"),
               QStringLiteral("blend_difference"), QStringLiteral("blend_exclusion"),
               QStringLiteral("blend_mode") }, QStringLiteral(":/shaders/effect_blend.frag.qsb"));
-        add({ QStringLiteral("feedback"), QStringLiteral("feedback_rotated"),
-              QStringLiteral("feedback_pro"), QStringLiteral("warped_feedback") },
-            QStringLiteral(":/shaders/layer_feedback.frag.qsb"));
         return m;
     }();
     return kByType.value(typeId.toLower(), QStringLiteral(":/shaders/effect_identity.frag.qsb"));
@@ -100,7 +99,6 @@ bool effectUsesTwoTextures(const QString& typeId)
     const QString id = typeId.toLower();
     return id.contains(QStringLiteral("displacement"))
         || id.contains(QStringLiteral("mask"))
-        || id.contains(QStringLiteral("feedback"))
         || id.startsWith(QStringLiteral("blend_"))
         || id == QStringLiteral("blend_mode");
 }

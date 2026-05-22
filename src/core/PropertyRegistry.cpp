@@ -148,7 +148,8 @@ constexpr int kCopyModeCount = 51;
 // PlayMode::LoopForward … PlayMode::StepFrame (11 values).
 constexpr int kPlayModeCount = 11;
 constexpr int kMaskTypeCount = 6;
-constexpr int kWrapModeCount = 4;
+constexpr int kLayerMatteRoleCount = 4;
+constexpr int kKeyingModeCount = 2;
 constexpr int kMixingPresetCount = 4;
 constexpr int kPriorityCount = 3;
 
@@ -177,6 +178,12 @@ QStringList allPropertyNames()
         QStringLiteral("movieSpeed"),
         QStringLiteral("fade"),
         QStringLiteral("rotationZ"),
+        QStringLiteral("maskFeather"),
+        QStringLiteral("maskRectWidth"),
+        QStringLiteral("maskRectHeight"),
+        QStringLiteral("maskRadius"),
+        QStringLiteral("maskEllipseX"),
+        QStringLiteral("maskEllipseY"),
         QStringLiteral("maskWidth"),
         QStringLiteral("maskSmoothness"),
         QStringLiteral("segmentInU"),
@@ -185,31 +192,25 @@ QStringList allPropertyNames()
         QStringLiteral("keyChannelR"),
         QStringLiteral("keyChannelG"),
         QStringLiteral("keyChannelB"),
+        QStringLiteral("keyingMode"),
+        QStringLiteral("keyingEnabled"),
+        QStringLiteral("keyLumaCenter"),
+        QStringLiteral("keyLumaInvert"),
+        QStringLiteral("keyThreshold"),
+        QStringLiteral("keySoftness"),
+        QStringLiteral("keyChromaHue"),
+        QStringLiteral("keyChromaInvert"),
         QStringLiteral("pictureZoom"),
         QStringLiteral("pictureRotationDeg"),
         QStringLiteral("pictureBrightness"),
         QStringLiteral("pictureContrast"),
         QStringLiteral("pictureSaturation"),
         QStringLiteral("pictureCircularMotion"),
-        QStringLiteral("feedbackEnabled"),
-        QStringLiteral("feedbackStrength"),
-        QStringLiteral("feedbackZoom"),
-        QStringLiteral("feedbackRotationDeg"),
-        QStringLiteral("feedbackRotationAnimated"),
-        QStringLiteral("feedbackDecay"),
-        QStringLiteral("feedbackBrightness"),
-        QStringLiteral("feedbackSaturation"),
-        QStringLiteral("feedbackGamma"),
-        QStringLiteral("feedbackContrast"),
-        QStringLiteral("feedbackLayerBrightness"),
-        QStringLiteral("feedbackLayerSaturation"),
-        QStringLiteral("feedbackLayerGamma"),
-        QStringLiteral("feedbackLayerContrast"),
-        QStringLiteral("feedbackWrapMode"),
         QStringLiteral("playMode"),
         QStringLiteral("clipPaused"),
         QStringLiteral("copyMode"),
         QStringLiteral("maskType"),
+        QStringLiteral("matteRole"),
         QStringLiteral("priority"),
         QStringLiteral("mixingPresetIndex"),
     });
@@ -232,39 +233,39 @@ QString labelFor(const QString& name)
         { QStringLiteral("moviespeed"), QStringLiteral("Movie speed") },
         { QStringLiteral("fade"), QStringLiteral("Fade") },
         { QStringLiteral("rotationz"), QStringLiteral("Rotation Z") },
-        { QStringLiteral("maskwidth"), QStringLiteral("Key hardness") },
-        { QStringLiteral("masksmoothness"), QStringLiteral("Key feather") },
+        { QStringLiteral("maskfeather"), QStringLiteral("Mask feather") },
+        { QStringLiteral("maskrectwidth"), QStringLiteral("Mask width") },
+        { QStringLiteral("maskrectheight"), QStringLiteral("Mask height") },
+        { QStringLiteral("maskradius"), QStringLiteral("Mask radius") },
+        { QStringLiteral("maskellipsex"), QStringLiteral("Mask ellipse X") },
+        { QStringLiteral("maskellipsey"), QStringLiteral("Mask ellipse Y") },
+        { QStringLiteral("maskwidth"), QStringLiteral("Key threshold (legacy)") },
+        { QStringLiteral("masksmoothness"), QStringLiteral("Key softness (legacy)") },
         { QStringLiteral("segmentinu"), QStringLiteral("Segment in") },
         { QStringLiteral("segmentoutu"), QStringLiteral("Segment out") },
         { QStringLiteral("scratchheadu"), QStringLiteral("Scratch") },
         { QStringLiteral("keychannelr"), QStringLiteral("Key R") },
         { QStringLiteral("keychannelg"), QStringLiteral("Key G") },
         { QStringLiteral("keychannelb"), QStringLiteral("Key B") },
+        { QStringLiteral("keyingmode"), QStringLiteral("Keying mode") },
+        { QStringLiteral("keyingenabled"), QStringLiteral("Keying enabled") },
+        { QStringLiteral("keylumacenter"), QStringLiteral("Key range") },
+        { QStringLiteral("keylumainvert"), QStringLiteral("Key mask mode") },
+        { QStringLiteral("keythreshold"), QStringLiteral("Key threshold") },
+        { QStringLiteral("keysoftness"), QStringLiteral("Key softness") },
+        { QStringLiteral("keychromahue"), QStringLiteral("Color key range") },
+        { QStringLiteral("keychromainvert"), QStringLiteral("Color mask mode") },
         { QStringLiteral("picturezoom"), QStringLiteral("Picture zoom") },
         { QStringLiteral("picturerotationdeg"), QStringLiteral("Picture rotation") },
         { QStringLiteral("picturebrightness"), QStringLiteral("Picture brightness") },
         { QStringLiteral("picturecontrast"), QStringLiteral("Picture contrast") },
         { QStringLiteral("picturesaturation"), QStringLiteral("Picture saturation") },
         { QStringLiteral("picturecircularmotion"), QStringLiteral("Picture circular motion") },
-        { QStringLiteral("feedbackenabled"), QStringLiteral("Feedback enabled") },
-        { QStringLiteral("feedbackstrength"), QStringLiteral("Feedback strength") },
-        { QStringLiteral("feedbackzoom"), QStringLiteral("Feedback zoom") },
-        { QStringLiteral("feedbackrotationdeg"), QStringLiteral("Feedback rotation") },
-        { QStringLiteral("feedbackrotationanimated"), QStringLiteral("Feedback circular rotation") },
-        { QStringLiteral("feedbackdecay"), QStringLiteral("Feedback decay") },
-        { QStringLiteral("feedbackbrightness"), QStringLiteral("Feedback brightness") },
-        { QStringLiteral("feedbacksaturation"), QStringLiteral("Feedback saturation") },
-        { QStringLiteral("feedbackgamma"), QStringLiteral("Feedback gamma") },
-        { QStringLiteral("feedbackcontrast"), QStringLiteral("Feedback contrast") },
-        { QStringLiteral("feedbacklayerbrightness"), QStringLiteral("Feedback layer brightness") },
-        { QStringLiteral("feedbacklayersaturation"), QStringLiteral("Feedback layer saturation") },
-        { QStringLiteral("feedbacklayergamma"), QStringLiteral("Feedback layer gamma") },
-        { QStringLiteral("feedbacklayercontrast"), QStringLiteral("Feedback layer contrast") },
-        { QStringLiteral("feedbackwrapmode"), QStringLiteral("Feedback wrap mode") },
         { QStringLiteral("playmode"), QStringLiteral("Play mode") },
         { QStringLiteral("clippaused"), QStringLiteral("Clip paused") },
         { QStringLiteral("copymode"), QStringLiteral("Copy mode") },
         { QStringLiteral("masktype"), QStringLiteral("Mask type") },
+        { QStringLiteral("matterole"), QStringLiteral("Layer matte role") },
         { QStringLiteral("priority"), QStringLiteral("Priority") },
         { QStringLiteral("mixingpresetindex"), QStringLiteral("Mixing preset") },
     };
@@ -291,12 +292,14 @@ Kind kindOf(const QString& name)
         return Kind::Continuous;
     }
     if (p == QLatin1String("clippaused")
-        || p == QLatin1String("feedbackenabled")
-        || p == QLatin1String("feedbackrotationanimated")) {
+        || p == QLatin1String("keyingenabled")
+        || p == QLatin1String("keylumainvert")
+        || p == QLatin1String("keychromainvert")) {
         return Kind::Boolean;
     }
     if (p == QLatin1String("playmode") || p == QLatin1String("copymode") || p == QLatin1String("masktype")
-        || p == QLatin1String("feedbackwrapmode")
+        || p == QLatin1String("matterole")
+        || p == QLatin1String("keyingmode")
         || p == QLatin1String("priority") || p == QLatin1String("mixingpresetindex")) {
         return Kind::Enum;
     }
@@ -315,8 +318,11 @@ int enumCountOf(const QString& name)
     if (p == QLatin1String("masktype")) {
         return kMaskTypeCount;
     }
-    if (p == QLatin1String("feedbackwrapmode")) {
-        return kWrapModeCount;
+    if (p == QLatin1String("matterole")) {
+        return kLayerMatteRoleCount;
+    }
+    if (p == QLatin1String("keyingmode")) {
+        return kKeyingModeCount;
     }
     if (p == QLatin1String("priority")) {
         return kPriorityCount;
@@ -383,32 +389,6 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("picturecircularmotion")) {
         *minV = 0.0;
         *maxV = 1.0;
-    } else if (p == QLatin1String("feedbackstrength")) {
-        *minV = 0.0;
-        *maxV = 1.0;
-    } else if (p == QLatin1String("feedbackzoom")) {
-        *minV = 0.5;
-        *maxV = 2.0;
-    } else if (p == QLatin1String("feedbackrotationdeg")) {
-        *minV = -180.0;
-        *maxV = 180.0;
-    } else if (p == QLatin1String("feedbackdecay")) {
-        *minV = -0.1;
-        *maxV = 0.1;
-    } else if (p == QLatin1String("feedbackbrightness")
-               || p == QLatin1String("feedbacklayerbrightness")) {
-        *minV = -1.0;
-        *maxV = 1.0;
-    } else if (p == QLatin1String("feedbacksaturation")
-               || p == QLatin1String("feedbackcontrast")
-               || p == QLatin1String("feedbacklayersaturation")
-               || p == QLatin1String("feedbacklayercontrast")) {
-        *minV = 0.0;
-        *maxV = 2.0;
-    } else if (p == QLatin1String("feedbackgamma")
-               || p == QLatin1String("feedbacklayergamma")) {
-        *minV = 0.1;
-        *maxV = 4.0;
     } else {
         *minV = 0.0;
         *maxV = 1.0;
@@ -442,11 +422,35 @@ bool readValue(const Cell& c, const QString& raw, double* out)
         return true;
     }
     if (p == QLatin1String("maskwidth")) {
-        *out = c.props.maskWidth;
+        *out = c.props.keyThreshold;
         return true;
     }
     if (p == QLatin1String("masksmoothness")) {
-        *out = c.props.maskSmoothness;
+        *out = c.props.keySoftness;
+        return true;
+    }
+    if (p == QLatin1String("maskfeather")) {
+        *out = c.props.maskFeather;
+        return true;
+    }
+    if (p == QLatin1String("maskrectwidth")) {
+        *out = c.props.maskRectWidth;
+        return true;
+    }
+    if (p == QLatin1String("maskrectheight")) {
+        *out = c.props.maskRectHeight;
+        return true;
+    }
+    if (p == QLatin1String("maskradius")) {
+        *out = c.props.maskRadius;
+        return true;
+    }
+    if (p == QLatin1String("maskellipsex")) {
+        *out = c.props.maskEllipseX;
+        return true;
+    }
+    if (p == QLatin1String("maskellipsey")) {
+        *out = c.props.maskEllipseY;
         return true;
     }
     if (p == QLatin1String("segmentinu")) {
@@ -473,6 +477,38 @@ bool readValue(const Cell& c, const QString& raw, double* out)
         *out = c.props.keyChannelB;
         return true;
     }
+    if (p == QLatin1String("keylumacenter")) {
+        *out = c.props.keyLumaCenter;
+        return true;
+    }
+    if (p == QLatin1String("keylumainvert")) {
+        *out = c.props.keyLumaInvert ? 1.0 : 0.0;
+        return true;
+    }
+    if (p == QLatin1String("keythreshold")) {
+        *out = c.props.keyThreshold;
+        return true;
+    }
+    if (p == QLatin1String("keysoftness")) {
+        *out = c.props.keySoftness;
+        return true;
+    }
+    if (p == QLatin1String("keychromahue")) {
+        *out = c.props.keyChromaHue;
+        return true;
+    }
+    if (p == QLatin1String("keychromainvert")) {
+        *out = c.props.keyChromaInvert ? 1.0 : 0.0;
+        return true;
+    }
+    if (p == QLatin1String("keyingmode")) {
+        *out = double(int(c.props.keyingMode));
+        return true;
+    }
+    if (p == QLatin1String("keyingenabled")) {
+        *out = c.props.keyingEnabled ? 1.0 : 0.0;
+        return true;
+    }
     if (p == QLatin1String("picturezoom")) {
         *out = c.props.picture.zoom;
         return true;
@@ -497,66 +533,6 @@ bool readValue(const Cell& c, const QString& raw, double* out)
         *out = c.props.picture.circularMotion;
         return true;
     }
-    if (p == QLatin1String("feedbackenabled")) {
-        *out = c.props.feedback.enabled ? 1.0 : 0.0;
-        return true;
-    }
-    if (p == QLatin1String("feedbackstrength")) {
-        *out = c.props.feedback.strength;
-        return true;
-    }
-    if (p == QLatin1String("feedbackzoom")) {
-        *out = c.props.feedback.zoom;
-        return true;
-    }
-    if (p == QLatin1String("feedbackrotationdeg")) {
-        *out = c.props.feedback.rotationDeg;
-        return true;
-    }
-    if (p == QLatin1String("feedbackrotationanimated")) {
-        *out = c.props.feedback.rotationAnimated ? 1.0 : 0.0;
-        return true;
-    }
-    if (p == QLatin1String("feedbackdecay")) {
-        *out = c.props.feedback.decay;
-        return true;
-    }
-    if (p == QLatin1String("feedbackbrightness")) {
-        *out = c.props.feedback.brightness;
-        return true;
-    }
-    if (p == QLatin1String("feedbacksaturation")) {
-        *out = c.props.feedback.saturation;
-        return true;
-    }
-    if (p == QLatin1String("feedbackgamma")) {
-        *out = c.props.feedback.gamma;
-        return true;
-    }
-    if (p == QLatin1String("feedbackcontrast")) {
-        *out = c.props.feedback.contrast;
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayerbrightness")) {
-        *out = c.props.feedback.layerBrightness;
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayersaturation")) {
-        *out = c.props.feedback.layerSaturation;
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayergamma")) {
-        *out = c.props.feedback.layerGamma;
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayercontrast")) {
-        *out = c.props.feedback.layerContrast;
-        return true;
-    }
-    if (p == QLatin1String("feedbackwrapmode")) {
-        *out = double(int(c.props.feedback.wrapMode));
-        return true;
-    }
     if (p == QLatin1String("playmode")) {
         *out = double(int(c.props.playMode));
         return true;
@@ -571,6 +547,10 @@ bool readValue(const Cell& c, const QString& raw, double* out)
     }
     if (p == QLatin1String("masktype")) {
         *out = double(int(c.props.maskType));
+        return true;
+    }
+    if (p == QLatin1String("matterole")) {
+        *out = double(int(c.props.matteRole));
         return true;
     }
     if (p == QLatin1String("priority")) {
@@ -608,8 +588,12 @@ bool applyEnumIndex(Cell& c, const QString& raw, int index)
         c.props.maskType = static_cast<MaskType>(qBound(0, index, kMaskTypeCount - 1));
         return true;
     }
-    if (p == QLatin1String("feedbackwrapmode")) {
-        c.props.feedback.wrapMode = static_cast<WrapMode>(qBound(0, index, kWrapModeCount - 1));
+    if (p == QLatin1String("matterole")) {
+        c.props.matteRole = static_cast<LayerMatteRole>(qBound(0, index, kLayerMatteRoleCount - 1));
+        return true;
+    }
+    if (p == QLatin1String("keyingmode")) {
+        c.props.keyingMode = static_cast<KeyingMode>(qBound(0, index, kKeyingModeCount - 1));
         return true;
     }
     if (p == QLatin1String("priority")) {
@@ -670,11 +654,35 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("maskwidth")) {
-        c.props.maskWidth = qBound(0.0, v, 1.0);
+        c.props.keyThreshold = qBound(0.0, v, 1.0);
         return true;
     }
     if (p == QLatin1String("masksmoothness")) {
-        c.props.maskSmoothness = qBound(0.0, v, 1.0);
+        c.props.keySoftness = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("maskfeather")) {
+        c.props.maskFeather = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("maskrectwidth")) {
+        c.props.maskRectWidth = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("maskrectheight")) {
+        c.props.maskRectHeight = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("maskradius")) {
+        c.props.maskRadius = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("maskellipsex")) {
+        c.props.maskEllipseX = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("maskellipsey")) {
+        c.props.maskEllipseY = qBound(0.0, v, 1.0);
         return true;
     }
     if (p == QLatin1String("segmentinu")) {
@@ -701,6 +709,34 @@ bool applyValue(Cell& c, const QString& raw, double v)
         c.props.keyChannelB = qBound(0.0, v, 1.0);
         return true;
     }
+    if (p == QLatin1String("keylumacenter")) {
+        c.props.keyLumaCenter = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("keylumainvert")) {
+        c.props.keyLumaInvert = (v >= 0.5);
+        return true;
+    }
+    if (p == QLatin1String("keythreshold")) {
+        c.props.keyThreshold = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("keysoftness")) {
+        c.props.keySoftness = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("keychromahue")) {
+        c.props.keyChromaHue = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("keychromainvert")) {
+        c.props.keyChromaInvert = (v >= 0.5);
+        return true;
+    }
+    if (p == QLatin1String("keyingenabled")) {
+        c.props.keyingEnabled = (v >= 0.5);
+        return true;
+    }
     if (p == QLatin1String("picturezoom")) {
         c.props.picture.zoom = qBound(-1.0, v, 1.0);
         return true;
@@ -723,62 +759,6 @@ bool applyValue(Cell& c, const QString& raw, double v)
     }
     if (p == QLatin1String("picturecircularmotion")) {
         c.props.picture.circularMotion = qBound(0.0, v, 1.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackenabled")) {
-        c.props.feedback.enabled = (v >= 0.5);
-        return true;
-    }
-    if (p == QLatin1String("feedbackstrength")) {
-        c.props.feedback.strength = qBound(0.0, v, 1.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackzoom")) {
-        c.props.feedback.zoom = qBound(0.5, v, 2.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackrotationdeg")) {
-        c.props.feedback.rotationDeg = qBound(-180.0, v, 180.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackrotationanimated")) {
-        c.props.feedback.rotationAnimated = (v >= 0.5);
-        return true;
-    }
-    if (p == QLatin1String("feedbackdecay")) {
-        c.props.feedback.decay = qBound(-0.1, v, 0.1);
-        return true;
-    }
-    if (p == QLatin1String("feedbackbrightness")) {
-        c.props.feedback.brightness = qBound(-1.0, v, 1.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbacksaturation")) {
-        c.props.feedback.saturation = qBound(0.0, v, 2.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackgamma")) {
-        c.props.feedback.gamma = qBound(0.1, v, 4.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackcontrast")) {
-        c.props.feedback.contrast = qBound(0.0, v, 2.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayerbrightness")) {
-        c.props.feedback.layerBrightness = qBound(-1.0, v, 1.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayersaturation")) {
-        c.props.feedback.layerSaturation = qBound(0.0, v, 2.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayergamma")) {
-        c.props.feedback.layerGamma = qBound(0.1, v, 4.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbacklayercontrast")) {
-        c.props.feedback.layerContrast = qBound(0.0, v, 2.0);
         return true;
     }
     if (p == QLatin1String("clippaused")) {

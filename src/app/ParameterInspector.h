@@ -28,6 +28,7 @@ class Project;
 namespace pvj::app {
 
 class VisualThumbnailLabel;
+class KeyRangeWidget;
 
 // Tabbed inspector for bank cell properties: Visual, Transition, Mixing,
 // Position, Output.
@@ -76,14 +77,27 @@ private slots:
     void onFadeSliderChanged(int v);
     void onRotationChanged(double v);
     void onCopyModeChanged(int idx);
+    void onKeyingModeChanged(int idx);
+    void onKeyingEnabledToggled(bool checked);
+    void onKeyLumaTargetChanged(int id);
+    void onKeyLumaRangeChanged(double minV, double maxV);
+    void onKeyChromaTargetChanged(int id);
+    void onKeyChromaRangeChanged(double minV, double maxV);
     void onMaskTypeGroupIdClicked(int id);
+    void onMatteRoleChanged(int idx);
     void onKeyHardnessSliderChanged(int v);
     void onKeyFeatherSliderChanged(int v);
+    void onMaskRectWidthChanged(int v);
+    void onMaskRectHeightChanged(int v);
+    void onMaskRadiusChanged(int v);
+    void onMaskEllipseXChanged(int v);
+    void onMaskEllipseYChanged(int v);
+    void onMaskFeatherChanged(int v);
     void onKeyChannelRChanged(int v);
     void onKeyChannelGChanged(int v);
     void onKeyChannelBChanged(int v);
     void onMixingPresetChanged(int idx);
-    void onLayerBandGroupClicked(int id);
+    void onPreferredLayerChanged(int idx);
 
     void onAudioDialChanged(int v);
     void onPlayModeGroupClicked(int id);
@@ -93,22 +107,6 @@ private slots:
     void onSegmentOutChanged(int v);
     void onScratchSliderChanged(int v);
     void onScratchSliderReleased();
-    void onFeedbackPresetApplyClicked();
-    void onFeedbackEnabledToggled(bool checked);
-    void onFeedbackStrengthChanged(int v);
-    void onFeedbackZoomChanged(int v);
-    void onFeedbackRotationChanged(int v);
-    void onFeedbackRotationAnimatedToggled(bool checked);
-    void onFeedbackDecayChanged(int v);
-    void onFeedbackBrightnessChanged(int v);
-    void onFeedbackSaturationChanged(int v);
-    void onFeedbackGammaChanged(int v);
-    void onFeedbackContrastChanged(int v);
-    void onFeedbackLayerBrightnessChanged(int v);
-    void onFeedbackLayerSaturationChanged(int v);
-    void onFeedbackLayerGammaChanged(int v);
-    void onFeedbackLayerContrastChanged(int v);
-    void onFeedbackWrapModeChanged(int idx);
     void onOverlayTextEdited(const QString& t);
     void onTcStartEdited(const QString& t);
 
@@ -130,7 +128,8 @@ private:
     void syncMaskTypeButtons();
     void syncPlayModeButtons();
     void syncPriorityButtons();
-    void syncVisualRowVisibility(const pvj::core::Cell* cell);
+    void syncKeyingModeUi();
+    void syncMaskControlVisibility();
 
     void registerMidiWidgets();
     void tagMidiWidget(QWidget* w, const QString& propertyId, const QVariant& noteValue = QVariant());
@@ -147,7 +146,6 @@ private:
     VisualThumbnailLabel* m_visualThumb    = nullptr;
     QToolButton*    m_visualPrevBtn  = nullptr;
     QToolButton*    m_visualNextBtn  = nullptr;
-    QToolButton*    m_feedbackPresetApplyBtn = nullptr;
     QDial*          m_audioDial      = nullptr;
     QLabel*         m_audioDialValue  = nullptr;
     QButtonGroup*   m_playModeGroup   = nullptr;
@@ -160,7 +158,7 @@ private:
     QLineEdit*      m_overlayLineEdit  = nullptr;
     QLineEdit*      m_tcStartEdit      = nullptr;
     QButtonGroup*   m_priorityGroup    = nullptr;
-    QButtonGroup*   m_layerBandGroup   = nullptr;
+    QComboBox*      m_preferredLayerCombo = nullptr;
 
     QSlider*        m_transparencySlider = nullptr;
     QLabel*         m_transparencyValue  = nullptr;
@@ -170,7 +168,40 @@ private:
 
     QComboBox*      m_mixingPreset   = nullptr;
     QComboBox*      m_copyMode       = nullptr;
+    QCheckBox*      m_keyingEnabled  = nullptr;
+    QComboBox*      m_keyingMode     = nullptr;
+    QButtonGroup*   m_keyLumaTargetGroup = nullptr;
+    QButtonGroup*   m_keyChromaTargetGroup = nullptr;
     QButtonGroup*   m_maskTypeGroup  = nullptr;
+    QComboBox*      m_matteRoleCombo = nullptr;
+    QWidget*        m_maskRectWidthRow = nullptr;
+    QWidget*        m_maskRectHeightRow = nullptr;
+    QWidget*        m_maskRadiusRow = nullptr;
+    QWidget*        m_maskEllipseXRow = nullptr;
+    QWidget*        m_maskEllipseYRow = nullptr;
+    QWidget*        m_maskFeatherRow = nullptr;
+    QSlider*        m_maskRectWidthSlider = nullptr;
+    QSlider*        m_maskRectHeightSlider = nullptr;
+    QSlider*        m_maskRadiusSlider = nullptr;
+    QSlider*        m_maskEllipseXSlider = nullptr;
+    QSlider*        m_maskEllipseYSlider = nullptr;
+    QSlider*        m_maskFeatherSlider = nullptr;
+    QLabel*         m_maskRectWidthValue = nullptr;
+    QLabel*         m_maskRectHeightValue = nullptr;
+    QLabel*         m_maskRadiusValue = nullptr;
+    QLabel*         m_maskEllipseXValue = nullptr;
+    QLabel*         m_maskEllipseYValue = nullptr;
+    QLabel*         m_maskFeatherValue = nullptr;
+    QLabel*         m_keyingHint     = nullptr;
+    QLabel*         m_keyRgbHint     = nullptr;
+    QWidget*        m_keyLumaTargetRow = nullptr;
+    QWidget*        m_keyRangeRow = nullptr;
+    KeyRangeWidget* m_keyRangeSlider = nullptr;
+    QLabel*         m_keyRangeValue = nullptr;
+    QWidget*        m_keyChromaTargetRow = nullptr;
+    QWidget*        m_keyChromaRangeRow = nullptr;
+    KeyRangeWidget* m_keyChromaRangeSlider = nullptr;
+    QLabel*         m_keyChromaRangeValue = nullptr;
     QSlider*        m_keyHardnessSlider = nullptr;
     QLabel*         m_keyHardnessValue  = nullptr;
     QSlider*        m_keyFeatherSlider  = nullptr;
@@ -181,42 +212,16 @@ private:
     QLabel*         m_keyRValue = nullptr;
     QLabel*         m_keyGValue = nullptr;
     QLabel*         m_keyBValue = nullptr;
+    QWidget*        m_keyRRow = nullptr;
+    QWidget*        m_keyGRow = nullptr;
+    QWidget*        m_keyBRow = nullptr;
 
     QComboBox*      m_outputScreen   = nullptr;
     QPushButton*    m_fullscreenBtn  = nullptr;
     QGridLayout*    m_visualGrid     = nullptr;
     /// Top of Visual tab (thumbnail row + clip name); clip-only block is `m_visualClipSection`.
     QWidget*        m_visualStandardSection = nullptr;
-    /// Clip / playback rows hidden when Feedback source is selected.
     QWidget*        m_visualClipSection = nullptr;
-    QGroupBox*      m_feedbackGroup = nullptr;
-    QCheckBox*      m_feedbackEnabled = nullptr;
-    QSlider*        m_feedbackStrengthSlider = nullptr;
-    QLabel*         m_feedbackStrengthValue = nullptr;
-    QSlider*        m_feedbackZoomSlider = nullptr;
-    QLabel*         m_feedbackZoomValue = nullptr;
-    QSlider*        m_feedbackRotationSlider = nullptr;
-    QLabel*         m_feedbackRotationValue = nullptr;
-    QCheckBox*      m_feedbackRotationAnimated = nullptr;
-    QSlider*        m_feedbackDecaySlider = nullptr;
-    QLabel*         m_feedbackDecayValue = nullptr;
-    QSlider*        m_feedbackBrightnessSlider = nullptr;
-    QLabel*         m_feedbackBrightnessValue = nullptr;
-    QSlider*        m_feedbackSaturationSlider = nullptr;
-    QLabel*         m_feedbackSaturationValue = nullptr;
-    QSlider*        m_feedbackGammaSlider = nullptr;
-    QLabel*         m_feedbackGammaValue = nullptr;
-    QSlider*        m_feedbackContrastSlider = nullptr;
-    QLabel*         m_feedbackContrastValue = nullptr;
-    QSlider*        m_feedbackLayerBrightnessSlider = nullptr;
-    QLabel*         m_feedbackLayerBrightnessValue = nullptr;
-    QSlider*        m_feedbackLayerSaturationSlider = nullptr;
-    QLabel*         m_feedbackLayerSaturationValue = nullptr;
-    QSlider*        m_feedbackLayerGammaSlider = nullptr;
-    QLabel*         m_feedbackLayerGammaValue = nullptr;
-    QSlider*        m_feedbackLayerContrastSlider = nullptr;
-    QLabel*         m_feedbackLayerContrastValue = nullptr;
-    QComboBox*      m_feedbackWrapMode = nullptr;
     QLabel*         m_visualNote     = nullptr;
 
     QList<QWidget*> m_midiTaggedWidgets;

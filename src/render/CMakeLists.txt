@@ -22,7 +22,6 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/effect_key.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_blend.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_mask.frag
-    ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.frag
     ${CMAKE_SOURCE_DIR}/shaders/transition.vert
     ${CMAKE_SOURCE_DIR}/shaders/transition_crossfade.frag
     ${CMAKE_SOURCE_DIR}/shaders/transition_luma.frag
@@ -41,7 +40,6 @@ set(_pvj_shader_outputs
     effect_key.frag.qsb
     effect_blend.frag.qsb
     effect_mask.frag.qsb
-    layer_feedback.frag.qsb
     transition.vert.qsb
     transition_crossfade.frag.qsb
     transition_luma.frag.qsb
