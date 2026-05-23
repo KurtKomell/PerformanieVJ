@@ -188,6 +188,13 @@ struct PictureParams {
     double circularMotion = 0.0; // 0 .. 1 (strength of circular drift)
 };
 
+/// Source image for the feedback accumulation pass.
+enum class FeedbackInputMode : int {
+    BelowOnly = 0,       // partial mix below F only; key holes masked in mixer
+    StackComposite = 1,  // below + above partial mixes combined (default)
+    SceneLoopback = 2,   // previous frame mixer output
+};
+
 struct FeedbackParams {
     double strength    = 0.5;   // 0..1 blend amount
     double saturation  = 1.0;   // 0..2 history saturation
@@ -197,6 +204,7 @@ struct FeedbackParams {
     double gamma       = 1.0;   // 0.1..4 history gamma
     double rotationDeg = 0.0;   // -180..180 history rotation per frame
     double zoom        = 0.0;   // -1..1 history zoom per frame
+    FeedbackInputMode inputMode = FeedbackInputMode::StackComposite;
 };
 
 struct CellProps {

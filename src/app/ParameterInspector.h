@@ -119,6 +119,7 @@ private slots:
     void onFeedbackGammaChanged(int v);
     void onFeedbackRotationChanged(double v);
     void onFeedbackZoomChanged(int v);
+    void onFeedbackInputModeChanged(int idx);
 
 private:
     void rebuildScreenList();
@@ -141,6 +142,7 @@ private:
     void syncPriorityButtons();
     void syncKeyingModeUi();
     void syncMaskControlVisibility();
+    void syncFeedbackForVisualSource(bool hasCell, int visualSourceKind);
 
     void registerMidiWidgets();
     void tagMidiWidget(QWidget* w, const QString& propertyId, const QVariant& noteValue = QVariant());
@@ -150,6 +152,7 @@ private:
     int m_bankSetIndex = -1;
     int m_bankIndex    = -1;
     int m_cellIndex    = -1;
+    int m_feedbackTabIndex = -1;
     bool m_loading = false;
     bool m_midiMappingEditMode = false;
 
@@ -243,6 +246,8 @@ private:
     QDoubleSpinBox* m_feedbackRotation = nullptr;
     QSlider*        m_feedbackZoomSlider = nullptr;
     QLabel*         m_feedbackZoomValue = nullptr;
+    QComboBox*      m_feedbackInputModeCombo = nullptr;
+    QLabel*         m_feedbackInputModeHint = nullptr;
 
     QComboBox*      m_outputScreen   = nullptr;
     QPushButton*    m_fullscreenBtn  = nullptr;

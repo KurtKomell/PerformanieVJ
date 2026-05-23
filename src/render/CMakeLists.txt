@@ -16,6 +16,7 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/mixer.frag
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.vert
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.frag
+    ${CMAKE_SOURCE_DIR}/shaders/stack_combine.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_blur.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_color.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_kaleido.frag
@@ -36,6 +37,7 @@ set(_pvj_shader_outputs
     mixer.frag.qsb
     layer_feedback.vert.qsb
     layer_feedback.frag.qsb
+    stack_combine.frag.qsb
     effect_blur.frag.qsb
     effect_color.frag.qsb
     effect_kaleido.frag.qsb

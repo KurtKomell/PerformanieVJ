@@ -57,7 +57,8 @@ bool feedbackParamsEqual(const pvj::core::FeedbackParams& a, const pvj::core::Fe
     return a.strength == b.strength && a.saturation == b.saturation
         && a.brightness == b.brightness && a.contrast == b.contrast
         && a.hueShift == b.hueShift && a.gamma == b.gamma
-        && a.rotationDeg == b.rotationDeg && a.zoom == b.zoom;
+        && a.rotationDeg == b.rotationDeg && a.zoom == b.zoom
+        && a.inputMode == b.inputMode;
 }
 
 constexpr float kQuadVertices[] = {
@@ -412,6 +413,14 @@ bool RhiMixerWidget::feedbackKeyFromAboveActive() const
     return false;
 }
 
+pvj::core::FeedbackInputMode RhiMixerWidget::activeFeedbackInputMode() const
+{
+    if (!hasActiveFeedbackLayer()) {
+        return pvj::core::FeedbackInputMode::StackComposite;
+    }
+    return m_layerFeedback[m_activeFeedbackLayer].inputMode;
+}
+
 void RhiMixerWidget::setFrame(int layer, QImage frame, qint64 /*pts*/)
 {
     if (layer < 0 || layer >= LayerCount) return;
@@ -456,8 +465,22 @@ void RhiMixerWidget::releaseFeedbackGpuResources()
     m_belowRp.reset();
     m_aboveRt.reset();
     m_aboveTex.reset();
+    m_stackCombinePipeline.reset();
+    m_stackCombineSrb.reset();
+    m_stackRt.reset();
+    m_stackTex.reset();
+    for (auto& rt : m_sceneHistRt) {
+        rt.reset();
+    }
+    for (auto& tex : m_sceneHistTex) {
+        tex.reset();
+    }
+    m_textureCopyPipeline.reset();
+    m_textureCopySrb.reset();
+    m_textureCopyRp.reset();
     m_feedbackPixelSize = {};
     m_feedbackWriteIdx = 0;
+    m_sceneHistWriteIdx = 0;
 }
 
 void RhiMixerWidget::releaseOffscreenGpuResources()
@@ -537,6 +560,16 @@ QRhiTextureRenderTarget* RhiMixerWidget::feedbackWriteRenderTarget() const
     return m_feedbackRt[m_feedbackWriteIdx].get();
 }
 
+QRhiTexture* RhiMixerWidget::sceneHistReadTexture() const
+{
+    return m_sceneHistTex[1 - m_sceneHistWriteIdx].get();
+}
+
+QRhiTextureRenderTarget* RhiMixerWidget::sceneHistWriteRenderTarget() const
+{
+    return m_sceneHistRt[m_sceneHistWriteIdx].get();
+}
+
 QRhiTexture* RhiMixerWidget::filterOutputTextureForLayer(int layer) const
 {
     if (layer < 0 || layer >= LayerCount) {
@@ -611,27 +644,57 @@ void RhiMixerWidget::rebuildBelowMixerShaderResourceBindings()
     m_belowSrb->create();
 }
 
-void RhiMixerWidget::rebuildFeedbackShaderResourceBindings(int /*feedbackLayer*/)
+void RhiMixerWidget::rebuildFeedbackShaderResourceBindings(QRhiTexture* belowTex,
+                                                           QRhiTexture* historyRead)
 {
-    if (!m_feedbackSrb || !m_belowTex || !feedbackReadTexture()) {
+    if (!m_feedbackSrb || !belowTex || !historyRead) {
         return;
     }
-    QRhiTexture* aboveTex = m_aboveTex ? m_aboveTex.get() : m_belowTex.get();
+    QRhiTexture* aboveTex = m_aboveTex ? m_aboveTex.get() : belowTex;
     m_feedbackSrb->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
             0, QRhiShaderResourceBinding::FragmentStage,
             m_feedbackUbuf.get()),
         QRhiShaderResourceBinding::sampledTexture(
             1, QRhiShaderResourceBinding::FragmentStage,
-            m_belowTex.get(), m_sampler.get()),
+            belowTex, m_sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
             2, QRhiShaderResourceBinding::FragmentStage,
-            feedbackReadTexture(), m_sampler.get()),
+            historyRead, m_sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
             3, QRhiShaderResourceBinding::FragmentStage,
             aboveTex, m_sampler.get()),
     });
     m_feedbackSrb->create();
+}
+
+void RhiMixerWidget::rebuildStackCombineShaderResourceBindings()
+{
+    if (!m_stackCombineSrb || !m_belowTex || !m_aboveTex || !m_stackTex) {
+        return;
+    }
+    m_stackCombineSrb->setBindings({
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage,
+            m_belowTex.get(), m_sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            2, QRhiShaderResourceBinding::FragmentStage,
+            m_aboveTex.get(), m_sampler.get()),
+    });
+    m_stackCombineSrb->create();
+}
+
+void RhiMixerWidget::rebuildTextureCopyShaderResourceBindings(QRhiTexture* sourceTex)
+{
+    if (!m_textureCopySrb || !sourceTex) {
+        return;
+    }
+    m_textureCopySrb->setBindings({
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage,
+            sourceTex, m_sampler.get()),
+    });
+    m_textureCopySrb->create();
 }
 
 void RhiMixerWidget::rebuildPresentShaderResourceBindings(QRhiTexture* sourceTex)
@@ -865,6 +928,39 @@ bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
         }
     }
 
+    if (!m_stackTex) {
+        m_stackTex.reset(r->newTexture(QRhiTexture::RGBA8, pixelSize, 1, QRhiTexture::RenderTarget));
+        if (!m_stackTex->create()) {
+            return false;
+        }
+    }
+    if (!m_stackRt) {
+        m_stackRt.reset(r->newTextureRenderTarget(
+            QRhiTextureRenderTargetDescription(QRhiColorAttachment(m_stackTex.get()))));
+        m_stackRt->setRenderPassDescriptor(m_belowRp.get());
+        if (!m_stackRt->create()) {
+            return false;
+        }
+    }
+
+    for (int k = 0; k < 2; ++k) {
+        if (!m_sceneHistTex[k]) {
+            m_sceneHistTex[k].reset(
+                r->newTexture(QRhiTexture::RGBA8, pixelSize, 1, QRhiTexture::RenderTarget));
+            if (!m_sceneHistTex[k]->create()) {
+                return false;
+            }
+        }
+        if (!m_sceneHistRt[k]) {
+            m_sceneHistRt[k].reset(r->newTextureRenderTarget(
+                QRhiTextureRenderTargetDescription(QRhiColorAttachment(m_sceneHistTex[k].get()))));
+            m_sceneHistRt[k]->setRenderPassDescriptor(m_belowRp.get());
+            if (!m_sceneHistRt[k]->create()) {
+                return false;
+            }
+        }
+    }
+
     if (!m_belowUbuf) {
         m_belowUbuf.reset(r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, kUboSize));
         if (!m_belowUbuf->create()) {
@@ -883,15 +979,39 @@ bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
     if (!m_feedbackSrb) {
         m_feedbackSrb.reset(r->newShaderResourceBindings());
     }
+    if (!m_stackCombineSrb) {
+        m_stackCombineSrb.reset(r->newShaderResourceBindings());
+    }
+    if (!m_textureCopySrb) {
+        m_textureCopySrb.reset(r->newShaderResourceBindings());
+    }
 
     rebuildBelowMixerShaderResourceBindings();
+    rebuildStackCombineShaderResourceBindings();
 
     if (!m_mixerBelowPipeline) {
         if (!createMixerGraphicsPipeline(r, m_belowSrb.get(), m_belowRp.get(), m_mixerBelowPipeline)) {
             return false;
         }
     }
-    rebuildFeedbackShaderResourceBindings(m_activeFeedbackLayer >= 0 ? m_activeFeedbackLayer : 0);
+    if (!m_stackCombinePipeline) {
+        // layer_feedback.vert has no vertex rotation (textured_quad.vert would need a bound UBO).
+        if (!createEffectPipeline(r, QStringLiteral(":/shaders/stack_combine.frag.qsb"),
+                                  QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
+                                  m_stackCombineSrb.get(), m_belowRp.get(), m_stackCombinePipeline)) {
+            return false;
+        }
+    }
+    if (!m_textureCopyRp && m_stackRt) {
+        m_textureCopyRp.reset(m_stackRt->newCompatibleRenderPassDescriptor());
+    }
+    if (!m_textureCopyPipeline && m_textureCopyRp) {
+        if (!createEffectPipeline(r, QStringLiteral(":/shaders/textured_quad.frag.qsb"),
+                                  QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
+                                  m_textureCopySrb.get(), m_textureCopyRp.get(), m_textureCopyPipeline)) {
+            return false;
+        }
+    }
     if (!m_feedbackPipeline) {
         if (!createEffectPipeline(r, QStringLiteral(":/shaders/layer_feedback.frag.qsb"),
                                   QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
@@ -927,20 +1047,64 @@ void RhiMixerWidget::runPartialMixerPass(QRhi* r, QRhiCommandBuffer* cb,
     cb->endPass();
 }
 
-void RhiMixerWidget::runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                                     const QSize& stagePx, const QColor& clear)
+void RhiMixerWidget::runStackCombinePass(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx,
+                                         const QColor& clear)
 {
-    if (!r || !cb || !m_feedbackPipeline || !m_belowTex || !feedbackWriteRenderTarget()) {
+    if (!r || !cb || !m_stackCombinePipeline || !m_stackRt) {
+        return;
+    }
+    rebuildStackCombineShaderResourceBindings();
+    cb->beginPass(m_stackRt.get(), clear, { 1.0f, 0 }, nullptr);
+    cb->setGraphicsPipeline(m_stackCombinePipeline.get());
+    cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
+    cb->setShaderResources(m_stackCombineSrb.get());
+    QRhiCommandBuffer::VertexInput vin(m_vbuf.get(), 0);
+    cb->setVertexInput(0, 1, &vin);
+    cb->draw(4);
+    cb->endPass();
+}
+
+void RhiMixerWidget::runTextureCopyPass(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
+                                        QRhiTextureRenderTarget* targetRt, const QSize& stagePx)
+{
+    if (!r || !cb || !m_textureCopyPipeline || !sourceTex || !targetRt) {
+        return;
+    }
+    rebuildTextureCopyShaderResourceBindings(sourceTex);
+    cb->beginPass(targetRt, QColor(0, 0, 0), { 1.0f, 0 }, nullptr);
+    cb->setGraphicsPipeline(m_textureCopyPipeline.get());
+    cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
+    cb->setShaderResources(m_textureCopySrb.get());
+    QRhiCommandBuffer::VertexInput vin(m_vbuf.get(), 0);
+    cb->setVertexInput(0, 1, &vin);
+    cb->draw(4);
+    cb->endPass();
+}
+
+void RhiMixerWidget::copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx)
+{
+    if (!m_sceneTex || !sceneHistWriteRenderTarget()) {
+        return;
+    }
+    runTextureCopyPass(r, cb, m_sceneTex.get(), sceneHistWriteRenderTarget(), stagePx);
+}
+
+void RhiMixerWidget::runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                     const QSize& stagePx, const QColor& clear,
+                                     QRhiTexture* belowTex, QRhiTexture* historyRead,
+                                     QRhiTextureRenderTarget* writeRt)
+{
+    if (!r || !cb || !m_feedbackPipeline || !belowTex || !historyRead || !writeRt) {
         return;
     }
 
-    rebuildFeedbackShaderResourceBindings(feedbackLayer);
+    rebuildFeedbackShaderResourceBindings(belowTex, historyRead);
 
     QRhiResourceUpdateBatch* batch = r->nextResourceUpdateBatch();
     updateFeedbackUniformBuffer(batch, feedbackLayer);
     cb->resourceUpdate(batch);
 
-    cb->beginPass(feedbackWriteRenderTarget(), clear, { 1.0f, 0 }, nullptr);
+    cb->beginPass(writeRt, clear, { 1.0f, 0 }, nullptr);
     cb->setGraphicsPipeline(m_feedbackPipeline.get());
     cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
     cb->setShaderResources(m_feedbackSrb.get());
@@ -1257,8 +1421,15 @@ void RhiMixerWidget::updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batc
         ubo[kMixerCfgBase + 0] = float(LayerCount);
         ubo[kMixerCfgBase + 1] = float(m_activeFeedbackLayer);
         ubo[kMixerCfgBase + 2] = 1.0f;
-        const bool keyFromAboveForDisplay = feedbackKeyFromAboveActive();
-        ubo[kMixerCfgBase + 3] = keyFromAboveForDisplay ? 1.0f : 0.0f;
+        float mixerCfgW = 0.0f;
+        const auto inputMode = activeFeedbackInputMode();
+        if (inputMode == pvj::core::FeedbackInputMode::BelowOnly && feedbackKeyFromAboveActive()) {
+            mixerCfgW = 1.0f;
+        } else if (inputMode == pvj::core::FeedbackInputMode::StackComposite
+                   || inputMode == pvj::core::FeedbackInputMode::SceneLoopback) {
+            mixerCfgW = 2.0f;
+        }
+        ubo[kMixerCfgBase + 3] = mixerCfgW;
     } else {
         const int minLayer = (minLayerInclusive >= 0 && minLayerInclusive < LayerCount)
             ? minLayerInclusive : 0;
@@ -1388,13 +1559,33 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
 
     if (hasFeedback) {
         if (ensureFeedbackTargets(r, stagePx)) {
-            runPartialMixerPass(r, cb, 0, F, m_belowRt.get(), stagePx, clear);
-            const bool hasLayersAbove = std::any_of(m_layerActive.cbegin() + F + 1, m_layerActive.cend(),
-                                                    [](bool active) { return active; });
-            if (hasLayersAbove && m_aboveRt) {
-                runPartialMixerPass(r, cb, F + 1, LayerCount, m_aboveRt.get(), stagePx, clear);
+            const auto inputMode = activeFeedbackInputMode();
+            QRhiTexture* feedbackBelow = m_belowTex.get();
+            QRhiTexture* historyRead = feedbackReadTexture();
+
+            if (inputMode == pvj::core::FeedbackInputMode::SceneLoopback) {
+                feedbackBelow = sceneHistReadTexture();
+                if (!feedbackBelow) {
+                    feedbackBelow = m_belowTex.get();
+                }
+            } else if (inputMode == pvj::core::FeedbackInputMode::StackComposite) {
+                runPartialMixerPass(r, cb, 0, F, m_belowRt.get(), stagePx, clear);
+                const bool hasLayersAbove = std::any_of(
+                    m_layerActive.cbegin() + F + 1, m_layerActive.cend(),
+                    [](bool active) { return active; });
+                if (hasLayersAbove && m_aboveRt) {
+                    runPartialMixerPass(r, cb, F + 1, LayerCount, m_aboveRt.get(), stagePx, clear);
+                    runStackCombinePass(r, cb, stagePx, clear);
+                    feedbackBelow = m_stackTex.get();
+                }
+            } else {
+                runPartialMixerPass(r, cb, 0, F, m_belowRt.get(), stagePx, clear);
             }
-            runFeedbackPass(r, cb, F, stagePx, clear);
+
+            if (feedbackBelow && historyRead) {
+                runFeedbackPass(r, cb, F, stagePx, clear, feedbackBelow, historyRead,
+                                feedbackWriteRenderTarget());
+            }
         }
     }
 
@@ -1419,7 +1610,9 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     cb->endPass();
 
     if (hasFeedback) {
+        copySceneToHistory(r, cb, stagePx);
         m_feedbackWriteIdx = quint8(1 - m_feedbackWriteIdx);
+        m_sceneHistWriteIdx = quint8(1 - m_sceneHistWriteIdx);
     }
 
     // Present pass: letterbox the scene onto the swapchain.

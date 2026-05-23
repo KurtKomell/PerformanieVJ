@@ -47,4 +47,9 @@ QString toString(PropertyButtonMode m);
 PropertyButtonMode propertyButtonModeFromString(const QString& s,
                                                 PropertyButtonMode fallback = PropertyButtonMode::Continuous);
 
+// FeedbackInputMode
+QString toString(FeedbackInputMode m);
+FeedbackInputMode feedbackInputModeFromString(const QString& s,
+                                              FeedbackInputMode fallback = FeedbackInputMode::StackComposite);
+
 } // namespace pvj::core::enums

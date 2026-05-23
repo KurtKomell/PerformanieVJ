@@ -330,4 +330,28 @@ PropertyButtonMode propertyButtonModeFromString(const QString& s, PropertyButton
     return fallback;
 }
 
+QString toString(FeedbackInputMode m)
+{
+    switch (m) {
+    case FeedbackInputMode::BelowOnly:       return QStringLiteral("belowOnly");
+    case FeedbackInputMode::StackComposite: return QStringLiteral("stackComposite");
+    case FeedbackInputMode::SceneLoopback:  return QStringLiteral("sceneLoopback");
+    }
+    return QStringLiteral("stackComposite");
+}
+
+FeedbackInputMode feedbackInputModeFromString(const QString& s, FeedbackInputMode fallback)
+{
+    bool ok = false;
+    const int asInt = s.toInt(&ok);
+    if (ok && asInt >= 0 && asInt <= 2) {
+        return static_cast<FeedbackInputMode>(asInt);
+    }
+    const QString k = s.toLower();
+    if (k == QLatin1String("belowonly"))       return FeedbackInputMode::BelowOnly;
+    if (k == QLatin1String("stackcomposite"))  return FeedbackInputMode::StackComposite;
+    if (k == QLatin1String("sceneloopback"))    return FeedbackInputMode::SceneLoopback;
+    return fallback;
+}
+
 } // namespace pvj::core::enums

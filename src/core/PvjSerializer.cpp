@@ -88,7 +88,8 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         || p.feedback.hueShift != fbDefault.hueShift
         || p.feedback.gamma != fbDefault.gamma
         || p.feedback.rotationDeg != fbDefault.rotationDeg
-        || p.feedback.zoom != fbDefault.zoom;
+        || p.feedback.zoom != fbDefault.zoom
+        || p.feedback.inputMode != fbDefault.inputMode;
     if (fbNonDefault) {
         w.writeStartElement(QStringLiteral("Feedback"));
         w.writeAttribute(QStringLiteral("strength"),    QString::number(p.feedback.strength,    'g', 6));
@@ -99,6 +100,10 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         w.writeAttribute(QStringLiteral("gamma"),       QString::number(p.feedback.gamma,       'g', 6));
         w.writeAttribute(QStringLiteral("rotationDeg"), QString::number(p.feedback.rotationDeg, 'g', 6));
         w.writeAttribute(QStringLiteral("zoom"),        QString::number(p.feedback.zoom,        'g', 6));
+        if (p.feedback.inputMode != fbDefault.inputMode) {
+            w.writeAttribute(QStringLiteral("inputMode"),
+                             enums::toString(p.feedback.inputMode));
+        }
         w.writeEndElement();
     }
 
@@ -231,7 +236,8 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.feedback.hueShift == 0.0
             && c.props.feedback.gamma == 1.0
             && c.props.feedback.rotationDeg == 0.0
-            && c.props.feedback.zoom == 0.0;
+            && c.props.feedback.zoom == 0.0
+            && c.props.feedback.inputMode == FeedbackInputMode::StackComposite;
         if (isDefault) {
             continue;
         }
@@ -494,6 +500,10 @@ CellProps readProps(QXmlStreamReader& r)
             p.feedback.gamma       = rd("gamma", 1.0);
             p.feedback.rotationDeg = rd("rotationDeg", 0.0);
             p.feedback.zoom        = rd("zoom", 0.0);
+            if (fbAttrs.hasAttribute(QStringLiteral("inputMode"))) {
+                p.feedback.inputMode = enums::feedbackInputModeFromString(
+                    fbAttrs.value(QStringLiteral("inputMode")).toString());
+            }
             r.skipCurrentElement();
         } else {
             r.skipCurrentElement();

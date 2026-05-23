@@ -93,7 +93,9 @@ private:
 
     void rebuildMixerShaderResourceBindings();
     void rebuildBelowMixerShaderResourceBindings();
-    void rebuildFeedbackShaderResourceBindings(int feedbackLayer);
+    void rebuildFeedbackShaderResourceBindings(QRhiTexture* belowTex, QRhiTexture* historyRead);
+    void rebuildStackCombineShaderResourceBindings();
+    void rebuildTextureCopyShaderResourceBindings(QRhiTexture* sourceTex);
     void rebuildPresentShaderResourceBindings(QRhiTexture* sourceTex);
 
     void uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch);
@@ -121,12 +123,21 @@ private:
                              int minLayerInclusive, int maxLayerExclusive,
                              QRhiTextureRenderTarget* targetRt, const QSize& stagePx, const QColor& clear);
     void runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                         const QSize& stagePx, const QColor& clear);
+                         const QSize& stagePx, const QColor& clear,
+                         QRhiTexture* belowTex, QRhiTexture* historyRead,
+                         QRhiTextureRenderTarget* writeRt);
+    void runStackCombinePass(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
+    void runTextureCopyPass(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
+                            QRhiTextureRenderTarget* targetRt, const QSize& stagePx);
+    void copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
     void recomputeActiveFeedbackLayer();
 
+    pvj::core::FeedbackInputMode activeFeedbackInputMode() const;
     QRhiTexture* feedbackWriteTexture() const;
     QRhiTexture* feedbackReadTexture() const;
     QRhiTextureRenderTarget* feedbackWriteRenderTarget() const;
+    QRhiTexture* sceneHistReadTexture() const;
+    QRhiTextureRenderTarget* sceneHistWriteRenderTarget() const;
 
     QRhiTexture* sourceTextureForLayer(int layer) const;
     QRhiTexture* filterOutputTextureForLayer(int layer) const;
@@ -173,6 +184,19 @@ private:
 
     std::unique_ptr<QRhiTexture> m_aboveTex;
     std::unique_ptr<QRhiTextureRenderTarget> m_aboveRt;
+
+    std::unique_ptr<QRhiTexture> m_stackTex;
+    std::unique_ptr<QRhiTextureRenderTarget> m_stackRt;
+    std::unique_ptr<QRhiShaderResourceBindings> m_stackCombineSrb;
+    std::unique_ptr<QRhiGraphicsPipeline> m_stackCombinePipeline;
+
+    std::array<std::unique_ptr<QRhiTexture>, 2> m_sceneHistTex{};
+    std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2> m_sceneHistRt{};
+    quint8 m_sceneHistWriteIdx = 0;
+
+    std::unique_ptr<QRhiShaderResourceBindings> m_textureCopySrb;
+    std::unique_ptr<QRhiGraphicsPipeline> m_textureCopyPipeline;
+    std::unique_ptr<QRhiRenderPassDescriptor> m_textureCopyRp;
 
     int m_mixerMinLayerInclusive = 0;
     int m_mixerMaxLayerExclusive = -1;

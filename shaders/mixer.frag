@@ -385,7 +385,8 @@ void main()
         if (isFeedbackLayer) {
             vec3 under = dst;
             float vis = op;
-            if (ubuf.mixerCfg.w > 0.5) {
+            // mixerCfg.w: 0 = no key mask, 1 = BelowOnly hole mask, 2 = unified (full trail)
+            if (ubuf.mixerCfg.w > 0.5 && ubuf.mixerCfg.w < 1.5) {
                 float upperCov = 0.0;
                 for (int j = feedbackLayer + 1; j < 12; j++) {
                     vec4 aboveLp = ubuf.layers[j];

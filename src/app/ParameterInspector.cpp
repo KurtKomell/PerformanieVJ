@@ -32,6 +32,7 @@
 #include <QMouseEvent>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -543,7 +544,7 @@ ParameterInspector::ParameterInspector(QWidget* parent)
     addTab(buildVisualTab(), tr("Visual"));
     addTab(buildTransitionTab(), tr("Transition"));
     addTab(buildMixingTab(), tr("Mixing"));
-    addTab(buildFeedbackTab(), tr("Feedback"));
+    m_feedbackTabIndex = addTab(buildFeedbackTab(), tr("Feedback"));
     addTab(buildPositionTab(), tr("Position"));
     addTab(buildOutputTab(), tr("Output"));
 
@@ -1190,6 +1191,28 @@ QWidget* ParameterInspector::buildFeedbackTab()
     auto* root = new QVBoxLayout(host);
     root->setSpacing(10);
 
+    {
+        auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Input")), host);
+        root->addWidget(lab);
+        m_feedbackInputModeCombo = new QComboBox(host);
+        m_feedbackInputModeCombo->addItem(tr("Below only (legacy)"),
+                                          int(pvj::core::FeedbackInputMode::BelowOnly));
+        m_feedbackInputModeCombo->addItem(tr("Stack (back + key)"),
+                                          int(pvj::core::FeedbackInputMode::StackComposite));
+        m_feedbackInputModeCombo->addItem(tr("Scene loopback"),
+                                          int(pvj::core::FeedbackInputMode::SceneLoopback));
+        connect(m_feedbackInputModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, &ParameterInspector::onFeedbackInputModeChanged);
+        root->addWidget(m_feedbackInputModeCombo);
+        m_feedbackInputModeHint = new QLabel(
+            tr("Stack: one trail history from layers below and above feedback. "
+               "Scene loopback: trails from the full mixer output of the previous frame."),
+            host);
+        m_feedbackInputModeHint->setWordWrap(true);
+        m_feedbackInputModeHint->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        root->addWidget(m_feedbackInputModeHint);
+    }
+
     auto addSliderRow = [&](const QString& title, QSlider** sliderOut, QLabel** valueOut,
                             auto slot) {
         auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(title), host);
@@ -1524,6 +1547,47 @@ void ParameterInspector::syncPriorityButtons()
     }
 }
 
+void ParameterInspector::syncFeedbackForVisualSource(bool hasCell, int visualSourceKind)
+{
+    const bool isMedia = visualSourceKind == int(VisualSourceKind::Media);
+    const bool feedbackEnabled = hasCell && !isMedia;
+
+    if (m_feedbackTabIndex >= 0) {
+        setTabEnabled(m_feedbackTabIndex, feedbackEnabled);
+        if (isMedia && currentIndex() == m_feedbackTabIndex) {
+            setCurrentIndex(0);
+        }
+    }
+
+    if (m_visualSourceCombo) {
+        if (auto* model = qobject_cast<QStandardItemModel*>(m_visualSourceCombo->model())) {
+            for (int i = 0; i < m_visualSourceCombo->count(); ++i) {
+                if (m_visualSourceCombo->itemData(i).toInt() == int(VisualSourceKind::Feedback)) {
+                    if (QStandardItem* item = model->item(i)) {
+                        item->setEnabled(!isMedia);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    for (auto* w : {static_cast<QWidget*>(m_feedbackStrengthSlider),
+                     static_cast<QWidget*>(m_feedbackSaturationSlider),
+                     static_cast<QWidget*>(m_feedbackBrightnessSlider),
+                     static_cast<QWidget*>(m_feedbackContrastSlider),
+                     static_cast<QWidget*>(m_feedbackHueShiftSlider),
+                     static_cast<QWidget*>(m_feedbackGammaSlider),
+                     static_cast<QWidget*>(m_feedbackRotation),
+                     static_cast<QWidget*>(m_feedbackZoomSlider),
+                     static_cast<QWidget*>(m_feedbackInputModeCombo),
+                     static_cast<QWidget*>(m_feedbackInputModeHint)}) {
+        if (w) {
+            w->setEnabled(feedbackEnabled);
+        }
+    }
+}
+
 void ParameterInspector::refreshFromCell()
 {
     m_loading = true;
@@ -1561,6 +1625,7 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b40(m_feedbackGammaSlider);
     QSignalBlocker b41(m_feedbackRotation);
     QSignalBlocker b42(m_feedbackZoomSlider);
+    QSignalBlocker b43(m_feedbackInputModeCombo);
 
     auto* cell = currentCell();
     const bool hasCell = (cell != nullptr);
@@ -1644,19 +1709,12 @@ void ParameterInspector::refreshFromCell()
     if (m_preferredLayerCombo) {
         m_preferredLayerCombo->setEnabled(hasCell);
     }
-    for (auto* w : {static_cast<QWidget*>(m_visualSourceCombo),
-                     static_cast<QWidget*>(m_feedbackStrengthSlider),
-                     static_cast<QWidget*>(m_feedbackSaturationSlider),
-                     static_cast<QWidget*>(m_feedbackBrightnessSlider),
-                     static_cast<QWidget*>(m_feedbackContrastSlider),
-                     static_cast<QWidget*>(m_feedbackHueShiftSlider),
-                     static_cast<QWidget*>(m_feedbackGammaSlider),
-                     static_cast<QWidget*>(m_feedbackRotation),
-                     static_cast<QWidget*>(m_feedbackZoomSlider)}) {
-        if (w) {
-            w->setEnabled(hasCell);
-        }
+    if (m_visualSourceCombo) {
+        m_visualSourceCombo->setEnabled(hasCell);
     }
+
+    const int visualKind = hasCell ? visualSourceKindFromCell(*cell) : int(VisualSourceKind::Empty);
+    syncFeedbackForVisualSource(hasCell, visualKind);
 
     if (!hasCell) {
         m_visualLabel->setText(tr("(no cell selected)"));
@@ -1888,6 +1946,12 @@ void ParameterInspector::refreshFromCell()
         m_feedbackZoomSlider->setValue(signedToSlider(cell->props.feedback.zoom, -1.0, 1.0));
         m_feedbackZoomValue->setText(formatSignedUnit(cell->props.feedback.zoom));
     }
+    if (m_feedbackInputModeCombo) {
+        const int modeIdx = m_feedbackInputModeCombo->findData(int(cell->props.feedback.inputMode));
+        if (modeIdx >= 0) {
+            m_feedbackInputModeCombo->setCurrentIndex(modeIdx);
+        }
+    }
 
     m_loading = false;
 }
@@ -1906,7 +1970,20 @@ void ParameterInspector::onVisualSourceChanged(int /*idx*/)
     if (!c) {
         return;
     }
-    applyVisualSourceKind(*c, m_visualSourceCombo->currentData().toInt());
+    const int kind = m_visualSourceCombo->currentData().toInt();
+    if (kind == int(VisualSourceKind::Feedback)
+        && c->visual.type == VisualType::Media) {
+        QSignalBlocker blocker(m_visualSourceCombo);
+        for (int i = 0; i < m_visualSourceCombo->count(); ++i) {
+            if (m_visualSourceCombo->itemData(i).toInt() == int(VisualSourceKind::Media)) {
+                m_visualSourceCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+        return;
+    }
+    applyVisualSourceKind(*c, kind);
+    syncFeedbackForVisualSource(true, kind);
     emitChanged();
 }
 
@@ -1970,6 +2047,19 @@ void ParameterInspector::onFeedbackZoomChanged(int v)
     const double u = sliderToSigned(v, -1.0, 1.0);
     if (m_feedbackZoomValue) m_feedbackZoomValue->setText(formatSignedUnit(u));
     if (auto* c = currentCell()) { c->props.feedback.zoom = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackInputModeChanged(int idx)
+{
+    if (m_loading || !m_feedbackInputModeCombo || idx < 0) {
+        return;
+    }
+    const auto mode = static_cast<pvj::core::FeedbackInputMode>(
+        m_feedbackInputModeCombo->itemData(idx).toInt());
+    if (auto* c = currentCell()) {
+        c->props.feedback.inputMode = mode;
+        emitChanged();
+    }
 }
 
 void ParameterInspector::onMixingPresetChanged(int idx)
@@ -2569,6 +2659,7 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_feedbackGammaSlider, QStringLiteral("feedbackGamma"));
     tagMidiWidget(m_feedbackRotation, QStringLiteral("feedbackRotationDeg"));
     tagMidiWidget(m_feedbackZoomSlider, QStringLiteral("feedbackZoom"));
+    tagMidiWidget(m_feedbackInputModeCombo, QStringLiteral("feedbackInputMode"));
 }
 
 void ParameterInspector::showMidiContextMenu(QWidget* w, const QPoint& globalPos)

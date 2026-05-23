@@ -214,6 +214,7 @@ QStringList allPropertyNames()
         QStringLiteral("feedbackGamma"),
         QStringLiteral("feedbackRotationDeg"),
         QStringLiteral("feedbackZoom"),
+        QStringLiteral("feedbackInputMode"),
         QStringLiteral("playMode"),
         QStringLiteral("clipPaused"),
         QStringLiteral("copyMode"),
@@ -277,6 +278,7 @@ QString labelFor(const QString& name)
         { QStringLiteral("feedbackgamma"), QStringLiteral("Feedback gamma") },
         { QStringLiteral("feedbackrotationdeg"), QStringLiteral("Feedback rotation") },
         { QStringLiteral("feedbackzoom"), QStringLiteral("Feedback zoom") },
+        { QStringLiteral("feedbackinputmode"), QStringLiteral("Feedback input mode") },
         { QStringLiteral("playmode"), QStringLiteral("Play mode") },
         { QStringLiteral("clippaused"), QStringLiteral("Clip paused") },
         { QStringLiteral("copymode"), QStringLiteral("Copy mode") },
@@ -423,6 +425,9 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("feedbackrotationdeg")) {
         *minV = -180.0;
         *maxV = 180.0;
+    } else if (p == QLatin1String("feedbackinputmode")) {
+        *minV = 0.0;
+        *maxV = 2.0;
     } else {
         *minV = 0.0;
         *maxV = 1.0;
@@ -597,6 +602,10 @@ bool readValue(const Cell& c, const QString& raw, double* out)
     }
     if (p == QLatin1String("feedbackzoom")) {
         *out = c.props.feedback.zoom;
+        return true;
+    }
+    if (p == QLatin1String("feedbackinputmode")) {
+        *out = double(int(c.props.feedback.inputMode));
         return true;
     }
     if (p == QLatin1String("playmode")) {
@@ -857,6 +866,11 @@ bool applyValue(Cell& c, const QString& raw, double v)
     }
     if (p == QLatin1String("feedbackzoom")) {
         c.props.feedback.zoom = qBound(-1.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackinputmode")) {
+        const int mode = int(qRound(v));
+        c.props.feedback.inputMode = static_cast<FeedbackInputMode>(qBound(0, mode, 2));
         return true;
     }
     if (p == QLatin1String("clippaused")) {
