@@ -106,14 +106,9 @@ void main()
     }
     history = applyGrading(history);
 
+    // Always accumulate full trail into ping-pong history; key masking is applied
+    // at display time in the main mixer so keyed regions do not reset the loop.
     float strength = clamp(ubuf.fbA.x, 0.0, 1.0);
-    float mask = 1.0;
-    if (ubuf.fbC.z > 0.5) {
-        vec3 above = texture(u_above, v_uv).rgb;
-        // Suppress feedback where upper layers have visible content (luma key vs stage bg).
-        float upperCov = clamp(length(above - kBg) * 1.8, 0.0, 1.0);
-        mask = 1.0 - upperCov;
-    }
-    vec3 outRgb = mix(below, history, strength * mask);
+    vec3 outRgb = mix(below, history, strength);
     fragColor = vec4(outRgb, 1.0);
 }

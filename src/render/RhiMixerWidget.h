@@ -97,7 +97,10 @@ private:
     void rebuildPresentShaderResourceBindings(QRhiTexture* sourceTex);
 
     void uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch);
-    void updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive = -1);
+    void updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive = -1,
+                                  int minLayerInclusive = 0);
+    bool hasActiveFeedbackLayer() const;
+    bool feedbackKeyFromAboveActive() const;
     void updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batch,
                                        int minLayerInclusive, int maxLayerExclusive);
     void updateFeedbackUniformBuffer(QRhiResourceUpdateBatch* batch, int feedbackLayer);

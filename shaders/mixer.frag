@@ -16,6 +16,7 @@ layout(binding = 10) uniform sampler2D u_tex9;
 layout(binding = 11) uniform sampler2D u_tex10;
 layout(binding = 12) uniform sampler2D u_tex11;
 layout(binding = 13) uniform sampler2D u_under;
+layout(binding = 14) uniform sampler2D u_aboveKey;
 
 layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
@@ -24,7 +25,7 @@ layout(std140, binding = 0) uniform Block {
     // fragment path; kept in the UBO so the binding layout stays stable).
     vec4 picUvA[12];
     vec4 picColor[12];
-    vec4 mixerCfg; // reserved mixer configuration
+    vec4 mixerCfg; // x=maxLayerExclusive, y=feedbackLayer or minLayer, z=feedbackActive, w=feedbackKeyFromAbove
 } ubuf;
 
 // Mode indices must match pvj::core::CopyMode (Model.h) exactly: 0–50
@@ -352,12 +353,18 @@ void main()
     vec3 dst = kBg;
     bool hasBase = false;
 
-    int minLayer = int(ubuf.mixerCfg.y + 0.5);
     int maxLayer = int(ubuf.mixerCfg.x + 0.5);
     if (maxLayer <= 0) maxLayer = 12;
+    int cfgLayer = int(ubuf.mixerCfg.y + 0.5);
+    const bool feedbackActive = ubuf.mixerCfg.z > 0.5;
+    const int feedbackLayer = feedbackActive ? cfgLayer : -1;
 
     for (int i = 0; i < 12; i++) {
-        if (i < minLayer || i >= maxLayer) continue;
+        if (feedbackActive) {
+            if (i >= maxLayer) continue;
+        } else {
+            if (i < cfgLayer || i >= maxLayer) continue;
+        }
         vec4 lp = ubuf.layers[i];
         if (lp.z < 0.5) {
             continue;
@@ -371,6 +378,36 @@ void main()
         float alpha = clamp(c.a * op, 0.0, 1.0);
         int mode = int(lp.y + 0.5);
         int matteRole = int(lp.w + 0.5);
+
+        // Feedback layer: fade over the normal mix below; key from layers above
+        // uses per-layer alpha/coverage so keyed holes stay open for feedback.
+        const bool isFeedbackLayer = feedbackActive && i == feedbackLayer;
+        if (isFeedbackLayer) {
+            vec3 under = dst;
+            float vis = op;
+            if (ubuf.mixerCfg.w > 0.5) {
+                float upperCov = 0.0;
+                for (int j = feedbackLayer + 1; j < 12; j++) {
+                    vec4 aboveLp = ubuf.layers[j];
+                    if (aboveLp.z < 0.5) {
+                        continue;
+                    }
+                    vec4 aboveSample = sampleLayer(j);
+                    float aboveOp = clamp(aboveLp.x, 0.0, 1.0);
+                    float alphaCov = clamp(aboveSample.a * aboveOp, 0.0, 1.0);
+                    float lumaCov = clamp(length(aboveSample.rgb - kBg) * 1.8, 0.0, 1.0) * aboveOp;
+                    upperCov = max(upperCov, max(alphaCov, lumaCov));
+                }
+                vis *= (1.0 - upperCov);
+            }
+            if (vis <= 1e-4) {
+                dst = under;
+            } else {
+                dst = blendNormal(under, src, vis);
+            }
+            hasBase = true;
+            continue;
+        }
 
         if (matteRole == MATTE_LUMA) {
             float m = mix(1.0, lum(src), alpha);

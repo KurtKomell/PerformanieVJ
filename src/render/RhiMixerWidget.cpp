@@ -379,6 +379,7 @@ pvj::core::FeedbackParams RhiMixerWidget::layerFeedback(int layer) const
 
 void RhiMixerWidget::recomputeActiveFeedbackLayer()
 {
+    const int previous = m_activeFeedbackLayer;
     m_activeFeedbackLayer = -1;
     for (int i = 0; i < LayerCount; ++i) {
         if (m_layerIsFeedback[i] && m_layerActive[i]) {
@@ -386,6 +387,29 @@ void RhiMixerWidget::recomputeActiveFeedbackLayer()
             break;
         }
     }
+    if (previous >= 0 && m_activeFeedbackLayer < 0) {
+        releaseFeedbackGpuResources();
+    }
+}
+
+bool RhiMixerWidget::hasActiveFeedbackLayer() const
+{
+    const int f = m_activeFeedbackLayer;
+    return f >= 0 && f < LayerCount && m_layerIsFeedback[f] && m_layerActive[f];
+}
+
+bool RhiMixerWidget::feedbackKeyFromAboveActive() const
+{
+    if (!hasActiveFeedbackLayer()) {
+        return false;
+    }
+    const int f = m_activeFeedbackLayer;
+    for (int i = f + 1; i < LayerCount; ++i) {
+        if (m_layerActive[i]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void RhiMixerWidget::setFrame(int layer, QImage frame, qint64 /*pts*/)
@@ -487,8 +511,10 @@ void RhiMixerWidget::releaseResources()
 QRhiTexture* RhiMixerWidget::sourceTextureForLayer(int layer) const
 {
     if (layer < 0 || layer >= LayerCount) return nullptr;
-    if (layer == m_activeFeedbackLayer && m_layerIsFeedback[layer]) {
-        return feedbackWriteTexture();
+    if (hasActiveFeedbackLayer() && layer == m_activeFeedbackLayer) {
+        if (QRhiTexture* fb = feedbackWriteTexture()) {
+            return fb;
+        }
     }
     if (QRhiTexture* filtered = filterOutputTextureForLayer(layer)) {
         return filtered;
@@ -536,7 +562,7 @@ void RhiMixerWidget::rebuildMixerShaderResourceBindings()
     if (!m_srb) return;
 
     QVector<QRhiShaderResourceBinding> binds;
-    binds.reserve(2 + LayerCount);
+    binds.reserve(2 + LayerCount + 2);
     binds.append(QRhiShaderResourceBinding::uniformBuffer(
         0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
         m_ubuf.get()));
@@ -551,6 +577,9 @@ void RhiMixerWidget::rebuildMixerShaderResourceBindings()
     binds.append(QRhiShaderResourceBinding::sampledTexture(
         13, QRhiShaderResourceBinding::FragmentStage,
         placeholder, m_sampler.get()));
+    binds.append(QRhiShaderResourceBinding::sampledTexture(
+        14, QRhiShaderResourceBinding::FragmentStage,
+        placeholder, m_sampler.get()));
     m_srb->setBindings(binds.cbegin(), binds.cend());
     m_srb->create();
 }
@@ -560,7 +589,7 @@ void RhiMixerWidget::rebuildBelowMixerShaderResourceBindings()
     if (!m_belowSrb) return;
 
     QVector<QRhiShaderResourceBinding> binds;
-    binds.reserve(2 + LayerCount);
+    binds.reserve(2 + LayerCount + 2);
     binds.append(QRhiShaderResourceBinding::uniformBuffer(
         0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
         m_belowUbuf.get()));
@@ -574,6 +603,9 @@ void RhiMixerWidget::rebuildBelowMixerShaderResourceBindings()
     QRhiTexture* placeholder = m_tex[0].get();
     binds.append(QRhiShaderResourceBinding::sampledTexture(
         13, QRhiShaderResourceBinding::FragmentStage,
+        placeholder, m_sampler.get()));
+    binds.append(QRhiShaderResourceBinding::sampledTexture(
+        14, QRhiShaderResourceBinding::FragmentStage,
         placeholder, m_sampler.get()));
     m_belowSrb->setBindings(binds.cbegin(), binds.cend());
     m_belowSrb->create();
@@ -768,7 +800,7 @@ QRhiGraphicsPipeline* RhiMixerWidget::ensureFilterPipeline(QRhi* r, const QStrin
 
 bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
 {
-    if (!r || pixelSize.isEmpty()) {
+    if (!r || pixelSize.isEmpty() || !hasActiveFeedbackLayer()) {
         return false;
     }
     if (m_feedbackPixelSize != pixelSize) {
@@ -1139,9 +1171,10 @@ void RhiMixerWidget::uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch)
     }
 }
 
-void RhiMixerWidget::updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive)
+void RhiMixerWidget::updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive,
+                                              int minLayerInclusive)
 {
-    updateBelowMixerUniformBuffer(batch, 0, maxLayerExclusive);
+    updateBelowMixerUniformBuffer(batch, minLayerInclusive, maxLayerExclusive);
 }
 
 void RhiMixerWidget::updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batch,
@@ -1218,14 +1251,24 @@ void RhiMixerWidget::updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batc
     }
 
     const int kMixerCfgBase = kPicColBase + 4 * LayerCount;
-    const int minLayer = (minLayerInclusive >= 0 && minLayerInclusive < LayerCount)
-        ? minLayerInclusive : 0;
-    const int maxLayer = (maxLayerExclusive >= 0 && maxLayerExclusive <= LayerCount)
-        ? maxLayerExclusive : LayerCount;
-    ubo[kMixerCfgBase + 0] = float(maxLayer);
-    ubo[kMixerCfgBase + 1] = float(minLayer);
-    ubo[kMixerCfgBase + 2] = 0.0f;
-    ubo[kMixerCfgBase + 3] = 0.0f;
+    const bool isMainMixerUbuf = targetUbuf == m_ubuf.get();
+    const bool feedbackActive = isMainMixerUbuf && hasActiveFeedbackLayer();
+    if (feedbackActive) {
+        ubo[kMixerCfgBase + 0] = float(LayerCount);
+        ubo[kMixerCfgBase + 1] = float(m_activeFeedbackLayer);
+        ubo[kMixerCfgBase + 2] = 1.0f;
+        const bool keyFromAboveForDisplay = feedbackKeyFromAboveActive();
+        ubo[kMixerCfgBase + 3] = keyFromAboveForDisplay ? 1.0f : 0.0f;
+    } else {
+        const int minLayer = (minLayerInclusive >= 0 && minLayerInclusive < LayerCount)
+            ? minLayerInclusive : 0;
+        const int maxLayer = (maxLayerExclusive >= 0 && maxLayerExclusive <= LayerCount)
+            ? maxLayerExclusive : LayerCount;
+        ubo[kMixerCfgBase + 0] = float(maxLayer);
+        ubo[kMixerCfgBase + 1] = float(minLayer);
+        ubo[kMixerCfgBase + 2] = 0.0f;
+        ubo[kMixerCfgBase + 3] = 0.0f;
+    }
 
     batch->updateDynamicBuffer(targetUbuf, 0, sizeof(ubo), ubo);
 }
@@ -1236,13 +1279,7 @@ void RhiMixerWidget::updateFeedbackUniformBuffer(QRhiResourceUpdateBatch* batch,
         return;
     }
     const auto& fb = m_layerFeedback[feedbackLayer];
-    bool keyFromAbove = false;
-    for (int i = feedbackLayer + 1; i < LayerCount; ++i) {
-        if (m_layerActive[i]) {
-            keyFromAbove = true;
-            break;
-        }
-    }
+    const bool keyFromAbove = feedbackKeyFromAboveActive();
     const float ubo[12] = {
         float(fb.strength), float(fb.saturation), float(fb.brightness), float(fb.contrast),
         float(fb.hueShift), float(fb.gamma), float(fb.rotationDeg), float(fb.zoom),
@@ -1279,16 +1316,19 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     const bool hasFilterChains = std::any_of(m_layerFilterChain.cbegin(), m_layerFilterChain.cend(),
                                              [](const auto& c) { return !c.isEmpty(); });
     const int F = m_activeFeedbackLayer;
-    const bool hasFeedback = (F >= 0 && F < LayerCount && m_layerIsFeedback[F] && m_layerActive[F]);
-    const bool useOffscreen = hasStage || hasFilterChains || hasFeedback;
+    const bool hasFeedback = hasActiveFeedbackLayer();
+    const bool useOffscreen = hasStage || hasFilterChains;
+    const bool useOffscreenScene = useOffscreen || hasFeedback;
+    const int mainMinLayer = 0;
+    const int mainMaxLayer = -1;
     QRhiResourceUpdateBatch* batch = r->nextResourceUpdateBatch();
     uploadFramesIfNeeded(batch);
-    updateMixerUniformBuffer(batch, -1);
     if (hasFilterChains) {
         ensureLayerFilterTargets(r, stagePx);
     }
 
-    if (!useOffscreen) {
+    if (!useOffscreenScene) {
+        updateMixerUniformBuffer(batch, -1, 0);
         rebuildMixerShaderResourceBindings();
         cb->beginPass(renderTarget(), clear, { 1.0f, 0 }, batch);
         batch = nullptr;
@@ -1363,7 +1403,7 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
 
     {
         QRhiResourceUpdateBatch* ubatch = r->nextResourceUpdateBatch();
-        updateMixerUniformBuffer(ubatch, -1);
+        updateMixerUniformBuffer(ubatch, mainMaxLayer, mainMinLayer);
         cb->resourceUpdate(ubatch);
     }
 
