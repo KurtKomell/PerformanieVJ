@@ -60,6 +60,11 @@ public:
     /// Weights for chroma/luma key filters (cell inspector key R / G / B), 0–1 each.
     void setLayerKeyChannels(int layer, float r, float g, float b);
 
+    /// Enable/disable feedback layer and set its parameters.
+    void setLayerFeedback(int layer, bool enabled, const pvj::core::FeedbackParams& p);
+    bool layerFeedbackEnabled(int layer) const;
+    pvj::core::FeedbackParams layerFeedback(int layer) const;
+
     /// Fixed "stage" resolution (in pixels) at which the internal mixer renders,
     /// independent of this widget's size. When set,
     /// the widget presents the stage texture letterboxed/pillarboxed onto its
@@ -81,15 +86,21 @@ protected:
 private:
     void releaseGpuResources();
     void releaseOffscreenGpuResources();
+    void releaseFeedbackGpuResources();
 
     bool ensureOffscreenSceneTargets(QRhi* r, const QSize& pixelSize);
     void ensurePresentPipelineForSwapchain(QRhi* r);
 
     void rebuildMixerShaderResourceBindings();
+    void rebuildBelowMixerShaderResourceBindings();
+    void rebuildFeedbackShaderResourceBindings(int feedbackLayer);
     void rebuildPresentShaderResourceBindings(QRhiTexture* sourceTex);
 
     void uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch);
-    void updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch);
+    void updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive = -1);
+    void updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batch,
+                                       int minLayerInclusive, int maxLayerExclusive);
+    void updateFeedbackUniformBuffer(QRhiResourceUpdateBatch* batch, int feedbackLayer);
     void updatePresentUniformBuffer(QRhiResourceUpdateBatch* batch, const QSize& widgetPx);
     void updateFilterUniformBuffer(QRhiResourceUpdateBatch* batch, QRhiBuffer* ubuf,
                                    const pvj::core::CellFilterNode& node, const QSize& pixelSize,
@@ -101,6 +112,18 @@ private:
     void runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int layer, QRhiTexture* firstSource,
                                 const QSize& stagePx, const QColor& clear,
                                 const QList<pvj::core::CellFilterNode>* chainOverride = nullptr);
+
+    bool ensureFeedbackTargets(QRhi* r, const QSize& pixelSize);
+    void runPartialMixerPass(QRhi* r, QRhiCommandBuffer* cb,
+                             int minLayerInclusive, int maxLayerExclusive,
+                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx, const QColor& clear);
+    void runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                         const QSize& stagePx, const QColor& clear);
+    void recomputeActiveFeedbackLayer();
+
+    QRhiTexture* feedbackWriteTexture() const;
+    QRhiTexture* feedbackReadTexture() const;
+    QRhiTextureRenderTarget* feedbackWriteRenderTarget() const;
 
     QRhiTexture* sourceTextureForLayer(int layer) const;
     QRhiTexture* filterOutputTextureForLayer(int layer) const;
@@ -123,6 +146,33 @@ private:
     std::array<QList<pvj::core::CellFilterNode>, LayerCount> m_layerFilterChain{};
     /// Per-layer RGB key weights for GPU key filters (defaults 1,1,1).
     std::array<std::array<float, 3>, LayerCount> m_layerKeyChannel{};
+
+  // Single-cell feedback state
+    int m_activeFeedbackLayer = -1;
+    std::array<bool, LayerCount> m_layerIsFeedback{};
+    std::array<pvj::core::FeedbackParams, LayerCount> m_layerFeedback{};
+    quint8 m_feedbackWriteIdx = 0;
+    QSize m_feedbackPixelSize;
+
+    std::array<std::unique_ptr<QRhiTexture>, 2> m_feedbackTex{};
+    std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2> m_feedbackRt{};
+    std::unique_ptr<QRhiRenderPassDescriptor> m_feedbackRp;
+    std::unique_ptr<QRhiBuffer> m_feedbackUbuf;
+    std::unique_ptr<QRhiShaderResourceBindings> m_feedbackSrb;
+    std::unique_ptr<QRhiGraphicsPipeline> m_feedbackPipeline;
+
+    std::unique_ptr<QRhiTexture> m_belowTex;
+    std::unique_ptr<QRhiTextureRenderTarget> m_belowRt;
+    std::unique_ptr<QRhiRenderPassDescriptor> m_belowRp;
+    std::unique_ptr<QRhiShaderResourceBindings> m_belowSrb;
+    std::unique_ptr<QRhiGraphicsPipeline> m_mixerBelowPipeline;
+    std::unique_ptr<QRhiBuffer> m_belowUbuf;
+
+    std::unique_ptr<QRhiTexture> m_aboveTex;
+    std::unique_ptr<QRhiTextureRenderTarget> m_aboveRt;
+
+    int m_mixerMinLayerInclusive = 0;
+    int m_mixerMaxLayerExclusive = -1;
 
     QElapsedTimer m_elapsed;
 

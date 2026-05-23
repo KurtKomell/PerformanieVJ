@@ -40,6 +40,7 @@
 namespace pvj::app {
 
 using pvj::core::CopyMode;
+using pvj::core::GeneratorKind;
 using pvj::core::KeyingMode;
 using pvj::core::LayerMatteRole;
 using pvj::core::MaskType;
@@ -450,6 +451,87 @@ void fillCopyModeCombo(QComboBox* cb)
     addCm(QObject::tr("Z Film"), CopyMode::ZFilm);
 }
 
+enum class VisualSourceKind : int {
+    Empty = 0,
+    Media = 1,
+    TestPattern = 2,
+    Solid = 3,
+    Spout = 4,
+    Ndi = 5,
+    Feedback = 6,
+};
+
+int visualSourceKindFromCell(const pvj::core::Cell& c)
+{
+    if (c.visual.type == VisualType::Empty) {
+        return int(VisualSourceKind::Empty);
+    }
+    if (c.visual.type == VisualType::Media) {
+        return int(VisualSourceKind::Media);
+    }
+    if (c.visual.type == VisualType::Generator) {
+        switch (c.visual.generator) {
+        case GeneratorKind::TestPattern: return int(VisualSourceKind::TestPattern);
+        case GeneratorKind::SolidColor: return int(VisualSourceKind::Solid);
+        case GeneratorKind::InputSpout: return int(VisualSourceKind::Spout);
+        case GeneratorKind::InputNdi: return int(VisualSourceKind::Ndi);
+        case GeneratorKind::InternalFeedback: return int(VisualSourceKind::Feedback);
+        default: break;
+        }
+    }
+    return int(VisualSourceKind::Empty);
+}
+
+void applyVisualSourceKind(pvj::core::Cell& c, int kind)
+{
+    switch (static_cast<VisualSourceKind>(kind)) {
+    case VisualSourceKind::Empty:
+        c.visual.type = VisualType::Empty;
+        c.visual.generator = GeneratorKind::None;
+        c.visual.mediaId = {};
+        break;
+    case VisualSourceKind::Media:
+        c.visual.type = VisualType::Media;
+        c.visual.generator = GeneratorKind::None;
+        break;
+    case VisualSourceKind::TestPattern:
+        c.visual.type = VisualType::Generator;
+        c.visual.generator = GeneratorKind::TestPattern;
+        c.visual.mediaId = {};
+        break;
+    case VisualSourceKind::Solid:
+        c.visual.type = VisualType::Generator;
+        c.visual.generator = GeneratorKind::SolidColor;
+        c.visual.mediaId = {};
+        break;
+    case VisualSourceKind::Spout:
+        c.visual.type = VisualType::Generator;
+        c.visual.generator = GeneratorKind::InputSpout;
+        c.visual.mediaId = {};
+        break;
+    case VisualSourceKind::Ndi:
+        c.visual.type = VisualType::Generator;
+        c.visual.generator = GeneratorKind::InputNdi;
+        c.visual.mediaId = {};
+        break;
+    case VisualSourceKind::Feedback:
+        c.visual.type = VisualType::Generator;
+        c.visual.generator = GeneratorKind::InternalFeedback;
+        c.visual.mediaId = {};
+        break;
+    }
+}
+
+int signedToSlider(double v, double minV, double maxV)
+{
+    return rangeToSlider(v, minV, maxV);
+}
+
+double sliderToSigned(int s, double minV, double maxV)
+{
+    return sliderToRange(s, minV, maxV);
+}
+
 } // namespace
 
 ParameterInspector::ParameterInspector(QWidget* parent)
@@ -461,6 +543,7 @@ ParameterInspector::ParameterInspector(QWidget* parent)
     addTab(buildVisualTab(), tr("Visual"));
     addTab(buildTransitionTab(), tr("Transition"));
     addTab(buildMixingTab(), tr("Mixing"));
+    addTab(buildFeedbackTab(), tr("Feedback"));
     addTab(buildPositionTab(), tr("Position"));
     addTab(buildOutputTab(), tr("Output"));
 
@@ -527,6 +610,25 @@ QWidget* ParameterInspector::buildVisualTab()
         vh->addStretch(1);
         topGrid->addWidget(visRow, 0, 1);
         stdLay->addWidget(top);
+    }
+
+    {
+        auto* srcRow = new QWidget(m_visualStandardSection);
+        auto* srcGrid = new QGridLayout(srcRow);
+        srcGrid->setColumnStretch(1, 1);
+        srcGrid->addWidget(new QLabel(tr("Source"), srcRow), 0, 0, Qt::AlignRight | Qt::AlignVCenter);
+        m_visualSourceCombo = new QComboBox(srcRow);
+        m_visualSourceCombo->addItem(tr("Empty"), int(VisualSourceKind::Empty));
+        m_visualSourceCombo->addItem(tr("Media clip"), int(VisualSourceKind::Media));
+        m_visualSourceCombo->addItem(tr("Test pattern"), int(VisualSourceKind::TestPattern));
+        m_visualSourceCombo->addItem(tr("Solid color"), int(VisualSourceKind::Solid));
+        m_visualSourceCombo->addItem(tr("Spout"), int(VisualSourceKind::Spout));
+        m_visualSourceCombo->addItem(tr("NDI"), int(VisualSourceKind::Ndi));
+        m_visualSourceCombo->addItem(tr("Feedback"), int(VisualSourceKind::Feedback));
+        connect(m_visualSourceCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, &ParameterInspector::onVisualSourceChanged);
+        srcGrid->addWidget(m_visualSourceCombo, 0, 1);
+        stdLay->addWidget(srcRow);
     }
 
     m_visualLabel = new QLabel(tr("(no cell selected)"), m_visualStandardSection);
@@ -1082,6 +1184,64 @@ QWidget* ParameterInspector::buildMixingTab()
     return host;
 }
 
+QWidget* ParameterInspector::buildFeedbackTab()
+{
+    auto* host = new QWidget(this);
+    auto* root = new QVBoxLayout(host);
+    root->setSpacing(10);
+
+    auto addSliderRow = [&](const QString& title, QSlider** sliderOut, QLabel** valueOut,
+                            auto slot) {
+        auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(title), host);
+        root->addWidget(lab);
+        auto* row = new QWidget(host);
+        auto* h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        *sliderOut = new QSlider(Qt::Horizontal, row);
+        (*sliderOut)->setRange(0, kUnitSliderMax);
+        (*sliderOut)->setSingleStep(10);
+        (*sliderOut)->setPageStep(50);
+        *valueOut = new QLabel(formatUnit(0.0), row);
+        (*valueOut)->setMinimumWidth(48);
+        (*valueOut)->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        connect(*sliderOut, &QSlider::valueChanged, this, slot);
+        h->addWidget(*sliderOut, 1);
+        h->addWidget(*valueOut);
+        root->addWidget(row);
+    };
+
+    addSliderRow(tr("Strength"), &m_feedbackStrengthSlider, &m_feedbackStrengthValue,
+                 &ParameterInspector::onFeedbackStrengthChanged);
+    addSliderRow(tr("Saturation"), &m_feedbackSaturationSlider, &m_feedbackSaturationValue,
+                 &ParameterInspector::onFeedbackSaturationChanged);
+    addSliderRow(tr("Brightness"), &m_feedbackBrightnessSlider, &m_feedbackBrightnessValue,
+                 &ParameterInspector::onFeedbackBrightnessChanged);
+    addSliderRow(tr("Contrast"), &m_feedbackContrastSlider, &m_feedbackContrastValue,
+                 &ParameterInspector::onFeedbackContrastChanged);
+    addSliderRow(tr("Hue"), &m_feedbackHueShiftSlider, &m_feedbackHueShiftValue,
+                 &ParameterInspector::onFeedbackHueShiftChanged);
+    addSliderRow(tr("Gamma"), &m_feedbackGammaSlider, &m_feedbackGammaValue,
+                 &ParameterInspector::onFeedbackGammaChanged);
+
+    {
+        auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Rotation")), host);
+        root->addWidget(lab);
+        m_feedbackRotation = new QDoubleSpinBox(host);
+        m_feedbackRotation->setRange(-180.0, 180.0);
+        m_feedbackRotation->setDecimals(1);
+        m_feedbackRotation->setSuffix(QStringLiteral(" deg"));
+        connect(m_feedbackRotation, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, &ParameterInspector::onFeedbackRotationChanged);
+        root->addWidget(m_feedbackRotation);
+    }
+
+    addSliderRow(tr("Zoom"), &m_feedbackZoomSlider, &m_feedbackZoomValue,
+                 &ParameterInspector::onFeedbackZoomChanged);
+
+    root->addStretch(1);
+    return host;
+}
+
 QWidget* ParameterInspector::buildPositionTab()
 {
     auto* host = new QWidget(this);
@@ -1392,6 +1552,15 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b19(m_keyRangeSlider);
     QSignalBlocker b20(m_keyChromaRangeSlider);
     QSignalBlocker b33(m_preferredLayerCombo);
+    QSignalBlocker b34(m_visualSourceCombo);
+    QSignalBlocker b35(m_feedbackStrengthSlider);
+    QSignalBlocker b36(m_feedbackSaturationSlider);
+    QSignalBlocker b37(m_feedbackBrightnessSlider);
+    QSignalBlocker b38(m_feedbackContrastSlider);
+    QSignalBlocker b39(m_feedbackHueShiftSlider);
+    QSignalBlocker b40(m_feedbackGammaSlider);
+    QSignalBlocker b41(m_feedbackRotation);
+    QSignalBlocker b42(m_feedbackZoomSlider);
 
     auto* cell = currentCell();
     const bool hasCell = (cell != nullptr);
@@ -1475,6 +1644,19 @@ void ParameterInspector::refreshFromCell()
     if (m_preferredLayerCombo) {
         m_preferredLayerCombo->setEnabled(hasCell);
     }
+    for (auto* w : {static_cast<QWidget*>(m_visualSourceCombo),
+                     static_cast<QWidget*>(m_feedbackStrengthSlider),
+                     static_cast<QWidget*>(m_feedbackSaturationSlider),
+                     static_cast<QWidget*>(m_feedbackBrightnessSlider),
+                     static_cast<QWidget*>(m_feedbackContrastSlider),
+                     static_cast<QWidget*>(m_feedbackHueShiftSlider),
+                     static_cast<QWidget*>(m_feedbackGammaSlider),
+                     static_cast<QWidget*>(m_feedbackRotation),
+                     static_cast<QWidget*>(m_feedbackZoomSlider)}) {
+        if (w) {
+            w->setEnabled(hasCell);
+        }
+    }
 
     if (!hasCell) {
         m_visualLabel->setText(tr("(no cell selected)"));
@@ -1553,8 +1735,21 @@ void ParameterInspector::refreshFromCell()
         if (m_preferredLayerCombo) {
             m_preferredLayerCombo->setCurrentIndex(4);
         }
+        if (m_visualSourceCombo) {
+            m_visualSourceCombo->setCurrentIndex(0);
+        }
         m_loading = false;
         return;
+    }
+
+    if (m_visualSourceCombo) {
+        const int kind = visualSourceKindFromCell(*cell);
+        for (int i = 0; i < m_visualSourceCombo->count(); ++i) {
+            if (m_visualSourceCombo->itemData(i).toInt() == kind) {
+                m_visualSourceCombo->setCurrentIndex(i);
+                break;
+            }
+        }
     }
 
     QString visualText;
@@ -1662,12 +1857,119 @@ void ParameterInspector::refreshFromCell()
     const int presetIdx = qBound(0, cell->props.mixingPresetIndex, m_mixingPreset->count() - 1);
     m_mixingPreset->setCurrentIndex(presetIdx);
 
+    if (m_feedbackStrengthSlider) {
+        m_feedbackStrengthSlider->setValue(unitToSlider(cell->props.feedback.strength));
+        m_feedbackStrengthValue->setText(formatUnit(cell->props.feedback.strength));
+    }
+    if (m_feedbackSaturationSlider) {
+        m_feedbackSaturationSlider->setValue(rangeToSlider(cell->props.feedback.saturation, 0.0, 2.0));
+        m_feedbackSaturationValue->setText(formatUnit(cell->props.feedback.saturation));
+    }
+    if (m_feedbackBrightnessSlider) {
+        m_feedbackBrightnessSlider->setValue(signedToSlider(cell->props.feedback.brightness, -1.0, 1.0));
+        m_feedbackBrightnessValue->setText(formatSignedUnit(cell->props.feedback.brightness));
+    }
+    if (m_feedbackContrastSlider) {
+        m_feedbackContrastSlider->setValue(rangeToSlider(cell->props.feedback.contrast, 0.0, 2.0));
+        m_feedbackContrastValue->setText(formatUnit(cell->props.feedback.contrast));
+    }
+    if (m_feedbackHueShiftSlider) {
+        m_feedbackHueShiftSlider->setValue(signedToSlider(cell->props.feedback.hueShift, -1.0, 1.0));
+        m_feedbackHueShiftValue->setText(formatSignedUnit(cell->props.feedback.hueShift));
+    }
+    if (m_feedbackGammaSlider) {
+        m_feedbackGammaSlider->setValue(rangeToSlider(cell->props.feedback.gamma, 0.1, 4.0));
+        m_feedbackGammaValue->setText(formatUnit(cell->props.feedback.gamma));
+    }
+    if (m_feedbackRotation) {
+        m_feedbackRotation->setValue(cell->props.feedback.rotationDeg);
+    }
+    if (m_feedbackZoomSlider) {
+        m_feedbackZoomSlider->setValue(signedToSlider(cell->props.feedback.zoom, -1.0, 1.0));
+        m_feedbackZoomValue->setText(formatSignedUnit(cell->props.feedback.zoom));
+    }
+
     m_loading = false;
 }
 
 void ParameterInspector::emitChanged()
 {
     emit cellChanged(m_bankSetIndex, m_bankIndex, m_cellIndex);
+}
+
+void ParameterInspector::onVisualSourceChanged(int /*idx*/)
+{
+    if (m_loading || !m_visualSourceCombo) {
+        return;
+    }
+    auto* c = currentCell();
+    if (!c) {
+        return;
+    }
+    applyVisualSourceKind(*c, m_visualSourceCombo->currentData().toInt());
+    emitChanged();
+}
+
+void ParameterInspector::onFeedbackStrengthChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_feedbackStrengthValue) m_feedbackStrengthValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.strength = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackSaturationChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToRange(v, 0.0, 2.0);
+    if (m_feedbackSaturationValue) m_feedbackSaturationValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.saturation = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackBrightnessChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToSigned(v, -1.0, 1.0);
+    if (m_feedbackBrightnessValue) m_feedbackBrightnessValue->setText(formatSignedUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.brightness = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackContrastChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToRange(v, 0.0, 2.0);
+    if (m_feedbackContrastValue) m_feedbackContrastValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.contrast = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackHueShiftChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToSigned(v, -1.0, 1.0);
+    if (m_feedbackHueShiftValue) m_feedbackHueShiftValue->setText(formatSignedUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.hueShift = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackGammaChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToRange(v, 0.1, 4.0);
+    if (m_feedbackGammaValue) m_feedbackGammaValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.gamma = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackRotationChanged(double v)
+{
+    if (m_loading) return;
+    if (auto* c = currentCell()) { c->props.feedback.rotationDeg = v; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackZoomChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToSigned(v, -1.0, 1.0);
+    if (m_feedbackZoomValue) m_feedbackZoomValue->setText(formatSignedUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.zoom = u; emitChanged(); }
 }
 
 void ParameterInspector::onMixingPresetChanged(int idx)
@@ -2259,6 +2561,14 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_keyRSlider, QStringLiteral("keyChannelR"));
     tagMidiWidget(m_keyGSlider, QStringLiteral("keyChannelG"));
     tagMidiWidget(m_keyBSlider, QStringLiteral("keyChannelB"));
+    tagMidiWidget(m_feedbackStrengthSlider, QStringLiteral("feedbackStrength"));
+    tagMidiWidget(m_feedbackSaturationSlider, QStringLiteral("feedbackSaturation"));
+    tagMidiWidget(m_feedbackBrightnessSlider, QStringLiteral("feedbackBrightness"));
+    tagMidiWidget(m_feedbackContrastSlider, QStringLiteral("feedbackContrast"));
+    tagMidiWidget(m_feedbackHueShiftSlider, QStringLiteral("feedbackHueShift"));
+    tagMidiWidget(m_feedbackGammaSlider, QStringLiteral("feedbackGamma"));
+    tagMidiWidget(m_feedbackRotation, QStringLiteral("feedbackRotationDeg"));
+    tagMidiWidget(m_feedbackZoomSlider, QStringLiteral("feedbackZoom"));
 }
 
 void ParameterInspector::showMidiContextMenu(QWidget* w, const QPoint& globalPos)

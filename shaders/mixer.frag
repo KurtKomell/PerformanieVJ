@@ -352,7 +352,12 @@ void main()
     vec3 dst = kBg;
     bool hasBase = false;
 
+    int minLayer = int(ubuf.mixerCfg.y + 0.5);
+    int maxLayer = int(ubuf.mixerCfg.x + 0.5);
+    if (maxLayer <= 0) maxLayer = 12;
+
     for (int i = 0; i < 12; i++) {
+        if (i < minLayer || i >= maxLayer) continue;
         vec4 lp = ubuf.layers[i];
         if (lp.z < 0.5) {
             continue;

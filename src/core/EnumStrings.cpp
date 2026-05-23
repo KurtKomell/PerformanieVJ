@@ -229,6 +229,7 @@ QString toString(GeneratorKind g)
     case GeneratorKind::InputNdi:       return QStringLiteral("inputNdi");
     case GeneratorKind::SolidColor:     return QStringLiteral("solidColor");
     case GeneratorKind::TestPattern:    return QStringLiteral("testPattern");
+    case GeneratorKind::InternalFeedback: return QStringLiteral("internalFeedback");
     }
     return QStringLiteral("none");
 }
@@ -242,6 +243,7 @@ GeneratorKind generatorFromString(const QString& s, GeneratorKind fallback)
     if (k == QLatin1String("inputndi"))       return GeneratorKind::InputNdi;
     if (k == QLatin1String("solidcolor"))     return GeneratorKind::SolidColor;
     if (k == QLatin1String("testpattern"))    return GeneratorKind::TestPattern;
+    if (k == QLatin1String("internalfeedback")) return GeneratorKind::InternalFeedback;
     return fallback;
 }
 

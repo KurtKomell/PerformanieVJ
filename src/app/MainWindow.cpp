@@ -1048,7 +1048,12 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
     if (cellIndex >= bank.cells.size()) return;
 
     const auto& cell = bank.cells[cellIndex];
-    if (cell.visual.type != VisualType::Media || cell.visual.mediaId.isNull()) {
+    const bool isFeedbackCell = cell.visual.type == VisualType::Generator
+        && cell.visual.generator == GeneratorKind::InternalFeedback;
+    const bool isPlayableMedia = cell.visual.type == VisualType::Media
+        && !cell.visual.mediaId.isNull();
+
+    if (!isPlayableMedia && !isFeedbackCell) {
         const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
         if (layer < 0) {
             refreshPreviewForSelectedCell();
@@ -1073,7 +1078,7 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
         return;
     }
 
-    // Left-click toggle: same clip already on the mixer → stop (aus).
+    // Left-click toggle: same cell already on the mixer → stop.
     const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
     if (playingLayer >= 0) {
         m_audioDecoders[playingLayer]->close();
@@ -1096,6 +1101,31 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
     }
 
     const int layer = pickMixSlotForTrigger(bankSetIndex, bankIndex, cellIndex);
+
+    if (isFeedbackCell) {
+        m_audioDecoders[layer]->close();
+        if (m_audioEngine) {
+            m_audioEngine->setLayerActive(layer, false);
+        }
+        m_decoders[layer]->stop();
+        m_previewB->clearFrame(layer);
+        m_lastFrames[static_cast<size_t>(layer)] = QImage();
+        if (m_fullscreenOut) {
+            m_fullscreenOut->mixerWidget()->clearFrame(layer);
+        }
+        if (m_clipPeekLayer == layer) {
+            clearClipPeek();
+        }
+        m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
+        if (cell.props.fade > 1e-6) {
+            startLayerFadeIn(layer, float(cell.props.transparency), float(cell.props.fade));
+        } else {
+            updateMixerFromPlayingCells();
+        }
+        refreshPreviewForSelectedCell();
+        return;
+    }
+
     for (const auto& m : m_project->mediaLibrary) {
         if (m.id == cell.visual.mediaId) {
             m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
@@ -1193,9 +1223,30 @@ void MainWindow::updateMixerFromPlayingCells()
 {
     for (int i = 0; i < kMixLayers; ++i) {
         const Cell* c = cellAtDeck(m_layerSlots[i]);
+        const bool isFeedbackCell = c
+            && c->visual.type == VisualType::Generator
+            && c->visual.generator == GeneratorKind::InternalFeedback;
         const bool mediaSource = c
             && c->visual.type == VisualType::Media
             && !c->visual.mediaId.isNull();
+        if (isFeedbackCell) {
+            m_previewB->setLayerActive(i, true);
+            m_previewB->setLayerCopyMode(i, c->props.copyMode);
+            m_previewB->setLayerMatteRole(i, c->props.matteRole);
+            m_previewB->setLayerPicture(i, c->props.picture);
+            m_previewB->setLayerFilterChain(i, effectiveFilterChainForMixer(c));
+            m_previewB->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),
+                                            float(c->props.keyChannelB));
+            if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
+                m_previewB->setLayerOpacity(i, float(c->props.transparency));
+            }
+            m_previewB->setLayerFeedback(i, true, c->props.feedback);
+            if (m_audioEngine) {
+                m_audioEngine->setLayerActive(i, false);
+            }
+            continue;
+        }
+        m_previewB->setLayerFeedback(i, false, {});
         if (!c || !mediaSource) {
             if (m_mixerSlotHadMedia[static_cast<size_t>(i)]) {
                 m_decoders[i]->stop();
@@ -1404,6 +1455,7 @@ void MainWindow::syncMixerToFullscreen()
             dst->clearFrame(i);
         }
         dst->setLayerPicture(i, src->layerPicture(i));
+        dst->setLayerFeedback(i, src->layerFeedbackEnabled(i), src->layerFeedback(i));
         if (const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(i)])) {
             dst->setLayerFilterChain(i, effectiveFilterChainForMixer(c));
             dst->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),

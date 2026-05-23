@@ -28,6 +28,7 @@ enum class GeneratorKind {
     InputNdi,
     SolidColor,
     TestPattern,
+    InternalFeedback,
 };
 
 // Blend / copy modes. Values 0–7 are legacy; 8+ mirror TouchDesigner Composite TOP
@@ -187,6 +188,17 @@ struct PictureParams {
     double circularMotion = 0.0; // 0 .. 1 (strength of circular drift)
 };
 
+struct FeedbackParams {
+    double strength    = 0.5;   // 0..1 blend amount
+    double saturation  = 1.0;   // 0..2 history saturation
+    double brightness  = 0.0;   // -1..1 history brightness
+    double contrast    = 1.0;   // 0..2 history contrast
+    double hueShift    = 0.0;   // -1..1 hue rotate per frame
+    double gamma       = 1.0;   // 0.1..4 history gamma
+    double rotationDeg = 0.0;   // -180..180 history rotation per frame
+    double zoom        = 0.0;   // -1..1 history zoom per frame
+};
+
 struct CellProps {
     int     priority      = 0;
     double  transparency  = 1.0;
@@ -245,6 +257,7 @@ struct CellProps {
     QString  overlayText;
     QString  tcStart         = QStringLiteral("00:00:00:00");
     PictureParams  picture;
+    FeedbackParams feedback;
 };
 
 struct VisualRef {

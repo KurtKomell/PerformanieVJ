@@ -110,12 +110,23 @@ private slots:
     void onOverlayTextEdited(const QString& t);
     void onTcStartEdited(const QString& t);
 
+    void onVisualSourceChanged(int idx);
+    void onFeedbackStrengthChanged(int v);
+    void onFeedbackSaturationChanged(int v);
+    void onFeedbackBrightnessChanged(int v);
+    void onFeedbackContrastChanged(int v);
+    void onFeedbackHueShiftChanged(int v);
+    void onFeedbackGammaChanged(int v);
+    void onFeedbackRotationChanged(double v);
+    void onFeedbackZoomChanged(int v);
+
 private:
     void rebuildScreenList();
 
     QWidget* buildVisualTab();
     QWidget* buildTransitionTab();
     QWidget* buildMixingTab();
+    QWidget* buildFeedbackTab();
     QWidget* buildPositionTab();
     QWidget* buildOutputTab();
 
@@ -143,6 +154,7 @@ private:
     bool m_midiMappingEditMode = false;
 
     QLabel*               m_visualLabel    = nullptr;
+    QComboBox*            m_visualSourceCombo = nullptr;
     VisualThumbnailLabel* m_visualThumb    = nullptr;
     QToolButton*    m_visualPrevBtn  = nullptr;
     QToolButton*    m_visualNextBtn  = nullptr;
@@ -215,6 +227,22 @@ private:
     QWidget*        m_keyRRow = nullptr;
     QWidget*        m_keyGRow = nullptr;
     QWidget*        m_keyBRow = nullptr;
+
+    QSlider*        m_feedbackStrengthSlider = nullptr;
+    QLabel*         m_feedbackStrengthValue = nullptr;
+    QSlider*        m_feedbackSaturationSlider = nullptr;
+    QLabel*         m_feedbackSaturationValue = nullptr;
+    QSlider*        m_feedbackBrightnessSlider = nullptr;
+    QLabel*         m_feedbackBrightnessValue = nullptr;
+    QSlider*        m_feedbackContrastSlider = nullptr;
+    QLabel*         m_feedbackContrastValue = nullptr;
+    QSlider*        m_feedbackHueShiftSlider = nullptr;
+    QLabel*         m_feedbackHueShiftValue = nullptr;
+    QSlider*        m_feedbackGammaSlider = nullptr;
+    QLabel*         m_feedbackGammaValue = nullptr;
+    QDoubleSpinBox* m_feedbackRotation = nullptr;
+    QSlider*        m_feedbackZoomSlider = nullptr;
+    QLabel*         m_feedbackZoomValue = nullptr;
 
     QComboBox*      m_outputScreen   = nullptr;
     QPushButton*    m_fullscreenBtn  = nullptr;

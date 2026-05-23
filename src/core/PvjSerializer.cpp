@@ -80,6 +80,28 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     w.writeAttribute(QStringLiteral("circularMotion"), QString::number(p.picture.circularMotion, 'g', 6));
     w.writeEndElement();
 
+    const FeedbackParams fbDefault;
+    const bool fbNonDefault = p.feedback.strength != fbDefault.strength
+        || p.feedback.saturation != fbDefault.saturation
+        || p.feedback.brightness != fbDefault.brightness
+        || p.feedback.contrast != fbDefault.contrast
+        || p.feedback.hueShift != fbDefault.hueShift
+        || p.feedback.gamma != fbDefault.gamma
+        || p.feedback.rotationDeg != fbDefault.rotationDeg
+        || p.feedback.zoom != fbDefault.zoom;
+    if (fbNonDefault) {
+        w.writeStartElement(QStringLiteral("Feedback"));
+        w.writeAttribute(QStringLiteral("strength"),    QString::number(p.feedback.strength,    'g', 6));
+        w.writeAttribute(QStringLiteral("saturation"),  QString::number(p.feedback.saturation,  'g', 6));
+        w.writeAttribute(QStringLiteral("brightness"),  QString::number(p.feedback.brightness,  'g', 6));
+        w.writeAttribute(QStringLiteral("contrast"),    QString::number(p.feedback.contrast,    'g', 6));
+        w.writeAttribute(QStringLiteral("hueShift"),   QString::number(p.feedback.hueShift,   'g', 6));
+        w.writeAttribute(QStringLiteral("gamma"),       QString::number(p.feedback.gamma,       'g', 6));
+        w.writeAttribute(QStringLiteral("rotationDeg"), QString::number(p.feedback.rotationDeg, 'g', 6));
+        w.writeAttribute(QStringLiteral("zoom"),        QString::number(p.feedback.zoom,        'g', 6));
+        w.writeEndElement();
+    }
+
     w.writeEndElement();
 }
 
@@ -201,7 +223,15 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.picture.brightness == 0.0
             && c.props.picture.contrast == 1.0
             && c.props.picture.saturation == 1.0
-            && c.props.picture.circularMotion == 0.0;
+            && c.props.picture.circularMotion == 0.0
+            && c.props.feedback.strength == 0.5
+            && c.props.feedback.saturation == 1.0
+            && c.props.feedback.brightness == 0.0
+            && c.props.feedback.contrast == 1.0
+            && c.props.feedback.hueShift == 0.0
+            && c.props.feedback.gamma == 1.0
+            && c.props.feedback.rotationDeg == 0.0
+            && c.props.feedback.zoom == 0.0;
         if (isDefault) {
             continue;
         }
@@ -452,6 +482,18 @@ CellProps readProps(QXmlStreamReader& r)
             }
             r.skipCurrentElement();
         } else if (r.name() == QLatin1String("Feedback")) {
+            const auto fbAttrs = r.attributes();
+            auto rd = [&](const char* k, double def) {
+                return fbAttrs.hasAttribute(k) ? fbAttrs.value(k).toDouble() : def;
+            };
+            p.feedback.strength    = rd("strength", 0.5);
+            p.feedback.saturation  = rd("saturation", 1.0);
+            p.feedback.brightness  = rd("brightness", 0.0);
+            p.feedback.contrast    = rd("contrast", 1.0);
+            p.feedback.hueShift    = rd("hueShift", 0.0);
+            p.feedback.gamma       = rd("gamma", 1.0);
+            p.feedback.rotationDeg = rd("rotationDeg", 0.0);
+            p.feedback.zoom        = rd("zoom", 0.0);
             r.skipCurrentElement();
         } else {
             r.skipCurrentElement();

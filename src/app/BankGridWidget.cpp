@@ -673,7 +673,11 @@ void BankGridWidget::updateCellVisuals(bool reloadThumbnails)
             }
         } else if (cell.visual.type == VisualType::Generator) {
             has = true;
-            label = tr("GEN");
+            if (cell.visual.generator == pvj::core::GeneratorKind::InternalFeedback) {
+                label = tr("FB");
+            } else {
+                label = tr("GEN");
+            }
         }
         btn->setCellState(has, label);
         btn->setMidiMapMode(m_midiMappingEditMode);
