@@ -78,10 +78,14 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     w.writeAttribute(QStringLiteral("contrast"),       QString::number(p.picture.contrast,       'g', 6));
     w.writeAttribute(QStringLiteral("saturation"),     QString::number(p.picture.saturation,     'g', 6));
     w.writeAttribute(QStringLiteral("circularMotion"), QString::number(p.picture.circularMotion, 'g', 6));
+    if (p.picture.wrapMode != WrapMode::Clamp) {
+        w.writeAttribute(QStringLiteral("wrapMode"), enums::toString(p.picture.wrapMode));
+    }
     w.writeEndElement();
 
     const FeedbackParams fbDefault;
-    const bool fbNonDefault = p.feedback.strength != fbDefault.strength
+    const bool fbNonDefault = p.feedback.loopRetention != fbDefault.loopRetention
+        || p.feedback.liveInject != fbDefault.liveInject
         || p.feedback.saturation != fbDefault.saturation
         || p.feedback.brightness != fbDefault.brightness
         || p.feedback.contrast != fbDefault.contrast
@@ -89,10 +93,12 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         || p.feedback.gamma != fbDefault.gamma
         || p.feedback.rotationDeg != fbDefault.rotationDeg
         || p.feedback.zoom != fbDefault.zoom
-        || p.feedback.inputMode != fbDefault.inputMode;
+        || p.feedback.inputMode != fbDefault.inputMode
+        || p.feedback.wrapMode != fbDefault.wrapMode;
     if (fbNonDefault) {
         w.writeStartElement(QStringLiteral("Feedback"));
-        w.writeAttribute(QStringLiteral("strength"),    QString::number(p.feedback.strength,    'g', 6));
+        w.writeAttribute(QStringLiteral("loopRetention"), QString::number(p.feedback.loopRetention, 'g', 6));
+        w.writeAttribute(QStringLiteral("liveInject"),    QString::number(p.feedback.liveInject,    'g', 6));
         w.writeAttribute(QStringLiteral("saturation"),  QString::number(p.feedback.saturation,  'g', 6));
         w.writeAttribute(QStringLiteral("brightness"),  QString::number(p.feedback.brightness,  'g', 6));
         w.writeAttribute(QStringLiteral("contrast"),    QString::number(p.feedback.contrast,    'g', 6));
@@ -103,6 +109,9 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         if (p.feedback.inputMode != fbDefault.inputMode) {
             w.writeAttribute(QStringLiteral("inputMode"),
                              enums::toString(p.feedback.inputMode));
+        }
+        if (p.feedback.wrapMode != fbDefault.wrapMode) {
+            w.writeAttribute(QStringLiteral("wrapMode"), enums::toString(p.feedback.wrapMode));
         }
         w.writeEndElement();
     }
@@ -209,6 +218,7 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.keyChannelG == 1.0
             && c.props.keyChannelB == 1.0
             && c.props.keyingMode == KeyingMode::Luma
+            && !c.props.keyingEnabled
             && c.props.keyLumaCenter == 0.5
             && !c.props.keyLumaInvert
             && c.props.keyThreshold == 0.25
@@ -229,7 +239,9 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.picture.contrast == 1.0
             && c.props.picture.saturation == 1.0
             && c.props.picture.circularMotion == 0.0
-            && c.props.feedback.strength == 0.5
+            && c.props.picture.wrapMode == WrapMode::Clamp
+            && c.props.feedback.loopRetention == 0.85
+            && c.props.feedback.liveInject == 0.15
             && c.props.feedback.saturation == 1.0
             && c.props.feedback.brightness == 0.0
             && c.props.feedback.contrast == 1.0
@@ -237,7 +249,8 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.feedback.gamma == 1.0
             && c.props.feedback.rotationDeg == 0.0
             && c.props.feedback.zoom == 0.0
-            && c.props.feedback.inputMode == FeedbackInputMode::StackComposite;
+            && c.props.feedback.inputMode == FeedbackInputMode::StackComposite
+            && c.props.feedback.wrapMode == WrapMode::Black;
         if (isDefault) {
             continue;
         }
@@ -486,13 +499,27 @@ CellProps readProps(QXmlStreamReader& r)
             if (pictureAttrs.hasAttribute(QStringLiteral("circularMotion"))) {
                 p.picture.circularMotion = pictureAttrs.value(QStringLiteral("circularMotion")).toDouble();
             }
+            if (pictureAttrs.hasAttribute(QStringLiteral("wrapMode"))) {
+                p.picture.wrapMode = enums::wrapModeFromString(
+                    pictureAttrs.value(QStringLiteral("wrapMode")).toString());
+            }
             r.skipCurrentElement();
         } else if (r.name() == QLatin1String("Feedback")) {
             const auto fbAttrs = r.attributes();
             auto rd = [&](const char* k, double def) {
                 return fbAttrs.hasAttribute(k) ? fbAttrs.value(k).toDouble() : def;
             };
-            p.feedback.strength    = rd("strength", 0.5);
+            if (fbAttrs.hasAttribute(QStringLiteral("loopRetention"))) {
+                p.feedback.loopRetention = rd("loopRetention", 0.85);
+            } else if (fbAttrs.hasAttribute(QStringLiteral("strength"))) {
+                const double legacy = rd("strength", 0.5);
+                p.feedback.loopRetention = legacy;
+            }
+            if (fbAttrs.hasAttribute(QStringLiteral("liveInject"))) {
+                p.feedback.liveInject = rd("liveInject", 0.15);
+            } else if (fbAttrs.hasAttribute(QStringLiteral("strength"))) {
+                p.feedback.liveInject = 1.0 - rd("strength", 0.5);
+            }
             p.feedback.saturation  = rd("saturation", 1.0);
             p.feedback.brightness  = rd("brightness", 0.0);
             p.feedback.contrast    = rd("contrast", 1.0);
@@ -503,6 +530,10 @@ CellProps readProps(QXmlStreamReader& r)
             if (fbAttrs.hasAttribute(QStringLiteral("inputMode"))) {
                 p.feedback.inputMode = enums::feedbackInputModeFromString(
                     fbAttrs.value(QStringLiteral("inputMode")).toString());
+            }
+            if (fbAttrs.hasAttribute(QStringLiteral("wrapMode"))) {
+                p.feedback.wrapMode = enums::wrapModeFromString(
+                    fbAttrs.value(QStringLiteral("wrapMode")).toString(), WrapMode::Black);
             }
             r.skipCurrentElement();
         } else {

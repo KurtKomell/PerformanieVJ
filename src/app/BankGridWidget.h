@@ -22,6 +22,8 @@ class Project;
 
 namespace pvj::app {
 
+static constexpr int kMixSlotCount = 13;
+
 class CellButton;
 
 /// One occupied mix slot (which bank cell is feeding the mixer).
@@ -49,8 +51,8 @@ public:
     /// Updates inspector selection (subtle outline) and emits cellSelected (no trigger).
     void selectCell(int cellIndex);
 
-    /// Highlights cells that map to mix slots (blue glow in CellButton). Pass 12 entries (slot 0..11).
-    void setMixSlotPlayback(const std::array<MixSlotCellRef, 12>& mixSlotRefs);
+    /// Highlights cells that map to mix slots (blue glow in CellButton). Pass 13 entries (GPU layer 0..12).
+    void setMixSlotPlayback(const std::array<MixSlotCellRef, kMixSlotCount>& mixSlotRefs);
 
     /// Orange outline: cell shown in the large clip preview (right-click peek). Invalid ref = none.
     void setPeekCellHighlight(const MixSlotCellRef& ref);
@@ -115,7 +117,7 @@ private:
     QHash<QUuid, QVector<QImage>> m_filmCache;
     QSet<QUuid>          m_thumbPending;
 
-    std::array<MixSlotCellRef, 12> m_mixSlots{};
+    std::array<MixSlotCellRef, kMixSlotCount> m_mixSlots{};
     MixSlotCellRef m_peekRef{};
 
     bool m_midiMappingEditMode = false;

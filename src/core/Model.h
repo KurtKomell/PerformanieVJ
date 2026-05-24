@@ -179,6 +179,15 @@ struct CellFilterNode {
     QList<EffectParam> params;
 };
 
+/// UV border behaviour when coordinates leave [0, 1] (after zoom/rotation).
+enum class WrapMode : int {
+    Clamp      = 0,
+    Repeat     = 1,
+    Mirror     = 2,
+    MirrorOnce = 3,
+    Black      = 4,
+};
+
 struct PictureParams {
     double zoom           = 0.0; // -1 (out) .. +1 (in)
     double rotationDeg    = 0.0; // -180 .. +180
@@ -186,6 +195,7 @@ struct PictureParams {
     double contrast       = 1.0; // 0 .. 2
     double saturation     = 1.0; // 0 .. 2
     double circularMotion = 0.0; // 0 .. 1 (strength of circular drift)
+    WrapMode wrapMode     = WrapMode::Clamp;
 };
 
 /// Source image for the feedback accumulation pass.
@@ -196,15 +206,17 @@ enum class FeedbackInputMode : int {
 };
 
 struct FeedbackParams {
-    double strength    = 0.5;   // 0..1 blend amount
+    double loopRetention = 0.85; // 0..1 ping-pong: warped history weight
+    double liveInject    = 0.15; // 0..1 fresh source per frame
     double saturation  = 1.0;   // 0..2 history saturation
     double brightness  = 0.0;   // -1..1 history brightness
     double contrast    = 1.0;   // 0..2 history contrast
     double hueShift    = 0.0;   // -1..1 hue rotate per frame
     double gamma       = 1.0;   // 0.1..4 history gamma
-    double rotationDeg = 0.0;   // -180..180 history rotation per frame
+    double rotationDeg = 0.0;   // 0..360 history rotation per frame
     double zoom        = 0.0;   // -1..1 history zoom per frame
     FeedbackInputMode inputMode = FeedbackInputMode::StackComposite;
+    WrapMode wrapMode = WrapMode::Black;
 };
 
 struct CellProps {
@@ -233,7 +245,7 @@ struct CellProps {
     CopyMode copyMode     = CopyMode::Normal;
     /// Last Mixing preset row chosen in the inspector (0 = Custom).
     int     mixingPresetIndex = 0;
-    /// Preferred mixer layer slot (0..11 => UI 1..12).
+    /// Preferred mixer layer slot (0..11 => UI layers 1..12; GPU layer = +1).
     int preferredLayer = 4;
     /// Key/matte RGB weights (0–1, UI often shows as %). Reserved for GPU keying; defaults 1 = full.
     double  keyChannelR   = 1.0;
@@ -242,7 +254,7 @@ struct CellProps {
     /// Keying mode used by Mixing tab controls.
     KeyingMode keyingMode = KeyingMode::Luma;
     /// Enables/disables implicit keying from the Mixing tab.
-    bool    keyingEnabled = true;
+    bool    keyingEnabled = false;
     /// Luma key center (0 = black .. 1 = white).
     double  keyLumaCenter = 0.5;
     /// False = key black/dark, true = key white/bright.

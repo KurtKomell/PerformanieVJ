@@ -52,4 +52,8 @@ QString toString(FeedbackInputMode m);
 FeedbackInputMode feedbackInputModeFromString(const QString& s,
                                               FeedbackInputMode fallback = FeedbackInputMode::StackComposite);
 
+// WrapMode
+QString toString(WrapMode m);
+WrapMode wrapModeFromString(const QString& s, WrapMode fallback = WrapMode::Clamp);
+
 } // namespace pvj::core::enums

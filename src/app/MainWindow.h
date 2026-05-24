@@ -73,6 +73,7 @@ private slots:
     void onMediaActivated(const QString& absolutePath);
     void onMediaDroppedOnCell(int bankSetIndex, int bankIndex, int cellIndex, const QString& absolutePath);
     void onCellEdited(int bankSetIndex, int bankIndex, int cellIndex);
+    void onCellPlaybackChanged(int bankSetIndex, int bankIndex, int cellIndex);
     void onFullscreenOutputToggled();
     void onInspectorVisualSeekStep(int seconds);
     void onInspectorScratchApply();
@@ -119,6 +120,10 @@ private:
 
     void stopAllPlaybackAndClear();
     void playMediaOnLayer(int layer, const QString& path);
+    void stopMixLayer(int layer);
+    bool startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex, int cellIndex);
+    void reapplyPlayingCell(int bankSetIndex, int bankIndex, int cellIndex);
+    static bool cellIsPlayable(const pvj::core::Cell& cell);
 
     void assignMediaToCell(int bankSetIndex, int bankIndex, int cellIndex, const QString& absolutePath);
     void applyBankGridDimensions(int rows, int cols);
@@ -143,6 +148,7 @@ private:
 
     int findLayerPlayingCell(int bankSet, int bank, int cell) const;
     int pickMixSlotForTrigger(int bankSet, int bank, int cell);
+    static int gpuLayerFromPreferred(int preferredLayer);
     bool selectionMatchesSlot(const DeckSlot& s) const;
     void setupInputMapping();
     void tickLayerFade();
@@ -153,7 +159,10 @@ private:
 
     std::unique_ptr<pvj::core::Project> m_project;
 
-    static constexpr int kMixLayers = 12;
+    static constexpr int kMixLayers = 13;
+    static constexpr int kBackgroundLayer = 0;
+    static constexpr int kUserLayerMin = 1;
+    static constexpr int kUserLayerMax = 12;
     std::unique_ptr<pvj::audio::AudioEngine> m_audioEngine;
     std::array<std::unique_ptr<pvj::audio::FfmpegAudioDecoder>, kMixLayers> m_audioDecoders;
     std::array<std::unique_ptr<pvj::video::VideoDecoder>, kMixLayers> m_decoders;

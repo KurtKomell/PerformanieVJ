@@ -374,7 +374,7 @@ struct MixPreset {
 
 // Stored preset row index = combo index (0-based into this table).
 static const MixPreset kMixPresets[] = {
-    { CopyMode::Normal, MaskType::None, KeyingMode::Luma, true, false, 0.50, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 }, // Default
+    { CopyMode::Normal, MaskType::None, KeyingMode::Luma, false, false, 0.50, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 }, // Default
     { CopyMode::Normal, MaskType::None, KeyingMode::Luma, true, false, 0.20, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 }, // Reject Black
     { CopyMode::Normal, MaskType::None, KeyingMode::Luma, true, true, 0.80, false, 0.33, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0 },  // Reject White
     { CopyMode::Normal, MaskType::None, KeyingMode::Chroma, true, false, 0.50, true, 0.00, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 }, // Reject Red
@@ -389,6 +389,19 @@ static const MixPreset kMixPresets[] = {
 };
 
 constexpr int kMixPresetCount = int(sizeof(kMixPresets) / sizeof(kMixPresets[0]));
+
+void fillWrapModeCombo(QComboBox* cb)
+{
+    if (!cb) {
+        return;
+    }
+    cb->clear();
+    cb->addItem(QObject::tr("Clamp"), int(pvj::core::WrapMode::Clamp));
+    cb->addItem(QObject::tr("Repeat"), int(pvj::core::WrapMode::Repeat));
+    cb->addItem(QObject::tr("Mirror"), int(pvj::core::WrapMode::Mirror));
+    cb->addItem(QObject::tr("Mirror once"), int(pvj::core::WrapMode::MirrorOnce));
+    cb->addItem(QObject::tr("Black"), int(pvj::core::WrapMode::Black));
+}
 
 void fillCopyModeCombo(QComboBox* cb)
 {
@@ -533,6 +546,15 @@ double sliderToSigned(int s, double minV, double maxV)
     return sliderToRange(s, minV, maxV);
 }
 
+double normalizeDegrees360(double deg)
+{
+    double r = std::fmod(deg, 360.0);
+    if (r < 0.0) {
+        r += 360.0;
+    }
+    return r;
+}
+
 } // namespace
 
 ParameterInspector::ParameterInspector(QWidget* parent)
@@ -547,6 +569,12 @@ ParameterInspector::ParameterInspector(QWidget* parent)
     m_feedbackTabIndex = addTab(buildFeedbackTab(), tr("Feedback"));
     addTab(buildPositionTab(), tr("Position"));
     addTab(buildOutputTab(), tr("Output"));
+
+    connect(this, &QTabWidget::currentChanged, this, [this](int) {
+        const auto* cell = currentCell();
+        const int kind = cell ? visualSourceKindFromCell(*cell) : int(VisualSourceKind::Empty);
+        syncKeyingPanelPlacement(cell != nullptr, kind);
+    });
 
     rebuildScreenList();
 
@@ -687,6 +715,7 @@ QWidget* ParameterInspector::buildVisualTab()
         m_pauseClipBtn->setToolTip(tr("Pause / resume this clip when it is on a mix layer"));
         connect(m_speedSlider, &QSlider::valueChanged,
                 this, &ParameterInspector::onMovieSpeedSliderChanged);
+        markSliderResetDefault(m_speedSlider, movieSpeedToSlider(1.0));
         connect(m_pauseClipBtn, &QToolButton::toggled, this, &ParameterInspector::onClipPauseToggled);
         sph->addWidget(m_speedSlider, 1);
         sph->addWidget(m_speedValueLabel);
@@ -708,6 +737,7 @@ QWidget* ParameterInspector::buildVisualTab()
         m_segmentInSlider->setRange(0, kUnitSliderMax);
         connect(m_segmentInSlider, &QSlider::valueChanged,
                 this, &ParameterInspector::onSegmentInChanged);
+        markSliderResetDefault(m_segmentInSlider, 0);
         inh->addWidget(m_segmentInSlider, 1);
         sgh->addWidget(inRow);
         auto* outRow = new QWidget(sgRow);
@@ -718,6 +748,7 @@ QWidget* ParameterInspector::buildVisualTab()
         m_segmentOutSlider->setRange(0, kUnitSliderMax);
         connect(m_segmentOutSlider, &QSlider::valueChanged,
                 this, &ParameterInspector::onSegmentOutChanged);
+        markSliderResetDefault(m_segmentOutSlider, kUnitSliderMax);
         outh->addWidget(m_segmentOutSlider, 1);
         sgh->addWidget(outRow);
         grid->addWidget(sgRow, row, 1);
@@ -737,6 +768,7 @@ QWidget* ParameterInspector::buildVisualTab()
                 this, &ParameterInspector::onScratchSliderChanged);
         connect(m_scratchSlider, &QSlider::sliderReleased,
                 this, &ParameterInspector::onScratchSliderReleased);
+        markSliderResetDefault(m_scratchSlider, unitToSlider(0.5));
         sch->addWidget(m_scratchSlider, 1);
         grid->addWidget(scRow, row, 1);
     }
@@ -784,6 +816,7 @@ QWidget* ParameterInspector::buildVisualTab()
         m_fadeValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         connect(m_fadeSlider, &QSlider::valueChanged,
                 this, &ParameterInspector::onFadeSliderChanged);
+        markSliderResetDefault(m_fadeSlider, 0);
         fh->addWidget(m_fadeSlider, 1);
         fh->addWidget(m_fadeValue);
         grid->addWidget(fdRow, row, 1);
@@ -805,16 +838,53 @@ QWidget* ParameterInspector::buildVisualTab()
         auto* layerRow = new QWidget(host);
         auto* lbh = new QHBoxLayout(layerRow);
         lbh->setContentsMargins(0, 0, 0, 0);
+        lbh->setSpacing(6);
         lbh->addWidget(new QLabel(tr("Layer"), layerRow));
-        m_preferredLayerCombo = new QComboBox(layerRow);
-        m_preferredLayerCombo->setToolTip(tr("Preferred mix layer for this cell (1..12)."));
-        for (int layer = 1; layer <= 12; ++layer) {
-            m_preferredLayerCombo->addItem(QString::number(layer), layer - 1);
+        auto* layerBtns = new QWidget(layerRow);
+        auto* layerBtnLay = new QHBoxLayout(layerBtns);
+        layerBtnLay->setContentsMargins(0, 0, 0, 0);
+        layerBtnLay->setSpacing(3);
+        m_preferredLayerGroup = new QButtonGroup(layerRow);
+        m_preferredLayerGroup->setExclusive(true);
+        layerBtns->setStyleSheet(QStringLiteral(
+            "QToolButton {"
+            "  border: 1px solid #3a404c;"
+            "  border-radius: 3px;"
+            "  min-width: 24px;"
+            "  min-height: 24px;"
+            "  padding: 0;"
+            "}"
+            "QToolButton:checked {"
+            "  border: 2px solid #ff9140;"
+            "  background: #3a2e24;"
+            "}"
+            "QToolButton:hover:!checked {"
+            "  border-color: #606878;"
+            "}"
+            "QToolButton:disabled {"
+            "  color: #888;"
+            "  border-color: #2e323a;"
+            "  background: #000000;"
+            "}"));
+        {
+            auto* bgTb = new QToolButton(layerBtns);
+            bgTb->setEnabled(false);
+            bgTb->setText(QStringLiteral("BG"));
+            bgTb->setToolTip(tr("Fixed black background (not assignable)"));
+            layerBtnLay->addWidget(bgTb);
         }
-        connect(m_preferredLayerCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+        for (int layer = 1; layer <= 12; ++layer) {
+            auto* tb = new QToolButton(layerBtns);
+            tb->setCheckable(true);
+            tb->setAutoRaise(false);
+            tb->setText(QString::number(layer));
+            tb->setToolTip(tr("Preferred mix layer %1").arg(layer));
+            m_preferredLayerGroup->addButton(tb, layer - 1);
+            layerBtnLay->addWidget(tb);
+        }
+        connect(m_preferredLayerGroup, &QButtonGroup::idClicked,
                 this, &ParameterInspector::onPreferredLayerChanged);
-        lbh->addWidget(m_preferredLayerCombo);
-        lbh->addStretch(1);
+        lbh->addWidget(layerBtns, 1);
         root->addWidget(layerRow);
     }
 
@@ -885,6 +955,7 @@ QWidget* ParameterInspector::buildMixingTab()
         m_transparencyValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         connect(m_transparencySlider, &QSlider::valueChanged,
                 this, &ParameterInspector::onTransparencySliderChanged);
+        markSliderResetDefault(m_transparencySlider, unitToSlider(1.0));
         h->addWidget(m_transparencySlider, 1);
         h->addWidget(m_transparencyValue);
         root->addWidget(row);
@@ -971,7 +1042,7 @@ QWidget* ParameterInspector::buildMixingTab()
     }
     {
         auto addMaskRow = [&](QWidget** rowOut, const QString& label, QSlider** sliderOut, QLabel** valueOut,
-                              void (ParameterInspector::*slot)(int)) {
+                              void (ParameterInspector::*slot)(int), int resetDefault) {
             auto* row = new QWidget(host);
             auto* h   = new QHBoxLayout(row);
             h->setContentsMargins(0, 0, 0, 0);
@@ -986,28 +1057,54 @@ QWidget* ParameterInspector::buildMixingTab()
             connect(slider, &QSlider::valueChanged, this, slot);
             h->addWidget(slider, 1);
             h->addWidget(value);
+            markSliderResetDefault(slider, resetDefault);
             *rowOut = row;
             *sliderOut = slider;
             *valueOut = value;
             root->addWidget(row);
         };
         addMaskRow(&m_maskRectWidthRow, tr("Width"), &m_maskRectWidthSlider, &m_maskRectWidthValue,
-                   &ParameterInspector::onMaskRectWidthChanged);
+                   &ParameterInspector::onMaskRectWidthChanged, unitToSlider(1.0));
         addMaskRow(&m_maskRectHeightRow, tr("Height"), &m_maskRectHeightSlider, &m_maskRectHeightValue,
-                   &ParameterInspector::onMaskRectHeightChanged);
+                   &ParameterInspector::onMaskRectHeightChanged, unitToSlider(1.0));
         addMaskRow(&m_maskRadiusRow, tr("Radius"), &m_maskRadiusSlider, &m_maskRadiusValue,
-                   &ParameterInspector::onMaskRadiusChanged);
+                   &ParameterInspector::onMaskRadiusChanged, unitToSlider(0.5));
         addMaskRow(&m_maskEllipseXRow, tr("Ellipse X"), &m_maskEllipseXSlider, &m_maskEllipseXValue,
-                   &ParameterInspector::onMaskEllipseXChanged);
+                   &ParameterInspector::onMaskEllipseXChanged, unitToSlider(0.6));
         addMaskRow(&m_maskEllipseYRow, tr("Ellipse Y"), &m_maskEllipseYSlider, &m_maskEllipseYValue,
-                   &ParameterInspector::onMaskEllipseYChanged);
+                   &ParameterInspector::onMaskEllipseYChanged, unitToSlider(0.45));
         addMaskRow(&m_maskFeatherRow, tr("Feather"), &m_maskFeatherSlider, &m_maskFeatherValue,
-                   &ParameterInspector::onMaskFeatherChanged);
+                   &ParameterInspector::onMaskFeatherChanged, unitToSlider(0.1));
     }
 
     addSection(tr("Keying"));
+    m_mixingKeyingSlot = new QWidget(host);
+    auto* mixingKeyLay = new QVBoxLayout(m_mixingKeyingSlot);
+    mixingKeyLay->setContentsMargins(0, 0, 0, 0);
+    mixingKeyLay->setSpacing(4);
+    root->addWidget(m_mixingKeyingSlot);
+    buildKeyingPanel();
+    mixingKeyLay->addWidget(m_keyingPanel);
+
+    syncMaskControlVisibility();
+    syncKeyingModeUi();
+    root->addStretch(1);
+    return host;
+}
+
+void ParameterInspector::buildKeyingPanel()
+{
+    if (m_keyingPanel) {
+        return;
+    }
+    m_keyingPanel = new QWidget(this);
+    auto* root = new QVBoxLayout(m_keyingPanel);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(4);
+    QWidget* host = m_keyingPanel;
+
     m_keyingEnabled = new QCheckBox(tr("Enable keying"), host);
-    m_keyingEnabled->setChecked(true);
+    m_keyingEnabled->setChecked(false);
     connect(m_keyingEnabled, &QCheckBox::toggled,
             this, &ParameterInspector::onKeyingEnabledToggled);
     root->addWidget(m_keyingEnabled);
@@ -1128,6 +1225,7 @@ QWidget* ParameterInspector::buildMixingTab()
                 this, &ParameterInspector::onKeyHardnessSliderChanged);
         h1->addWidget(m_keyHardnessSlider, 1);
         h1->addWidget(m_keyHardnessValue);
+        markSliderResetDefault(m_keyHardnessSlider, 0);
         root->addWidget(row1);
 
         auto* row2 = new QWidget(host);
@@ -1145,6 +1243,7 @@ QWidget* ParameterInspector::buildMixingTab()
                 this, &ParameterInspector::onKeyFeatherSliderChanged);
         h2->addWidget(m_keyFeatherSlider, 1);
         h2->addWidget(m_keyFeatherValue);
+        markSliderResetDefault(m_keyFeatherSlider, 0);
         root->addWidget(row2);
     }
     {
@@ -1171,6 +1270,7 @@ QWidget* ParameterInspector::buildMixingTab()
             connect(*slider, &QSlider::valueChanged, this, slot);
             h->addWidget(*slider, 1);
             h->addWidget(*value);
+            markSliderResetDefault(*slider, unitToSlider(1.0));
             *rowOut = row;
             root->addWidget(row);
         };
@@ -1178,88 +1278,122 @@ QWidget* ParameterInspector::buildMixingTab()
         makeRgbRow(&m_keyGRow, tr("G"), &m_keyGSlider, &m_keyGValue, &ParameterInspector::onKeyChannelGChanged);
         makeRgbRow(&m_keyBRow, tr("B"), &m_keyBSlider, &m_keyBValue, &ParameterInspector::onKeyChannelBChanged);
     }
-
-    syncMaskControlVisibility();
-    syncKeyingModeUi();
-    root->addStretch(1);
-    return host;
 }
 
 QWidget* ParameterInspector::buildFeedbackTab()
 {
     auto* host = new QWidget(this);
     auto* root = new QVBoxLayout(host);
-    root->setSpacing(10);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(4);
 
-    {
-        auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Input")), host);
-        root->addWidget(lab);
-        m_feedbackInputModeCombo = new QComboBox(host);
-        m_feedbackInputModeCombo->addItem(tr("Below only (legacy)"),
-                                          int(pvj::core::FeedbackInputMode::BelowOnly));
-        m_feedbackInputModeCombo->addItem(tr("Stack (back + key)"),
-                                          int(pvj::core::FeedbackInputMode::StackComposite));
-        m_feedbackInputModeCombo->addItem(tr("Scene loopback"),
-                                          int(pvj::core::FeedbackInputMode::SceneLoopback));
-        connect(m_feedbackInputModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
-                this, &ParameterInspector::onFeedbackInputModeChanged);
-        root->addWidget(m_feedbackInputModeCombo);
-        m_feedbackInputModeHint = new QLabel(
-            tr("Stack: one trail history from layers below and above feedback. "
-               "Scene loopback: trails from the full mixer output of the previous frame."),
-            host);
-        m_feedbackInputModeHint->setWordWrap(true);
-        m_feedbackInputModeHint->setStyleSheet(QStringLiteral("color: palette(mid);"));
-        root->addWidget(m_feedbackInputModeHint);
-    }
+    auto* form = new QFormLayout();
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setSpacing(4);
+    form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+
+    auto styleCombo = [](QComboBox* cb) {
+        cb->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        cb->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        cb->setMinimumContentsLength(16);
+    };
+
+    m_feedbackInputModeCombo = new QComboBox(host);
+    m_feedbackInputModeCombo->addItem(tr("Below only (legacy)"),
+                                      int(pvj::core::FeedbackInputMode::BelowOnly));
+    m_feedbackInputModeCombo->addItem(tr("Stack (back + key)"),
+                                      int(pvj::core::FeedbackInputMode::StackComposite));
+    m_feedbackInputModeCombo->addItem(tr("Scene loopback"),
+                                      int(pvj::core::FeedbackInputMode::SceneLoopback));
+    styleCombo(m_feedbackInputModeCombo);
+    connect(m_feedbackInputModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ParameterInspector::onFeedbackInputModeChanged);
+    form->addRow(tr("Input"), m_feedbackInputModeCombo);
+
+    m_feedbackWrapCombo = new QComboBox(host);
+    fillWrapModeCombo(m_feedbackWrapCombo);
+    styleCombo(m_feedbackWrapCombo);
+    connect(m_feedbackWrapCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ParameterInspector::onFeedbackWrapModeChanged);
+    form->addRow(tr("Wrap"), m_feedbackWrapCombo);
+
+    m_feedbackInputModeHint = new QLabel(
+        tr("Stack: history from layers below and above. Scene loopback: previous mixer frame."),
+        host);
+    m_feedbackInputModeHint->setWordWrap(true);
+    m_feedbackInputModeHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
+    form->addRow(QString(), m_feedbackInputModeHint);
 
     auto addSliderRow = [&](const QString& title, QSlider** sliderOut, QLabel** valueOut,
-                            auto slot) {
-        auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(title), host);
-        root->addWidget(lab);
+                            auto slot, int resetDefault) {
         auto* row = new QWidget(host);
         auto* h = new QHBoxLayout(row);
         h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(6);
         *sliderOut = new QSlider(Qt::Horizontal, row);
         (*sliderOut)->setRange(0, kUnitSliderMax);
         (*sliderOut)->setSingleStep(10);
         (*sliderOut)->setPageStep(50);
         *valueOut = new QLabel(formatUnit(0.0), row);
-        (*valueOut)->setMinimumWidth(48);
+        (*valueOut)->setMinimumWidth(44);
         (*valueOut)->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         connect(*sliderOut, &QSlider::valueChanged, this, slot);
         h->addWidget(*sliderOut, 1);
         h->addWidget(*valueOut);
-        root->addWidget(row);
+        markSliderResetDefault(*sliderOut, resetDefault);
+        form->addRow(title, row);
     };
 
-    addSliderRow(tr("Strength"), &m_feedbackStrengthSlider, &m_feedbackStrengthValue,
-                 &ParameterInspector::onFeedbackStrengthChanged);
-    addSliderRow(tr("Saturation"), &m_feedbackSaturationSlider, &m_feedbackSaturationValue,
-                 &ParameterInspector::onFeedbackSaturationChanged);
-    addSliderRow(tr("Brightness"), &m_feedbackBrightnessSlider, &m_feedbackBrightnessValue,
-                 &ParameterInspector::onFeedbackBrightnessChanged);
-    addSliderRow(tr("Contrast"), &m_feedbackContrastSlider, &m_feedbackContrastValue,
-                 &ParameterInspector::onFeedbackContrastChanged);
-    addSliderRow(tr("Hue"), &m_feedbackHueShiftSlider, &m_feedbackHueShiftValue,
-                 &ParameterInspector::onFeedbackHueShiftChanged);
-    addSliderRow(tr("Gamma"), &m_feedbackGammaSlider, &m_feedbackGammaValue,
-                 &ParameterInspector::onFeedbackGammaChanged);
+    addSliderRow(tr("Loop retention"), &m_feedbackLoopRetentionSlider, &m_feedbackLoopRetentionValue,
+                 &ParameterInspector::onFeedbackLoopRetentionChanged, unitToSlider(0.85));
+    addSliderRow(tr("Live inject"), &m_feedbackLiveInjectSlider, &m_feedbackLiveInjectValue,
+                 &ParameterInspector::onFeedbackLiveInjectChanged, unitToSlider(0.15));
 
     {
-        auto* lab = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Rotation")), host);
-        root->addWidget(lab);
-        m_feedbackRotation = new QDoubleSpinBox(host);
-        m_feedbackRotation->setRange(-180.0, 180.0);
-        m_feedbackRotation->setDecimals(1);
-        m_feedbackRotation->setSuffix(QStringLiteral(" deg"));
-        connect(m_feedbackRotation, qOverload<double>(&QDoubleSpinBox::valueChanged),
-                this, &ParameterInspector::onFeedbackRotationChanged);
-        root->addWidget(m_feedbackRotation);
+        auto* hint = new QLabel(
+            tr("Retention = ping-pong history; inject = fresh video per frame."),
+            host);
+        hint->setWordWrap(true);
+        hint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
+        form->addRow(QString(), hint);
+    }
+
+    addSliderRow(tr("Saturation"), &m_feedbackSaturationSlider, &m_feedbackSaturationValue,
+                 &ParameterInspector::onFeedbackSaturationChanged, rangeToSlider(1.0, 0.0, 2.0));
+    addSliderRow(tr("Brightness"), &m_feedbackBrightnessSlider, &m_feedbackBrightnessValue,
+                 &ParameterInspector::onFeedbackBrightnessChanged, signedToSlider(0.0, -1.0, 1.0));
+    addSliderRow(tr("Contrast"), &m_feedbackContrastSlider, &m_feedbackContrastValue,
+                 &ParameterInspector::onFeedbackContrastChanged, rangeToSlider(1.0, 0.0, 2.0));
+    addSliderRow(tr("Hue"), &m_feedbackHueShiftSlider, &m_feedbackHueShiftValue,
+                 &ParameterInspector::onFeedbackHueShiftChanged, signedToSlider(0.0, -1.0, 1.0));
+    addSliderRow(tr("Gamma"), &m_feedbackGammaSlider, &m_feedbackGammaValue,
+                 &ParameterInspector::onFeedbackGammaChanged, rangeToSlider(1.0, 0.1, 4.0));
+    addSliderRow(tr("Rotation"), &m_feedbackRotationSlider, &m_feedbackRotationValue,
+                 &ParameterInspector::onFeedbackRotationChanged, rangeToSlider(0.0, 0.0, 360.0));
+    if (m_feedbackRotationSlider) {
+        m_feedbackRotationSlider->setToolTip(tr("Feedback history rotation (0–360°)."));
     }
 
     addSliderRow(tr("Zoom"), &m_feedbackZoomSlider, &m_feedbackZoomValue,
-                 &ParameterInspector::onFeedbackZoomChanged);
+                 &ParameterInspector::onFeedbackZoomChanged, signedToSlider(0.0, -1.0, 1.0));
+
+    root->addLayout(form);
+
+    m_feedbackKeyingSection = new QWidget(host);
+    auto* fbKeyRoot = new QVBoxLayout(m_feedbackKeyingSection);
+    fbKeyRoot->setContentsMargins(0, 0, 0, 0);
+    fbKeyRoot->setSpacing(4);
+    fbKeyRoot->addWidget(new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Keying")), host));
+    m_feedbackKeyingSlot = new QWidget(host);
+    auto* fbKeyLay = new QVBoxLayout(m_feedbackKeyingSlot);
+    fbKeyLay->setContentsMargins(0, 0, 0, 0);
+    fbKeyLay->setSpacing(4);
+    fbKeyRoot->addWidget(m_feedbackKeyingSlot);
+    root->addWidget(m_feedbackKeyingSection);
+    buildKeyingPanel();
 
     root->addStretch(1);
     return host;
@@ -1277,6 +1411,14 @@ QWidget* ParameterInspector::buildPositionTab()
     connect(m_rotation, &QDoubleSpinBox::valueChanged,
             this, &ParameterInspector::onRotationChanged);
     form->addRow(tr("Rotation Z"), m_rotation);
+
+    m_pictureWrapCombo = new QComboBox(host);
+    fillWrapModeCombo(m_pictureWrapCombo);
+    m_pictureWrapCombo->setToolTip(
+        tr("UV border behaviour for layer zoom/rotation (when this cell is on a mix layer)."));
+    connect(m_pictureWrapCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ParameterInspector::onPictureWrapModeChanged);
+    form->addRow(tr("UV wrap"), m_pictureWrapCombo);
 
     auto* note = new QLabel(tr("Position / scale / pivot controls - M5"), host);
     note->setStyleSheet(QStringLiteral("color: #8b92a3;"));
@@ -1547,6 +1689,23 @@ void ParameterInspector::syncPriorityButtons()
     }
 }
 
+void ParameterInspector::syncPreferredLayerButtons(int layerIndex, bool hasCell)
+{
+    if (!m_preferredLayerGroup) {
+        return;
+    }
+    QSignalBlocker b(m_preferredLayerGroup);
+    for (QAbstractButton* btn : m_preferredLayerGroup->buttons()) {
+        btn->setEnabled(hasCell);
+        btn->setChecked(false);
+    }
+    if (hasCell) {
+        if (QAbstractButton* btn = m_preferredLayerGroup->button(layerIndex)) {
+            btn->setChecked(true);
+        }
+    }
+}
+
 void ParameterInspector::syncFeedbackForVisualSource(bool hasCell, int visualSourceKind)
 {
     const bool isMedia = visualSourceKind == int(VisualSourceKind::Media);
@@ -1572,19 +1731,47 @@ void ParameterInspector::syncFeedbackForVisualSource(bool hasCell, int visualSou
         }
     }
 
-    for (auto* w : {static_cast<QWidget*>(m_feedbackStrengthSlider),
+    for (auto* w : {static_cast<QWidget*>(m_feedbackLoopRetentionSlider),
+                     static_cast<QWidget*>(m_feedbackLiveInjectSlider),
                      static_cast<QWidget*>(m_feedbackSaturationSlider),
                      static_cast<QWidget*>(m_feedbackBrightnessSlider),
                      static_cast<QWidget*>(m_feedbackContrastSlider),
                      static_cast<QWidget*>(m_feedbackHueShiftSlider),
                      static_cast<QWidget*>(m_feedbackGammaSlider),
-                     static_cast<QWidget*>(m_feedbackRotation),
+                     static_cast<QWidget*>(m_feedbackRotationSlider),
                      static_cast<QWidget*>(m_feedbackZoomSlider),
                      static_cast<QWidget*>(m_feedbackInputModeCombo),
-                     static_cast<QWidget*>(m_feedbackInputModeHint)}) {
+                     static_cast<QWidget*>(m_feedbackInputModeHint),
+                     static_cast<QWidget*>(m_feedbackWrapCombo),
+                     m_keyingPanel}) {
         if (w) {
             w->setEnabled(feedbackEnabled);
         }
+    }
+
+    syncKeyingPanelPlacement(hasCell, visualSourceKind);
+}
+
+void ParameterInspector::syncKeyingPanelPlacement(bool hasCell, int visualSourceKind)
+{
+    if (!m_keyingPanel || !m_mixingKeyingSlot || !m_feedbackKeyingSlot) {
+        return;
+    }
+
+    const bool isFeedback = hasCell && visualSourceKind == int(VisualSourceKind::Feedback);
+  const bool showInFeedbackTab = isFeedback && m_feedbackTabIndex >= 0
+        && currentIndex() == m_feedbackTabIndex;
+
+    QWidget* targetSlot = showInFeedbackTab ? m_feedbackKeyingSlot : m_mixingKeyingSlot;
+    if (m_keyingPanel->parentWidget() != targetSlot) {
+        targetSlot->layout()->addWidget(m_keyingPanel);
+    }
+
+    if (m_mixingKeyingSlot) {
+        m_mixingKeyingSlot->setVisible(!showInFeedbackTab);
+    }
+    if (m_feedbackKeyingSection) {
+        m_feedbackKeyingSection->setVisible(showInFeedbackTab);
     }
 }
 
@@ -1615,17 +1802,20 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b18(m_tcStartEdit);
     QSignalBlocker b19(m_keyRangeSlider);
     QSignalBlocker b20(m_keyChromaRangeSlider);
-    QSignalBlocker b33(m_preferredLayerCombo);
+    QSignalBlocker b33(m_preferredLayerGroup);
     QSignalBlocker b34(m_visualSourceCombo);
-    QSignalBlocker b35(m_feedbackStrengthSlider);
+    QSignalBlocker b35(m_feedbackLoopRetentionSlider);
+    QSignalBlocker b35a(m_feedbackLiveInjectSlider);
     QSignalBlocker b36(m_feedbackSaturationSlider);
     QSignalBlocker b37(m_feedbackBrightnessSlider);
     QSignalBlocker b38(m_feedbackContrastSlider);
     QSignalBlocker b39(m_feedbackHueShiftSlider);
     QSignalBlocker b40(m_feedbackGammaSlider);
-    QSignalBlocker b41(m_feedbackRotation);
+    QSignalBlocker b41(m_feedbackRotationSlider);
     QSignalBlocker b42(m_feedbackZoomSlider);
     QSignalBlocker b43(m_feedbackInputModeCombo);
+    QSignalBlocker b44(m_feedbackWrapCombo);
+    QSignalBlocker b45(m_pictureWrapCombo);
 
     auto* cell = currentCell();
     const bool hasCell = (cell != nullptr);
@@ -1706,11 +1896,16 @@ void ParameterInspector::refreshFromCell()
             btn->setEnabled(hasCell);
         }
     }
-    if (m_preferredLayerCombo) {
-        m_preferredLayerCombo->setEnabled(hasCell);
+    if (m_preferredLayerGroup) {
+        for (QAbstractButton* btn : m_preferredLayerGroup->buttons()) {
+            btn->setEnabled(hasCell);
+        }
     }
     if (m_visualSourceCombo) {
         m_visualSourceCombo->setEnabled(hasCell);
+    }
+    if (m_pictureWrapCombo) {
+        m_pictureWrapCombo->setEnabled(hasCell);
     }
 
     const int visualKind = hasCell ? visualSourceKindFromCell(*cell) : int(VisualSourceKind::Empty);
@@ -1759,7 +1954,7 @@ void ParameterInspector::refreshFromCell()
         m_keyRangeSlider->setRange(0.25, 0.75);
         m_keyRangeValue->setText(formatUnit(0.5));
         if (m_keyingEnabled) {
-            m_keyingEnabled->setChecked(true);
+            m_keyingEnabled->setChecked(false);
         }
         if (m_keyLumaTargetGroup) {
             if (QAbstractButton* b = m_keyLumaTargetGroup->button(0)) {
@@ -1790,9 +1985,7 @@ void ParameterInspector::refreshFromCell()
         syncKeyingModeUi();
         syncPlayModeButtons();
         syncPriorityButtons();
-        if (m_preferredLayerCombo) {
-            m_preferredLayerCombo->setCurrentIndex(4);
-        }
+        syncPreferredLayerButtons(4, false);
         if (m_visualSourceCombo) {
             m_visualSourceCombo->setCurrentIndex(0);
         }
@@ -1907,17 +2100,20 @@ void ParameterInspector::refreshFromCell()
     syncKeyingModeUi();
     syncPlayModeButtons();
     syncPriorityButtons();
-    if (m_preferredLayerCombo) {
-        const int preferredLayer = qBound(0, cell->props.preferredLayer, m_preferredLayerCombo->count() - 1);
-        m_preferredLayerCombo->setCurrentIndex(preferredLayer);
-    }
+    syncPreferredLayerButtons(
+        hasCell ? qBound(0, cell->props.preferredLayer, 11) : 4,
+        hasCell);
 
     const int presetIdx = qBound(0, cell->props.mixingPresetIndex, m_mixingPreset->count() - 1);
     m_mixingPreset->setCurrentIndex(presetIdx);
 
-    if (m_feedbackStrengthSlider) {
-        m_feedbackStrengthSlider->setValue(unitToSlider(cell->props.feedback.strength));
-        m_feedbackStrengthValue->setText(formatUnit(cell->props.feedback.strength));
+    if (m_feedbackLoopRetentionSlider) {
+        m_feedbackLoopRetentionSlider->setValue(unitToSlider(cell->props.feedback.loopRetention));
+        m_feedbackLoopRetentionValue->setText(formatUnit(cell->props.feedback.loopRetention));
+    }
+    if (m_feedbackLiveInjectSlider) {
+        m_feedbackLiveInjectSlider->setValue(unitToSlider(cell->props.feedback.liveInject));
+        m_feedbackLiveInjectValue->setText(formatUnit(cell->props.feedback.liveInject));
     }
     if (m_feedbackSaturationSlider) {
         m_feedbackSaturationSlider->setValue(rangeToSlider(cell->props.feedback.saturation, 0.0, 2.0));
@@ -1939,8 +2135,13 @@ void ParameterInspector::refreshFromCell()
         m_feedbackGammaSlider->setValue(rangeToSlider(cell->props.feedback.gamma, 0.1, 4.0));
         m_feedbackGammaValue->setText(formatUnit(cell->props.feedback.gamma));
     }
-    if (m_feedbackRotation) {
-        m_feedbackRotation->setValue(cell->props.feedback.rotationDeg);
+    if (m_feedbackRotationSlider) {
+        const double deg = normalizeDegrees360(cell->props.feedback.rotationDeg);
+        m_feedbackRotationSlider->setValue(rangeToSlider(deg, 0.0, 360.0));
+        if (m_feedbackRotationValue) {
+            m_feedbackRotationValue->setText(
+                QStringLiteral("%1°").arg(int(deg + 0.5) % 360));
+        }
     }
     if (m_feedbackZoomSlider) {
         m_feedbackZoomSlider->setValue(signedToSlider(cell->props.feedback.zoom, -1.0, 1.0));
@@ -1952,6 +2153,18 @@ void ParameterInspector::refreshFromCell()
             m_feedbackInputModeCombo->setCurrentIndex(modeIdx);
         }
     }
+    if (m_feedbackWrapCombo) {
+        const int wrapIdx = m_feedbackWrapCombo->findData(int(cell->props.feedback.wrapMode));
+        if (wrapIdx >= 0) {
+            m_feedbackWrapCombo->setCurrentIndex(wrapIdx);
+        }
+    }
+    if (m_pictureWrapCombo) {
+        const int wrapIdx = m_pictureWrapCombo->findData(int(cell->props.picture.wrapMode));
+        if (wrapIdx >= 0) {
+            m_pictureWrapCombo->setCurrentIndex(wrapIdx);
+        }
+    }
 
     m_loading = false;
 }
@@ -1959,6 +2172,11 @@ void ParameterInspector::refreshFromCell()
 void ParameterInspector::emitChanged()
 {
     emit cellChanged(m_bankSetIndex, m_bankIndex, m_cellIndex);
+}
+
+void ParameterInspector::emitPlaybackChanged()
+{
+    emit cellPlaybackChanged(m_bankSetIndex, m_bankIndex, m_cellIndex);
 }
 
 void ParameterInspector::onVisualSourceChanged(int /*idx*/)
@@ -1985,14 +2203,23 @@ void ParameterInspector::onVisualSourceChanged(int /*idx*/)
     applyVisualSourceKind(*c, kind);
     syncFeedbackForVisualSource(true, kind);
     emitChanged();
+    emitPlaybackChanged();
 }
 
-void ParameterInspector::onFeedbackStrengthChanged(int v)
+void ParameterInspector::onFeedbackLoopRetentionChanged(int v)
 {
     if (m_loading) return;
     const double u = sliderToUnit(v);
-    if (m_feedbackStrengthValue) m_feedbackStrengthValue->setText(formatUnit(u));
-    if (auto* c = currentCell()) { c->props.feedback.strength = u; emitChanged(); }
+    if (m_feedbackLoopRetentionValue) m_feedbackLoopRetentionValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.loopRetention = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackLiveInjectChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_feedbackLiveInjectValue) m_feedbackLiveInjectValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.liveInject = u; emitChanged(); }
 }
 
 void ParameterInspector::onFeedbackSaturationChanged(int v)
@@ -2035,10 +2262,17 @@ void ParameterInspector::onFeedbackGammaChanged(int v)
     if (auto* c = currentCell()) { c->props.feedback.gamma = u; emitChanged(); }
 }
 
-void ParameterInspector::onFeedbackRotationChanged(double v)
+void ParameterInspector::onFeedbackRotationChanged(int v)
 {
     if (m_loading) return;
-    if (auto* c = currentCell()) { c->props.feedback.rotationDeg = v; emitChanged(); }
+    const double deg = normalizeDegrees360(sliderToRange(v, 0.0, 360.0));
+    if (m_feedbackRotationValue) {
+        m_feedbackRotationValue->setText(QStringLiteral("%1°").arg(int(deg + 0.5) % 360));
+    }
+    if (auto* c = currentCell()) {
+        c->props.feedback.rotationDeg = deg;
+        emitChanged();
+    }
 }
 
 void ParameterInspector::onFeedbackZoomChanged(int v)
@@ -2058,6 +2292,30 @@ void ParameterInspector::onFeedbackInputModeChanged(int idx)
         m_feedbackInputModeCombo->itemData(idx).toInt());
     if (auto* c = currentCell()) {
         c->props.feedback.inputMode = mode;
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onFeedbackWrapModeChanged(int idx)
+{
+    if (m_loading || !m_feedbackWrapCombo || idx < 0) {
+        return;
+    }
+    const auto mode = static_cast<pvj::core::WrapMode>(m_feedbackWrapCombo->itemData(idx).toInt());
+    if (auto* c = currentCell()) {
+        c->props.feedback.wrapMode = mode;
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onPictureWrapModeChanged(int idx)
+{
+    if (m_loading || !m_pictureWrapCombo || idx < 0) {
+        return;
+    }
+    const auto mode = static_cast<pvj::core::WrapMode>(m_pictureWrapCombo->itemData(idx).toInt());
+    if (auto* c = currentCell()) {
+        c->props.picture.wrapMode = mode;
         emitChanged();
     }
 }
@@ -2134,12 +2392,9 @@ void ParameterInspector::onPreferredLayerChanged(int idx)
 {
     if (m_loading) return;
     if (auto* c = currentCell()) {
-        if (!m_preferredLayerCombo) {
-            return;
-        }
-        const int data = m_preferredLayerCombo->itemData(idx).toInt();
-        c->props.preferredLayer = qBound(0, data, 11);
+        c->props.preferredLayer = qBound(0, idx, 11);
         emitChanged();
+        emitPlaybackChanged();
     }
 }
 
@@ -2523,7 +2778,7 @@ void ParameterInspector::syncKeyingModeUi()
         return;
     }
     const auto* cell = currentCell();
-    const bool keyingEnabled = cell ? cell->props.keyingEnabled : true;
+    const bool keyingEnabled = cell ? cell->props.keyingEnabled : false;
     const KeyingMode mode = cell ? cell->props.keyingMode : KeyingMode::Luma;
     const bool chromaMode = (mode == KeyingMode::Chroma);
     if (m_keyingMode) {
@@ -2568,6 +2823,15 @@ void ParameterInspector::syncKeyingModeUi()
     if (m_keyBRow) {
         m_keyBRow->setVisible(keyingEnabled && chromaMode);
     }
+}
+
+void ParameterInspector::markSliderResetDefault(QSlider* slider, int defaultSliderValue)
+{
+    if (!slider) {
+        return;
+    }
+    slider->setProperty("pvjResetValue", defaultSliderValue);
+    slider->installEventFilter(this);
 }
 
 void ParameterInspector::tagMidiWidget(QWidget* w, const QString& propertyId, const QVariant& noteValue)
@@ -2651,15 +2915,18 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_keyRSlider, QStringLiteral("keyChannelR"));
     tagMidiWidget(m_keyGSlider, QStringLiteral("keyChannelG"));
     tagMidiWidget(m_keyBSlider, QStringLiteral("keyChannelB"));
-    tagMidiWidget(m_feedbackStrengthSlider, QStringLiteral("feedbackStrength"));
+    tagMidiWidget(m_feedbackLoopRetentionSlider, QStringLiteral("feedbackLoopRetention"));
+    tagMidiWidget(m_feedbackLiveInjectSlider, QStringLiteral("feedbackLiveInject"));
     tagMidiWidget(m_feedbackSaturationSlider, QStringLiteral("feedbackSaturation"));
     tagMidiWidget(m_feedbackBrightnessSlider, QStringLiteral("feedbackBrightness"));
     tagMidiWidget(m_feedbackContrastSlider, QStringLiteral("feedbackContrast"));
     tagMidiWidget(m_feedbackHueShiftSlider, QStringLiteral("feedbackHueShift"));
     tagMidiWidget(m_feedbackGammaSlider, QStringLiteral("feedbackGamma"));
-    tagMidiWidget(m_feedbackRotation, QStringLiteral("feedbackRotationDeg"));
+    tagMidiWidget(m_feedbackRotationSlider, QStringLiteral("feedbackRotationDeg"));
     tagMidiWidget(m_feedbackZoomSlider, QStringLiteral("feedbackZoom"));
     tagMidiWidget(m_feedbackInputModeCombo, QStringLiteral("feedbackInputMode"));
+    tagMidiWidget(m_feedbackWrapCombo, QStringLiteral("feedbackWrapMode"));
+    tagMidiWidget(m_pictureWrapCombo, QStringLiteral("pictureWrapMode"));
 }
 
 void ParameterInspector::showMidiContextMenu(QWidget* w, const QPoint& globalPos)
@@ -2677,6 +2944,18 @@ void ParameterInspector::showMidiContextMenu(QWidget* w, const QPoint& globalPos
 
 bool ParameterInspector::eventFilter(QObject* watched, QEvent* event)
 {
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::RightButton) {
+            if (auto* slider = qobject_cast<QSlider*>(watched)) {
+                const QVariant reset = slider->property("pvjResetValue");
+                if (reset.isValid()) {
+                    slider->setValue(reset.toInt());
+                    return true;
+                }
+            }
+        }
+    }
     if (event->type() == QEvent::ContextMenu) {
         auto* w = qobject_cast<QWidget*>(watched);
         if (w && !w->property("pvjProperty").toString().isEmpty()) {

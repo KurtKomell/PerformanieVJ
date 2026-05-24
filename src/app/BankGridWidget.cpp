@@ -150,7 +150,7 @@ public:
         }
     }
 
-    /// Mix slot index 0..11 when this cell is routed to that mixer slot; -1 = none.
+    /// Mix slot index 1..12 (GPU layer) when this cell is routed to that mixer slot; -1 = none.
     void setMixSlot(int slotIndex)
     {
         if (m_mixSlot != slotIndex) {
@@ -321,30 +321,27 @@ protected:
         const QColor kOrangePeek(255, 145, 64);
         const QColor kBlueMix(58, 156, 255);
         const QColor kBorderIdle(52, 58, 72);
-        const QColor kSelectionMuted(120, 128, 145);
 
         const bool onMix  = (m_mixSlot >= 0);
         const bool peek   = m_peekHighlight;
         const bool sel    = isChecked();
+        const bool highlightOrange = sel || peek;
 
-        const bool showShadow = onMix || peek || sel;
+        const bool showShadow = onMix || highlightOrange;
         if (showShadow) {
             drawCellDropShadow(p, r, kCellRadius);
         }
 
         p.setBrush(Qt::NoBrush);
-        if (onMix && peek) {
+        if (onMix) {
             drawGlowFrame(p, r, kCellRadius, kBlueMix, 3);
-            const QRectF inner = r.adjusted(5, 5, -5, -5);
-            drawGlowFrame(p, inner, 4.0, kOrangePeek, 2);
-        } else if (onMix) {
-            drawGlowFrame(p, r, kCellRadius, kBlueMix, 3);
-        } else if (peek) {
-            drawGlowFrame(p, r, kCellRadius, kOrangePeek, 3);
-        } else if (sel) {
-            p.setPen(QPen(kSelectionMuted, 1.5));
-            p.drawRoundedRect(r, kCellRadius, kCellRadius);
-        } else {
+        }
+        if (highlightOrange) {
+            const QRectF orangeRect = onMix ? r.adjusted(5, 5, -5, -5) : r;
+            const qreal orangeRadius = onMix ? 4.0 : kCellRadius;
+            const int orangePasses = onMix ? 2 : 3;
+            drawGlowFrame(p, orangeRect, orangeRadius, kOrangePeek, orangePasses);
+        } else if (!onMix) {
             p.setPen(QPen(kBorderIdle, 1));
             p.drawRoundedRect(r, kCellRadius, kCellRadius);
         }
@@ -356,7 +353,7 @@ protected:
             tag.setBold(true);
             p.setFont(tag);
             p.drawText(r.adjusted(3, 2, -3, -3), Qt::AlignTop | Qt::AlignRight,
-                       QStringLiteral("M%1").arg(m_mixSlot + 1));
+                       QStringLiteral("M%1").arg(m_mixSlot));
         }
 
         p.setPen(QColor(255, 255, 255));
@@ -529,7 +526,7 @@ void BankGridWidget::selectCell(int cellIndex)
     emit cellSelected(m_bankSetIndex, m_bankIndex, m_selectedCell);
 }
 
-void BankGridWidget::setMixSlotPlayback(const std::array<MixSlotCellRef, 12>& mixSlotRefs)
+void BankGridWidget::setMixSlotPlayback(const std::array<MixSlotCellRef, kMixSlotCount>& mixSlotRefs)
 {
     m_mixSlots = mixSlotRefs;
     updateCellVisuals(false);
@@ -637,7 +634,10 @@ void BankGridWidget::updateCellVisuals(bool reloadThumbnails)
             continue;
         }
         int mixSlot = -1;
-        for (int j = 0; j < 12; ++j) {
+        for (int j = 0; j < kMixSlotCount; ++j) {
+            if (j == 0) {
+                continue;
+            }
             const MixSlotCellRef& ref = m_mixSlots[static_cast<size_t>(j)];
             if (ref.bankSet == m_bankSetIndex && ref.bank == m_bankIndex && ref.cell == i) {
                 mixSlot = j;

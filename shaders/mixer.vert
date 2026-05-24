@@ -9,9 +9,9 @@ layout(location = 0) out vec2 v_uv;
 // scaleOffset.z = elapsed time (seconds), .w reserved.
 layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
-    vec4 layers[12];
-    vec4 picUvA[12];
-    vec4 picColor[12];
+    vec4 layers[13];
+    vec4 picUvA[13];
+    vec4 picColor[13];
     vec4 mixerCfg; // reserved mixer configuration
 } ubuf;
 

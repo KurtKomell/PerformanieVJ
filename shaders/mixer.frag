@@ -20,11 +20,11 @@ layout(binding = 14) uniform sampler2D u_aboveKey;
 
 layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
-    vec4 layers[12];
+    vec4 layers[13];
     // Retained per-layer picture parameters (currently unused by the mixer
     // fragment path; kept in the UBO so the binding layout stays stable).
-    vec4 picUvA[12];
-    vec4 picColor[12];
+    vec4 picUvA[13];
+    vec4 picColor[13];
     vec4 mixerCfg; // x=maxLayerExclusive, y=feedbackLayer or minLayer, z=feedbackActive, w=feedbackKeyFromAbove
 } ubuf;
 
@@ -85,7 +85,7 @@ const int MATTE_LUMA               = 1;
 const int MATTE_ALPHA              = 2;
 const int MATTE_KNOCKOUT           = 3;
 
-const vec3 kBg = vec3(0.047, 0.047, 0.047);
+const vec3 kBg = vec3(0.0, 0.0, 0.0);
 const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
 const float kEps = 1e-5;
 
@@ -329,23 +329,68 @@ vec3 compositeLayer(int mode, vec3 dst, vec3 src, float alpha)
     return mix(dst, blended, alpha);
 }
 
-vec4 sampleLayer(int i)
+vec2 applyWrap(vec2 uv, int mode)
 {
-    switch (i) {
-    case 0:  return texture(u_tex0, v_uv);
-    case 1:  return texture(u_tex1, v_uv);
-    case 2:  return texture(u_tex2, v_uv);
-    case 3:  return texture(u_tex3, v_uv);
-    case 4:  return texture(u_tex4, v_uv);
-    case 5:  return texture(u_tex5, v_uv);
-    case 6:  return texture(u_tex6, v_uv);
-    case 7:  return texture(u_tex7, v_uv);
-    case 8:  return texture(u_tex8, v_uv);
-    case 9:  return texture(u_tex9, v_uv);
-    case 10: return texture(u_tex10, v_uv);
-    case 11: return texture(u_tex11, v_uv);
+    if (mode == 1) {
+        return fract(uv);
+    }
+    if (mode == 2) {
+        vec2 t = fract(uv * 0.5) * 2.0;
+        return 1.0 - abs(t - 1.0);
+    }
+    if (mode == 3) {
+        vec2 c = clamp(uv, 0.0, 2.0);
+        return 1.0 - abs(c - 1.0);
+    }
+    return clamp(uv, 0.0, 1.0);
+}
+
+vec2 transformLayerUv(vec2 uv, float zoom, float rotRad)
+{
+    vec2 p = uv - vec2(0.5);
+    float scale = 1.0 - zoom * 0.5;
+    p /= max(scale, 0.01);
+    float cs = cos(rotRad);
+    float sn = sin(rotRad);
+    p = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y);
+    return p + vec2(0.5);
+}
+
+vec4 sampleLayerRaw(int texIndex, vec2 uv)
+{
+    switch (texIndex) {
+    case 0:  return texture(u_tex0, uv);
+    case 1:  return texture(u_tex1, uv);
+    case 2:  return texture(u_tex2, uv);
+    case 3:  return texture(u_tex3, uv);
+    case 4:  return texture(u_tex4, uv);
+    case 5:  return texture(u_tex5, uv);
+    case 6:  return texture(u_tex6, uv);
+    case 7:  return texture(u_tex7, uv);
+    case 8:  return texture(u_tex8, uv);
+    case 9:  return texture(u_tex9, uv);
+    case 10: return texture(u_tex10, uv);
+    case 11: return texture(u_tex11, uv);
     default: return vec4(0.0);
     }
+}
+
+vec4 sampleLayer(int i)
+{
+    if (i == 0) {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    vec4 pa = ubuf.picUvA[i];
+    vec4 pc = ubuf.picColor[i];
+    vec2 uv = transformLayerUv(v_uv, pa.x, pa.y);
+    const int wrapMode = int(pc.w + 0.5);
+    const bool oob = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+    uv = applyWrap(uv, min(wrapMode, 3));
+    vec4 c = sampleLayerRaw(i - 1, uv);
+    if (wrapMode == 4 && oob) {
+        return vec4(0.0);
+    }
+    return c;
 }
 
 void main()
@@ -354,12 +399,12 @@ void main()
     bool hasBase = false;
 
     int maxLayer = int(ubuf.mixerCfg.x + 0.5);
-    if (maxLayer <= 0) maxLayer = 12;
+    if (maxLayer <= 0) maxLayer = 13;
     int cfgLayer = int(ubuf.mixerCfg.y + 0.5);
     const bool feedbackActive = ubuf.mixerCfg.z > 0.5;
     const int feedbackLayer = feedbackActive ? cfgLayer : -1;
 
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 13; i++) {
         if (feedbackActive) {
             if (i >= maxLayer) continue;
         } else {
@@ -388,7 +433,7 @@ void main()
             // mixerCfg.w: 0 = no key mask, 1 = BelowOnly hole mask, 2 = unified (full trail)
             if (ubuf.mixerCfg.w > 0.5 && ubuf.mixerCfg.w < 1.5) {
                 float upperCov = 0.0;
-                for (int j = feedbackLayer + 1; j < 12; j++) {
+                for (int j = feedbackLayer + 1; j < 13; j++) {
                     vec4 aboveLp = ubuf.layers[j];
                     if (aboveLp.z < 0.5) {
                         continue;
@@ -404,7 +449,8 @@ void main()
             if (vis <= 1e-4) {
                 dst = under;
             } else {
-                dst = blendNormal(under, src, vis);
+                const float blendAlpha = clamp(c.a * vis, 0.0, 1.0);
+                dst = compositeLayer(mode, under, src, blendAlpha);
             }
             hasBase = true;
             continue;

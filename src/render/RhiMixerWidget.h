@@ -27,13 +27,15 @@ QT_END_NAMESPACE
 
 namespace pvj::render {
 
-// Stacks up to 12 video layers (bottom = layer 0, top = layer 11) with per-layer
-// copy mode and opacity.
+// Stacks up to 13 mix layers: layer 0 = fixed black background, layers 1–12 = user clips.
 class RhiMixerWidget : public QRhiWidget
 {
     Q_OBJECT
 public:
-    static constexpr int LayerCount = 12;
+    static constexpr int LayerCount = 13;
+    static constexpr int BackgroundLayerIndex = 0;
+    static constexpr int UserLayerMin = 1;
+    static constexpr int UserLayerMax = 12;
 
     explicit RhiMixerWidget(QWidget* parent = nullptr);
     ~RhiMixerWidget() override;
@@ -131,6 +133,8 @@ private:
                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx);
     void copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
     void recomputeActiveFeedbackLayer();
+
+    void applyBackgroundLayerState();
 
     pvj::core::FeedbackInputMode activeFeedbackInputMode() const;
     QRhiTexture* feedbackWriteTexture() const;

@@ -21,7 +21,7 @@ class AudioEngine : public QObject
 {
     Q_OBJECT
 public:
-    static constexpr int kMaxLayers         = 12;
+    static constexpr int kMaxLayers         = 13;
     static constexpr int kDefaultSampleRate = 48000;
 
     explicit AudioEngine(QObject* parent = nullptr);

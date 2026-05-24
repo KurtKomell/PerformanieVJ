@@ -354,4 +354,32 @@ FeedbackInputMode feedbackInputModeFromString(const QString& s, FeedbackInputMod
     return fallback;
 }
 
+QString toString(WrapMode m)
+{
+    switch (m) {
+    case WrapMode::Clamp:      return QStringLiteral("clamp");
+    case WrapMode::Repeat:     return QStringLiteral("repeat");
+    case WrapMode::Mirror:     return QStringLiteral("mirror");
+    case WrapMode::MirrorOnce: return QStringLiteral("mirrorOnce");
+    case WrapMode::Black:      return QStringLiteral("black");
+    }
+    return QStringLiteral("clamp");
+}
+
+WrapMode wrapModeFromString(const QString& s, WrapMode fallback)
+{
+    bool ok = false;
+    const int asInt = s.toInt(&ok);
+    if (ok && asInt >= 0 && asInt <= 4) {
+        return static_cast<WrapMode>(asInt);
+    }
+    const QString k = s.toLower();
+    if (k == QLatin1String("clamp"))      return WrapMode::Clamp;
+    if (k == QLatin1String("repeat"))     return WrapMode::Repeat;
+    if (k == QLatin1String("mirror"))     return WrapMode::Mirror;
+    if (k == QLatin1String("mirroronce")) return WrapMode::MirrorOnce;
+    if (k == QLatin1String("black"))      return WrapMode::Black;
+    return fallback;
+}
+
 } // namespace pvj::core::enums

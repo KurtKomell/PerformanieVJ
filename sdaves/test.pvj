@@ -8,25 +8,26 @@
   <MediaLibrary>
     <Item id="65af6349-47db-47f5-9d72-ec8d4cc63341" path="D:/komell/vpool720/herbst/baum15.mp4" name="baum15.mp4"/>
     <Item id="16b585ef-a839-49ec-9856-4d1122d51ad1" path="D:/komell/vpool720/herbst/bauminpark.mp4" name="bauminpark.mp4"/>
+    <Item id="4415a090-fdcb-46a4-8e2f-623ec66d1ff6" path="D:/komell/vpool720/vpool/momobeleuchtet.mp4" name="momobeleuchtet.mp4"/>
   </MediaLibrary>
   <BankSet type="A">
     <Bank index="0" name="Bank 1">
       <Cell index="0">
         <Visual type="media" mediaId="65af6349-47db-47f5-9d72-ec8d4cc63341"/>
-        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="1" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="1" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
         </Props>
       </Cell>
       <Cell index="1">
         <Visual type="generator" generator="internalFeedback"/>
-        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="2" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Props priority="0" transparency="0.871" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="2" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
-          <Feedback strength="0.912" saturation="1.752" brightness="0" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0.052" inputMode="sceneLoopback"/>
+          <Feedback loopRetention="1" liveInject="0.157" saturation="1.752" brightness="-0.008" contrast="1" hueShift="0" gamma="0.958" rotationDeg="6" zoom="0.052" inputMode="sceneLoopback"/>
         </Props>
       </Cell>
       <Cell index="12">
-        <Visual type="media" mediaId="16b585ef-a839-49ec-9856-4d1122d51ad1"/>
-        <Props priority="0" transparency="0.636" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="7" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Visual type="media" mediaId="4415a090-fdcb-46a4-8e2f-623ec66d1ff6"/>
+        <Props priority="0" transparency="0.636" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="7" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.6165" keyLumaInvert="false" keyThreshold="0.3835" keySoftness="0" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
         </Props>
       </Cell>

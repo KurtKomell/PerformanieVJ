@@ -8,12 +8,12 @@ layout(binding = 2) uniform sampler2D u_history;
 layout(binding = 3) uniform sampler2D u_above;
 
 layout(std140, binding = 0) uniform Block {
-    vec4 fbA; // strength, saturation, brightness, contrast
+    vec4 fbA; // loopRetention, saturation, brightness, contrast
     vec4 fbB; // hueShift, gamma, rotationDeg, zoom
-    vec4 fbC; // centerX, centerY, keyEnable, _
+    vec4 fbC; // centerX, centerY, liveInject, wrapMode
 } ubuf;
 
-const vec3 kBg = vec3(0.047, 0.047, 0.047);
+const vec3 kBg = vec3(0.0, 0.0, 0.0);
 
 const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
 
@@ -96,19 +96,41 @@ vec2 transformUv(vec2 uv)
     return p + vec2(cx, cy);
 }
 
+vec2 applyWrap(vec2 uv, int mode)
+{
+    if (mode == 1) {
+        return fract(uv);
+    }
+    if (mode == 2) {
+        vec2 t = fract(uv * 0.5) * 2.0;
+        return 1.0 - abs(t - 1.0);
+    }
+    if (mode == 3) {
+        vec2 c = clamp(uv, 0.0, 2.0);
+        return 1.0 - abs(c - 1.0);
+    }
+    return clamp(uv, 0.0, 1.0);
+}
+
 void main()
 {
+    const int wrapMode = int(ubuf.fbC.w + 0.5);
+
     vec3 below = texture(u_below, v_uv).rgb;
     vec2 histUv = transformUv(v_uv);
+    const bool histOob = histUv.x < 0.0 || histUv.x > 1.0 || histUv.y < 0.0 || histUv.y > 1.0;
+    const int wrapApply = min(wrapMode, 3);
+    histUv = applyWrap(histUv, wrapApply);
+
     vec3 history = vec3(0.0);
-    if (histUv.x >= 0.0 && histUv.x <= 1.0 && histUv.y >= 0.0 && histUv.y <= 1.0) {
+    if (wrapMode != 4 || !histOob) {
         history = texture(u_history, histUv).rgb;
     }
     history = applyGrading(history);
 
-    // Always accumulate full trail into ping-pong history; key masking is applied
-    // at display time in the main mixer so keyed regions do not reset the loop.
-    float strength = clamp(ubuf.fbA.x, 0.0, 1.0);
-    vec3 outRgb = mix(below, history, strength);
+    // Ping-pong loop: additive retention (warped history) + live inject (fresh source).
+    float retention = clamp(ubuf.fbA.x, 0.0, 1.0);
+    float inject    = clamp(ubuf.fbC.z, 0.0, 1.0);
+    vec3 outRgb = clamp(below * inject + history * retention, 0.0, 1.0);
     fragColor = vec4(outRgb, 1.0);
 }

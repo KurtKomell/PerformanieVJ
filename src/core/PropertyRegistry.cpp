@@ -206,7 +206,9 @@ QStringList allPropertyNames()
         QStringLiteral("pictureContrast"),
         QStringLiteral("pictureSaturation"),
         QStringLiteral("pictureCircularMotion"),
-        QStringLiteral("feedbackStrength"),
+        QStringLiteral("pictureWrapMode"),
+        QStringLiteral("feedbackLoopRetention"),
+        QStringLiteral("feedbackLiveInject"),
         QStringLiteral("feedbackSaturation"),
         QStringLiteral("feedbackBrightness"),
         QStringLiteral("feedbackContrast"),
@@ -215,6 +217,7 @@ QStringList allPropertyNames()
         QStringLiteral("feedbackRotationDeg"),
         QStringLiteral("feedbackZoom"),
         QStringLiteral("feedbackInputMode"),
+        QStringLiteral("feedbackWrapMode"),
         QStringLiteral("playMode"),
         QStringLiteral("clipPaused"),
         QStringLiteral("copyMode"),
@@ -270,7 +273,9 @@ QString labelFor(const QString& name)
         { QStringLiteral("picturecontrast"), QStringLiteral("Picture contrast") },
         { QStringLiteral("picturesaturation"), QStringLiteral("Picture saturation") },
         { QStringLiteral("picturecircularmotion"), QStringLiteral("Picture circular motion") },
-        { QStringLiteral("feedbackstrength"), QStringLiteral("Feedback strength") },
+        { QStringLiteral("picturewrapmode"), QStringLiteral("Picture wrap mode") },
+        { QStringLiteral("feedbackloopretention"), QStringLiteral("Feedback loop retention") },
+        { QStringLiteral("feedbackliveinject"), QStringLiteral("Feedback live inject") },
         { QStringLiteral("feedbacksaturation"), QStringLiteral("Feedback saturation") },
         { QStringLiteral("feedbackbrightness"), QStringLiteral("Feedback brightness") },
         { QStringLiteral("feedbackcontrast"), QStringLiteral("Feedback contrast") },
@@ -279,6 +284,7 @@ QString labelFor(const QString& name)
         { QStringLiteral("feedbackrotationdeg"), QStringLiteral("Feedback rotation") },
         { QStringLiteral("feedbackzoom"), QStringLiteral("Feedback zoom") },
         { QStringLiteral("feedbackinputmode"), QStringLiteral("Feedback input mode") },
+        { QStringLiteral("feedbackwrapmode"), QStringLiteral("Feedback wrap mode") },
         { QStringLiteral("playmode"), QStringLiteral("Play mode") },
         { QStringLiteral("clippaused"), QStringLiteral("Clip paused") },
         { QStringLiteral("copymode"), QStringLiteral("Copy mode") },
@@ -407,7 +413,7 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("picturecircularmotion")) {
         *minV = 0.0;
         *maxV = 1.0;
-    } else if (p == QLatin1String("feedbackstrength")) {
+    } else if (p == QLatin1String("feedbackloopretention") || p == QLatin1String("feedbackliveinject")) {
         *minV = 0.0;
         *maxV = 1.0;
     } else if (p == QLatin1String("feedbacksaturation") || p == QLatin1String("feedbackcontrast")) {
@@ -423,11 +429,14 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
         *minV = 0.1;
         *maxV = 4.0;
     } else if (p == QLatin1String("feedbackrotationdeg")) {
-        *minV = -180.0;
-        *maxV = 180.0;
+        *minV = 0.0;
+        *maxV = 360.0;
     } else if (p == QLatin1String("feedbackinputmode")) {
         *minV = 0.0;
         *maxV = 2.0;
+    } else if (p == QLatin1String("picturewrapmode") || p == QLatin1String("feedbackwrapmode")) {
+        *minV = 0.0;
+        *maxV = 4.0;
     } else {
         *minV = 0.0;
         *maxV = 1.0;
@@ -572,8 +581,16 @@ bool readValue(const Cell& c, const QString& raw, double* out)
         *out = c.props.picture.circularMotion;
         return true;
     }
-    if (p == QLatin1String("feedbackstrength")) {
-        *out = c.props.feedback.strength;
+    if (p == QLatin1String("picturewrapmode")) {
+        *out = double(int(c.props.picture.wrapMode));
+        return true;
+    }
+    if (p == QLatin1String("feedbackloopretention")) {
+        *out = c.props.feedback.loopRetention;
+        return true;
+    }
+    if (p == QLatin1String("feedbackliveinject")) {
+        *out = c.props.feedback.liveInject;
         return true;
     }
     if (p == QLatin1String("feedbacksaturation")) {
@@ -606,6 +623,10 @@ bool readValue(const Cell& c, const QString& raw, double* out)
     }
     if (p == QLatin1String("feedbackinputmode")) {
         *out = double(int(c.props.feedback.inputMode));
+        return true;
+    }
+    if (p == QLatin1String("feedbackwrapmode")) {
+        *out = double(int(c.props.feedback.wrapMode));
         return true;
     }
     if (p == QLatin1String("playmode")) {
@@ -836,8 +857,17 @@ bool applyValue(Cell& c, const QString& raw, double v)
         c.props.picture.circularMotion = qBound(0.0, v, 1.0);
         return true;
     }
-    if (p == QLatin1String("feedbackstrength")) {
-        c.props.feedback.strength = qBound(0.0, v, 1.0);
+    if (p == QLatin1String("picturewrapmode")) {
+        const int mode = int(qRound(v));
+        c.props.picture.wrapMode = static_cast<WrapMode>(qBound(0, mode, 4));
+        return true;
+    }
+    if (p == QLatin1String("feedbackloopretention")) {
+        c.props.feedback.loopRetention = qBound(0.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackliveinject")) {
+        c.props.feedback.liveInject = qBound(0.0, v, 1.0);
         return true;
     }
     if (p == QLatin1String("feedbacksaturation")) {
@@ -861,7 +891,7 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("feedbackrotationdeg")) {
-        c.props.feedback.rotationDeg = qBound(-180.0, v, 180.0);
+        c.props.feedback.rotationDeg = qBound(0.0, v, 360.0);
         return true;
     }
     if (p == QLatin1String("feedbackzoom")) {
@@ -871,6 +901,11 @@ bool applyValue(Cell& c, const QString& raw, double v)
     if (p == QLatin1String("feedbackinputmode")) {
         const int mode = int(qRound(v));
         c.props.feedback.inputMode = static_cast<FeedbackInputMode>(qBound(0, mode, 2));
+        return true;
+    }
+    if (p == QLatin1String("feedbackwrapmode")) {
+        const int mode = int(qRound(v));
+        c.props.feedback.wrapMode = static_cast<WrapMode>(qBound(0, mode, 4));
         return true;
     }
     if (p == QLatin1String("clippaused")) {

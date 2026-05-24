@@ -58,6 +58,8 @@ public:
 
 signals:
     void cellChanged(int bankSetIndex, int bankIndex, int cellIndex);
+    /// Layer, visual source, or media assignment changed — re-apply live playback if active.
+    void cellPlaybackChanged(int bankSetIndex, int bankIndex, int cellIndex);
     void fullscreenOutputToggled();
     /// Step playback by whole seconds (±1 from arrow buttons).
     void visualSeekStepRequested(int seconds);
@@ -111,15 +113,18 @@ private slots:
     void onTcStartEdited(const QString& t);
 
     void onVisualSourceChanged(int idx);
-    void onFeedbackStrengthChanged(int v);
+    void onFeedbackLoopRetentionChanged(int v);
+    void onFeedbackLiveInjectChanged(int v);
     void onFeedbackSaturationChanged(int v);
     void onFeedbackBrightnessChanged(int v);
     void onFeedbackContrastChanged(int v);
     void onFeedbackHueShiftChanged(int v);
     void onFeedbackGammaChanged(int v);
-    void onFeedbackRotationChanged(double v);
+    void onFeedbackRotationChanged(int v);
     void onFeedbackZoomChanged(int v);
     void onFeedbackInputModeChanged(int idx);
+    void onFeedbackWrapModeChanged(int idx);
+    void onPictureWrapModeChanged(int idx);
 
 private:
     void rebuildScreenList();
@@ -134,15 +139,20 @@ private:
     pvj::core::Cell* currentCell();
     void refreshFromCell();
     void emitChanged();
+    void emitPlaybackChanged();
 
     void markMixingCustom();
     void applyMixingPreset(int comboIndex);
     void syncMaskTypeButtons();
     void syncPlayModeButtons();
     void syncPriorityButtons();
+    void syncPreferredLayerButtons(int layerIndex, bool hasCell);
     void syncKeyingModeUi();
     void syncMaskControlVisibility();
     void syncFeedbackForVisualSource(bool hasCell, int visualSourceKind);
+    void buildKeyingPanel();
+    void syncKeyingPanelPlacement(bool hasCell, int visualSourceKind);
+    void markSliderResetDefault(QSlider* slider, int defaultSliderValue);
 
     void registerMidiWidgets();
     void tagMidiWidget(QWidget* w, const QString& propertyId, const QVariant& noteValue = QVariant());
@@ -173,7 +183,7 @@ private:
     QLineEdit*      m_overlayLineEdit  = nullptr;
     QLineEdit*      m_tcStartEdit      = nullptr;
     QButtonGroup*   m_priorityGroup    = nullptr;
-    QComboBox*      m_preferredLayerCombo = nullptr;
+    QButtonGroup*   m_preferredLayerGroup = nullptr;
 
     QSlider*        m_transparencySlider = nullptr;
     QLabel*         m_transparencyValue  = nullptr;
@@ -230,9 +240,15 @@ private:
     QWidget*        m_keyRRow = nullptr;
     QWidget*        m_keyGRow = nullptr;
     QWidget*        m_keyBRow = nullptr;
+    QWidget*        m_keyingPanel = nullptr;
+    QWidget*        m_mixingKeyingSlot = nullptr;
+    QWidget*        m_feedbackKeyingSlot = nullptr;
+    QWidget*        m_feedbackKeyingSection = nullptr;
 
-    QSlider*        m_feedbackStrengthSlider = nullptr;
-    QLabel*         m_feedbackStrengthValue = nullptr;
+    QSlider*        m_feedbackLoopRetentionSlider = nullptr;
+    QLabel*         m_feedbackLoopRetentionValue = nullptr;
+    QSlider*        m_feedbackLiveInjectSlider = nullptr;
+    QLabel*         m_feedbackLiveInjectValue = nullptr;
     QSlider*        m_feedbackSaturationSlider = nullptr;
     QLabel*         m_feedbackSaturationValue = nullptr;
     QSlider*        m_feedbackBrightnessSlider = nullptr;
@@ -243,11 +259,15 @@ private:
     QLabel*         m_feedbackHueShiftValue = nullptr;
     QSlider*        m_feedbackGammaSlider = nullptr;
     QLabel*         m_feedbackGammaValue = nullptr;
-    QDoubleSpinBox* m_feedbackRotation = nullptr;
+    QSlider*        m_feedbackRotationSlider = nullptr;
+    QLabel*         m_feedbackRotationValue = nullptr;
     QSlider*        m_feedbackZoomSlider = nullptr;
     QLabel*         m_feedbackZoomValue = nullptr;
     QComboBox*      m_feedbackInputModeCombo = nullptr;
     QLabel*         m_feedbackInputModeHint = nullptr;
+    QComboBox*      m_feedbackWrapCombo = nullptr;
+
+    QComboBox*      m_pictureWrapCombo = nullptr;
 
     QComboBox*      m_outputScreen   = nullptr;
     QPushButton*    m_fullscreenBtn  = nullptr;

@@ -236,6 +236,15 @@ int preferredLayerFromCell(const Cell* c)
     return qBound(0, c->props.preferredLayer, 11);
 }
 
+} // namespace
+
+int MainWindow::gpuLayerFromPreferred(int preferredLayer)
+{
+    return qBound(kUserLayerMin, preferredLayer + 1, kUserLayerMax);
+}
+
+namespace {
+
 QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c)
 {
     if (!c) {
@@ -507,6 +516,8 @@ void MainWindow::setupCentralLayout()
     upperSplit->addWidget(m_inspector);
     connect(m_inspector, &ParameterInspector::cellChanged,
             this, &MainWindow::onCellEdited);
+    connect(m_inspector, &ParameterInspector::cellPlaybackChanged,
+            this, &MainWindow::onCellPlaybackChanged);
 
     // Right of upper split: layer preview + mixer output
     auto* previewHost = new QWidget(upperSplit);
@@ -1048,32 +1059,17 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
     if (cellIndex >= bank.cells.size()) return;
 
     const auto& cell = bank.cells[cellIndex];
-    const bool isFeedbackCell = cell.visual.type == VisualType::Generator
-        && cell.visual.generator == GeneratorKind::InternalFeedback;
-    const bool isPlayableMedia = cell.visual.type == VisualType::Media
-        && !cell.visual.mediaId.isNull();
 
-    if (!isPlayableMedia && !isFeedbackCell) {
+    if (!cellIsPlayable(cell)) {
         const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
         if (layer < 0) {
             refreshPreviewForSelectedCell();
             return;
         }
-        m_audioDecoders[layer]->close();
-        if (m_audioEngine) {
-            m_audioEngine->setLayerActive(layer, false);
-        }
-        m_decoders[layer]->stop();
-        m_previewB->clearFrame(layer);
-        m_lastFrames[static_cast<size_t>(layer)] = QImage();
-        if (m_fullscreenOut) {
-            m_fullscreenOut->mixerWidget()->clearFrame(layer);
-        }
-        if (m_clipPeekLayer == layer) {
-            clearClipPeek();
-        }
-        m_layerSlots[layer] = {};
+        stopMixLayer(layer);
         updateMixerFromPlayingCells();
+        syncMixerToFullscreen();
+        syncMixSlotHighlightsToBankGrid();
         refreshPreviewForSelectedCell();
         return;
     }
@@ -1081,69 +1077,139 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
     // Left-click toggle: same cell already on the mixer → stop.
     const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
     if (playingLayer >= 0) {
-        m_audioDecoders[playingLayer]->close();
-        if (m_audioEngine) {
-            m_audioEngine->setLayerActive(playingLayer, false);
-        }
-        m_decoders[playingLayer]->stop();
-        m_previewB->clearFrame(playingLayer);
-        m_lastFrames[static_cast<size_t>(playingLayer)] = QImage();
-        if (m_fullscreenOut) {
-            m_fullscreenOut->mixerWidget()->clearFrame(playingLayer);
-        }
-        if (m_clipPeekLayer == playingLayer) {
-            clearClipPeek();
-        }
-        m_layerSlots[playingLayer] = {};
+        stopMixLayer(playingLayer);
         updateMixerFromPlayingCells();
+        syncMixerToFullscreen();
+        syncMixSlotHighlightsToBankGrid();
         refreshPreviewForSelectedCell();
         return;
     }
 
     const int layer = pickMixSlotForTrigger(bankSetIndex, bankIndex, cellIndex);
+    startCellOnMixLayer(layer, bankSetIndex, bankIndex, cellIndex);
+    syncMixerToFullscreen();
+    syncMixSlotHighlightsToBankGrid();
+    refreshPreviewForSelectedCell();
+}
+
+void MainWindow::stopMixLayer(int layer)
+{
+    if (layer < kUserLayerMin || layer >= kMixLayers) {
+        return;
+    }
+    m_audioDecoders[layer]->close();
+    if (m_audioEngine) {
+        m_audioEngine->setLayerActive(layer, false);
+    }
+    m_decoders[layer]->stop();
+    m_previewB->clearFrame(layer);
+    m_previewB->setLayerFeedback(layer, false, {});
+    m_lastFrames[static_cast<size_t>(layer)] = QImage();
+    if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
+        m_fullscreenOut->mixerWidget()->clearFrame(layer);
+    }
+    if (m_clipPeekLayer == layer) {
+        clearClipPeek();
+    }
+    m_layerSlots[layer] = {};
+    m_mixerSlotHadMedia[static_cast<size_t>(layer)] = false;
+    m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
+}
+
+bool MainWindow::cellIsPlayable(const Cell& cell)
+{
+    const bool isFeedbackCell = cell.visual.type == VisualType::Generator
+        && cell.visual.generator == GeneratorKind::InternalFeedback;
+    const bool isPlayableMedia = cell.visual.type == VisualType::Media
+        && !cell.visual.mediaId.isNull();
+    return isFeedbackCell || isPlayableMedia;
+}
+
+bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (layer < kUserLayerMin || layer >= kMixLayers || !m_project) {
+        return false;
+    }
+    const Cell* cell = cellAtDeck({bankSetIndex, bankIndex, cellIndex});
+    if (!cell || !cellIsPlayable(*cell)) {
+        return false;
+    }
+
+    const DeckSlot& existing = m_layerSlots[static_cast<size_t>(layer)];
+    if (existing.bankSet >= 0
+        && (existing.bankSet != bankSetIndex || existing.bank != bankIndex
+            || existing.cell != cellIndex)) {
+        stopMixLayer(layer);
+    }
+
+    const bool isFeedbackCell = cell->visual.type == VisualType::Generator
+        && cell->visual.generator == GeneratorKind::InternalFeedback;
 
     if (isFeedbackCell) {
-        m_audioDecoders[layer]->close();
-        if (m_audioEngine) {
-            m_audioEngine->setLayerActive(layer, false);
-        }
-        m_decoders[layer]->stop();
+        m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
         m_previewB->clearFrame(layer);
         m_lastFrames[static_cast<size_t>(layer)] = QImage();
-        if (m_fullscreenOut) {
+        if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
             m_fullscreenOut->mixerWidget()->clearFrame(layer);
         }
-        if (m_clipPeekLayer == layer) {
-            clearClipPeek();
-        }
-        m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
-        if (cell.props.fade > 1e-6) {
-            startLayerFadeIn(layer, float(cell.props.transparency), float(cell.props.fade));
+        if (cell->props.fade > 1e-6) {
+            startLayerFadeIn(layer, float(cell->props.transparency), float(cell->props.fade));
         } else {
             updateMixerFromPlayingCells();
         }
+        return true;
+    }
+
+    for (const auto& m : m_project->mediaLibrary) {
+        if (m.id != cell->visual.mediaId) {
+            continue;
+        }
+        m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
+        playMediaOnLayer(layer, m.path);
+        if (cell->props.fade > 1e-6) {
+            startLayerFadeIn(layer, float(cell->props.transparency), float(cell->props.fade));
+        } else {
+            updateMixerFromPlayingCells();
+        }
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::reapplyPlayingCell(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    const int currentLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    if (currentLayer < 0) {
+        updateMixerFromPlayingCells();
+        return;
+    }
+
+    const Cell* cell = cellAtDeck({bankSetIndex, bankIndex, cellIndex});
+    if (!cell || !cellIsPlayable(*cell)) {
+        stopMixLayer(currentLayer);
+        updateMixerFromPlayingCells();
+        syncMixerToFullscreen();
+        syncMixSlotHighlightsToBankGrid();
         refreshPreviewForSelectedCell();
         return;
     }
 
-    for (const auto& m : m_project->mediaLibrary) {
-        if (m.id == cell.visual.mediaId) {
-            m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
-            playMediaOnLayer(layer, m.path);
-            if (cell.props.fade > 1e-6) {
-                startLayerFadeIn(layer, float(cell.props.transparency), float(cell.props.fade));
-            } else {
-                updateMixerFromPlayingCells();
-            }
-            refreshPreviewForSelectedCell();
-            break;
-        }
-    }
+    const int targetLayer = gpuLayerFromPreferred(preferredLayerFromCell(cell));
+    stopMixLayer(currentLayer);
+    startCellOnMixLayer(targetLayer, bankSetIndex, bankIndex, cellIndex);
+    syncMixerToFullscreen();
+    syncMixSlotHighlightsToBankGrid();
+    refreshPreviewForSelectedCell();
+}
+
+void MainWindow::onCellPlaybackChanged(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
 }
 
 void MainWindow::playMediaOnLayer(int layer, const QString& path)
 {
-    if (layer < 0 || layer >= kMixLayers) return;
+    if (layer < kUserLayerMin || layer >= kMixLayers) return;
     if (path.isEmpty()) return;
 
     m_audioDecoders[layer]->close();
@@ -1221,7 +1287,7 @@ const Cell* MainWindow::cellAtDeck(const DeckSlot& slot)
 
 void MainWindow::updateMixerFromPlayingCells()
 {
-    for (int i = 0; i < kMixLayers; ++i) {
+    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
         const Cell* c = cellAtDeck(m_layerSlots[i]);
         const bool isFeedbackCell = c
             && c->visual.type == VisualType::Generator
@@ -1311,8 +1377,8 @@ void MainWindow::syncMixSlotHighlightsToBankGrid()
     if (!m_bankGrid || !m_previewB) {
         return;
     }
-    std::array<MixSlotCellRef, 12> arr{};
-    for (int i = 0; i < kMixLayers; ++i) {
+    std::array<MixSlotCellRef, kMixSlotCount> arr{};
+    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
         const DeckSlot& d = m_layerSlots[static_cast<size_t>(i)];
         if (d.bankSet < 0) {
             continue;
@@ -1340,14 +1406,16 @@ void MainWindow::syncPeekHighlightToBankGrid()
     m_bankGrid->setPeekCellHighlight(MixSlotCellRef{d.bankSet, d.bank, d.cell});
 }
 
-void MainWindow::onMixLayerDirect(int slotIndex)
+void MainWindow::onMixLayerDirect(int userSlotIndex)
 {
-    if (slotIndex < 0 || slotIndex >= kMixLayers || !m_bankGrid) {
+    static constexpr int kUserLayerDirectCount = 12;
+    if (userSlotIndex < 0 || userSlotIndex >= kUserLayerDirectCount || !m_bankGrid) {
         return;
     }
-    const DeckSlot& s = m_layerSlots[static_cast<size_t>(slotIndex)];
+    const int gpuLayer = userSlotIndex + kUserLayerMin;
+    const DeckSlot& s = m_layerSlots[static_cast<size_t>(gpuLayer)];
     if (s.bankSet < 0) {
-        statusBar()->showMessage(tr("Mix slot %1 is empty").arg(slotIndex + 1), 2000);
+        statusBar()->showMessage(tr("Mix slot %1 is empty").arg(gpuLayer), 2000);
         return;
     }
     m_bankGrid->revealAndSelectCell(s.bankSet, s.bank, s.cell);
@@ -1356,7 +1424,7 @@ void MainWindow::onMixLayerDirect(int slotIndex)
 
 void MainWindow::startLayerFadeIn(int layer, float targetTransparency, float fadeParam)
 {
-    if (layer < 0 || layer >= kMixLayers) {
+    if (layer < kUserLayerMin || layer >= kMixLayers) {
         return;
     }
     const int durMs = int(5000.0 * double(fadeParam) + 0.5);
@@ -1395,7 +1463,7 @@ void MainWindow::startLayerFadeIn(int layer, float targetTransparency, float fad
 void MainWindow::tickLayerFade()
 {
     bool any = false;
-    for (int i = 0; i < kMixLayers; ++i) {
+    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
         if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
             continue;
         }
@@ -1479,7 +1547,7 @@ bool MainWindow::selectionMatchesSlot(const DeckSlot& s) const
 
 int MainWindow::findLayerPlayingCell(int bankSet, int bank, int cell) const
 {
-    for (int i = 0; i < kMixLayers; ++i) {
+    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
         const DeckSlot& s = m_layerSlots[static_cast<size_t>(i)];
         if (s.bankSet == bankSet && s.bank == bank && s.cell == cell) {
             return i;
@@ -1495,7 +1563,7 @@ int MainWindow::pickMixSlotForTrigger(int bankSet, int bank, int cell)
         return existing;
     }
     const int preferred = preferredLayerFromCell(cellAtDeck(DeckSlot{bankSet, bank, cell}));
-    return qBound(0, preferred, kMixLayers - 1);
+    return gpuLayerFromPreferred(preferred);
 }
 
 void MainWindow::refreshPreviewForSelectedCell()
@@ -1679,6 +1747,7 @@ void MainWindow::assignMediaToCell(int bankSetIndex, int bankIndex, int cellInde
     m_bankGrid->refresh();
     m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     refreshPreviewForSelectedCell();
+    reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
     if (m_previewA) {
         m_previewA->setLabel(QFileInfo(absolutePath).fileName());
     }
