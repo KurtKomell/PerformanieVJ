@@ -215,6 +215,7 @@ struct FeedbackParams {
     double gamma       = 1.0;   // 0.1..4 history gamma
     double rotationDeg = 0.0;   // 0..360 history rotation per frame
     double zoom        = 0.0;   // -1..1 history zoom per frame
+    int frameDelay     = 0;     // 0..14 extra frames back for history read
     FeedbackInputMode inputMode = FeedbackInputMode::StackComposite;
     WrapMode wrapMode = WrapMode::Black;
 };

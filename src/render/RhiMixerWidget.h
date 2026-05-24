@@ -33,6 +33,7 @@ class RhiMixerWidget : public QRhiWidget
     Q_OBJECT
 public:
     static constexpr int LayerCount = 13;
+    static constexpr int kFeedbackRingSize = 16;
     static constexpr int BackgroundLayerIndex = 0;
     static constexpr int UserLayerMin = 1;
     static constexpr int UserLayerMax = 12;
@@ -113,7 +114,9 @@ private:
                                    const pvj::core::CellFilterNode& node, const QSize& pixelSize,
                                    int layerIndex);
     bool ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize);
-    QRhiGraphicsPipeline* ensureFilterPipeline(QRhi* r, const QString& typeId,
+    bool ensureLayerFilterPassResources(QRhi* r, int layer);
+    void rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex);
+    QRhiGraphicsPipeline* ensureFilterPipeline(QRhi* r, const QString& typeId, int layerIndex,
                                                QRhiShaderResourceBindings* srb,
                                                QRhiRenderPassDescriptor* rp);
     void runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int layer, QRhiTexture* firstSource,
@@ -172,8 +175,8 @@ private:
     quint8 m_feedbackWriteIdx = 0;
     QSize m_feedbackPixelSize;
 
-    std::array<std::unique_ptr<QRhiTexture>, 2> m_feedbackTex{};
-    std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2> m_feedbackRt{};
+    std::array<std::unique_ptr<QRhiTexture>, kFeedbackRingSize> m_feedbackTex{};
+    std::array<std::unique_ptr<QRhiTextureRenderTarget>, kFeedbackRingSize> m_feedbackRt{};
     std::unique_ptr<QRhiRenderPassDescriptor> m_feedbackRp;
     std::unique_ptr<QRhiBuffer> m_feedbackUbuf;
     std::unique_ptr<QRhiShaderResourceBindings> m_feedbackSrb;
@@ -234,6 +237,8 @@ private:
     std::array<std::array<std::unique_ptr<QRhiTexture>, 2>, LayerCount> m_layerFilterPingTex{};
     std::array<std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2>, LayerCount> m_layerFilterPingRt{};
     std::array<int, LayerCount> m_layerFilterLastOut{};
+    std::array<std::unique_ptr<QRhiBuffer>, LayerCount> m_layerFilterUbuf{};
+    std::array<std::unique_ptr<QRhiShaderResourceBindings>, LayerCount> m_layerFilterSrb{};
 
     QSize m_filterPixelSize;
     QHash<QString, QRhiGraphicsPipeline*> m_filterPipelineByTypeId;

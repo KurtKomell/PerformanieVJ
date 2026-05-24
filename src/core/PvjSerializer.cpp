@@ -93,6 +93,7 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         || p.feedback.gamma != fbDefault.gamma
         || p.feedback.rotationDeg != fbDefault.rotationDeg
         || p.feedback.zoom != fbDefault.zoom
+        || p.feedback.frameDelay != fbDefault.frameDelay
         || p.feedback.inputMode != fbDefault.inputMode
         || p.feedback.wrapMode != fbDefault.wrapMode;
     if (fbNonDefault) {
@@ -106,6 +107,9 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         w.writeAttribute(QStringLiteral("gamma"),       QString::number(p.feedback.gamma,       'g', 6));
         w.writeAttribute(QStringLiteral("rotationDeg"), QString::number(p.feedback.rotationDeg, 'g', 6));
         w.writeAttribute(QStringLiteral("zoom"),        QString::number(p.feedback.zoom,        'g', 6));
+        if (p.feedback.frameDelay != fbDefault.frameDelay) {
+            w.writeAttribute(QStringLiteral("frameDelay"), QString::number(p.feedback.frameDelay));
+        }
         if (p.feedback.inputMode != fbDefault.inputMode) {
             w.writeAttribute(QStringLiteral("inputMode"),
                              enums::toString(p.feedback.inputMode));
@@ -249,6 +253,7 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.feedback.gamma == 1.0
             && c.props.feedback.rotationDeg == 0.0
             && c.props.feedback.zoom == 0.0
+            && c.props.feedback.frameDelay == 0
             && c.props.feedback.inputMode == FeedbackInputMode::StackComposite
             && c.props.feedback.wrapMode == WrapMode::Black;
         if (isDefault) {
@@ -527,6 +532,9 @@ CellProps readProps(QXmlStreamReader& r)
             p.feedback.gamma       = rd("gamma", 1.0);
             p.feedback.rotationDeg = rd("rotationDeg", 0.0);
             p.feedback.zoom        = rd("zoom", 0.0);
+            if (fbAttrs.hasAttribute(QStringLiteral("frameDelay"))) {
+                p.feedback.frameDelay = qBound(0, int(qRound(rd("frameDelay", 0.0))), 14);
+            }
             if (fbAttrs.hasAttribute(QStringLiteral("inputMode"))) {
                 p.feedback.inputMode = enums::feedbackInputModeFromString(
                     fbAttrs.value(QStringLiteral("inputMode")).toString());

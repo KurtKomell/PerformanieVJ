@@ -93,7 +93,6 @@ void main()
     float pSoft = max(ubuf.params.w, 0.0005);
 
     int mi = int(mode + 0.01);
-    float keyedAlpha = 1.0;
 
     if (ubuf.rotation.w < 0.5) {
         // --- Chroma key family ---
@@ -112,10 +111,18 @@ void main()
             vec3 d = abs((c - keyRgb) * wRaw);
             metric = max(max(d.x, d.y), d.z);
         }
-        keyedAlpha = smoothstep(pTh - pSoft, pTh + pSoft, metric);
-        if ((mi % 2) != 0) {
-            keyedAlpha = 1.0 - keyedAlpha;
+        float pSoftEff = max(pSoft, 0.04);
+        float edgeLo = clamp(pTh - pSoftEff, 0.0, 1.0);
+        float edgeHi = clamp(pTh + pSoftEff, 0.0, 1.0);
+        if (edgeLo >= edgeHi) {
+            edgeHi = min(1.0, edgeLo + pSoftEff * 2.0);
         }
+        float kA = clamp(1.0 - smoothstep(edgeLo, edgeHi, metric), 0.0, 1.0);
+        if ((mi % 2) != 0) {
+            kA = 1.0 - kA;
+        }
+        fragColor = vec4(c, baseA * kA);
+        return;
     } else {
         // --- Luma / channel family ---
         float v = 0.0;
@@ -141,8 +148,16 @@ void main()
             v = 1.0 - max(max(c.r, c.g), c.b);
         }
         float d = abs(v - pKey);
-        keyedAlpha = smoothstep(pTh + pSoft, pTh - pSoft, d);
+        // Minimum feather prevents binary 0/1 toggling on video noise; do not scale with
+        // hardness or high-threshold keys never reach stable full in/out.
+        float pSoftEff = max(pSoft, 0.04);
+        float edgeLo = clamp(pTh - pSoftEff, 0.0, 1.0);
+        float edgeHi = clamp(pTh + pSoftEff, 0.0, 1.0);
+        if (edgeLo >= edgeHi) {
+            edgeHi = min(1.0, edgeLo + pSoftEff * 2.0);
+        }
+        float kA = clamp(1.0 - smoothstep(edgeLo, edgeHi, d), 0.0, 1.0);
+        fragColor = vec4(c, baseA * kA);
+        return;
     }
-
-    fragColor = vec4(c, baseA * clamp(keyedAlpha, 0.0, 1.0));
 }

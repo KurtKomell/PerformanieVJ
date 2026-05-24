@@ -1,5 +1,6 @@
 #include "ParameterInspector.h"
 
+#include "MainWindow.h"
 #include "MidiLearnMenu.h"
 
 #include "core/EnumStrings.h"
@@ -271,6 +272,70 @@ private:
 namespace {
 
 constexpr int kUnitSliderMax = 1000;
+constexpr double kKeyUnitEpsilon = 1.0 / (kUnitSliderMax * 2.0);
+
+struct KeyingUiValues {
+    bool keyingEnabled = false;
+    KeyingMode keyingMode = KeyingMode::Luma;
+    double keyThreshold = 0.25;
+    double keySoftness = 0.12;
+    double keyLumaCenter = 0.5;
+    bool keyLumaInvert = false;
+    double keyChromaHue = 0.33;
+    bool keyChromaInvert = false;
+    double keyChannelR = 1.0;
+    double keyChannelG = 1.0;
+    double keyChannelB = 1.0;
+};
+
+KeyingUiValues keyingUiValues(const pvj::core::Cell* cell, const LayerKeyingState* layerOverride)
+{
+    KeyingUiValues v;
+    if (layerOverride && layerOverride->valid) {
+        v.keyingEnabled = layerOverride->keyingEnabled;
+        v.keyingMode = layerOverride->keyingMode;
+        v.keyThreshold = layerOverride->keyThreshold;
+        v.keySoftness = layerOverride->keySoftness;
+        v.keyLumaCenter = layerOverride->keyLumaCenter;
+        v.keyLumaInvert = layerOverride->keyLumaInvert;
+        v.keyChromaHue = layerOverride->keyChromaHue;
+        v.keyChromaInvert = layerOverride->keyChromaInvert;
+        v.keyChannelR = layerOverride->keyChannelR;
+        v.keyChannelG = layerOverride->keyChannelG;
+        v.keyChannelB = layerOverride->keyChannelB;
+        return v;
+    }
+    if (!cell) {
+        return v;
+    }
+    v.keyingEnabled = cell->props.keyingEnabled;
+    v.keyingMode = cell->props.keyingMode;
+    v.keyThreshold = cell->props.keyThreshold;
+    v.keySoftness = cell->props.keySoftness;
+    v.keyLumaCenter = cell->props.keyLumaCenter;
+    v.keyLumaInvert = cell->props.keyLumaInvert;
+    v.keyChromaHue = cell->props.keyChromaHue;
+    v.keyChromaInvert = cell->props.keyChromaInvert;
+    v.keyChannelR = cell->props.keyChannelR;
+    v.keyChannelG = cell->props.keyChannelG;
+    v.keyChannelB = cell->props.keyChannelB;
+    return v;
+}
+
+void applyKeyingUiValuesToCell(pvj::core::CellProps& props, const KeyingUiValues& v)
+{
+    props.keyingEnabled = v.keyingEnabled;
+    props.keyingMode = v.keyingMode;
+    props.keyThreshold = v.keyThreshold;
+    props.keySoftness = v.keySoftness;
+    props.keyLumaCenter = v.keyLumaCenter;
+    props.keyLumaInvert = v.keyLumaInvert;
+    props.keyChromaHue = v.keyChromaHue;
+    props.keyChromaInvert = v.keyChromaInvert;
+    props.keyChannelR = v.keyChannelR;
+    props.keyChannelG = v.keyChannelG;
+    props.keyChannelB = v.keyChannelB;
+}
 
 int unitToSlider(double u)
 {
@@ -1243,7 +1308,7 @@ void ParameterInspector::buildKeyingPanel()
                 this, &ParameterInspector::onKeyFeatherSliderChanged);
         h2->addWidget(m_keyFeatherSlider, 1);
         h2->addWidget(m_keyFeatherValue);
-        markSliderResetDefault(m_keyFeatherSlider, 0);
+        markSliderResetDefault(m_keyFeatherSlider, unitToSlider(0.12));
         root->addWidget(row2);
     }
     {
@@ -1380,6 +1445,28 @@ QWidget* ParameterInspector::buildFeedbackTab()
     addSliderRow(tr("Zoom"), &m_feedbackZoomSlider, &m_feedbackZoomValue,
                  &ParameterInspector::onFeedbackZoomChanged, signedToSlider(0.0, -1.0, 1.0));
 
+    {
+        auto* row = new QWidget(host);
+        auto* h = new QHBoxLayout(row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(6);
+        m_feedbackFrameDelaySlider = new QSlider(Qt::Horizontal, row);
+        m_feedbackFrameDelaySlider->setRange(0, 14);
+        m_feedbackFrameDelaySlider->setSingleStep(1);
+        m_feedbackFrameDelaySlider->setPageStep(1);
+        m_feedbackFrameDelaySlider->setToolTip(
+            tr("Frames between trail copies (0 = every frame, higher = wider gaps)."));
+        m_feedbackFrameDelayValue = new QLabel(QStringLiteral("0"), row);
+        m_feedbackFrameDelayValue->setMinimumWidth(44);
+        m_feedbackFrameDelayValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        connect(m_feedbackFrameDelaySlider, &QSlider::valueChanged, this,
+                &ParameterInspector::onFeedbackFrameDelayChanged);
+        h->addWidget(m_feedbackFrameDelaySlider, 1);
+        h->addWidget(m_feedbackFrameDelayValue);
+        markSliderResetDefault(m_feedbackFrameDelaySlider, 0);
+        form->addRow(tr("Frame delay"), row);
+    }
+
     root->addLayout(form);
 
     m_feedbackKeyingSection = new QWidget(host);
@@ -1489,6 +1576,108 @@ void ParameterInspector::setSelection(int bankSetIndex, int bankIndex, int cellI
     refreshFromCell();
 }
 
+void ParameterInspector::setLayerKeyingOverride(const LayerKeyingState* state)
+{
+    if (m_layerKeyingOverride == state) {
+        return;
+    }
+    m_layerKeyingOverride = state;
+    refreshKeyingUi();
+}
+
+void ParameterInspector::refreshKeyingUi()
+{
+    if (m_loading) {
+        return;
+    }
+    auto* cell = currentCell();
+    m_loading = true;
+    QSignalBlocker b5(m_keyHardnessSlider);
+    QSignalBlocker b6(m_keyFeatherSlider);
+    QSignalBlocker b7(m_keyRSlider);
+    QSignalBlocker b8(m_keyGSlider);
+    QSignalBlocker b9(m_keyBSlider);
+    QSignalBlocker b11(m_keyingMode);
+    QSignalBlocker b11a(m_keyingEnabled);
+    QSignalBlocker b19(m_keyRangeSlider);
+    QSignalBlocker b20(m_keyChromaRangeSlider);
+
+    const auto setCombo = [](QComboBox* cb, int value) {
+        for (int i = 0; i < cb->count(); ++i) {
+            if (cb->itemData(i).toInt() == value) {
+                cb->setCurrentIndex(i);
+                return;
+            }
+        }
+    };
+
+    const KeyingUiValues keyUi = keyingUiValues(cell, m_layerKeyingOverride);
+    if (m_keyHardnessSlider) {
+        m_keyHardnessSlider->setValue(unitToSlider(keyUi.keyThreshold));
+    }
+    if (m_keyHardnessValue) {
+        m_keyHardnessValue->setText(formatUnit(keyUi.keyThreshold));
+    }
+    if (m_keyFeatherSlider) {
+        m_keyFeatherSlider->setValue(unitToSlider(keyUi.keySoftness));
+    }
+    if (m_keyFeatherValue) {
+        m_keyFeatherValue->setText(formatUnit(keyUi.keySoftness));
+    }
+    if (m_keyRSlider) {
+        m_keyRSlider->setValue(unitToSlider(keyUi.keyChannelR));
+    }
+    if (m_keyGSlider) {
+        m_keyGSlider->setValue(unitToSlider(keyUi.keyChannelG));
+    }
+    if (m_keyBSlider) {
+        m_keyBSlider->setValue(unitToSlider(keyUi.keyChannelB));
+    }
+    if (m_keyRValue) {
+        m_keyRValue->setText(formatKeyPercent(keyUi.keyChannelR));
+    }
+    if (m_keyGValue) {
+        m_keyGValue->setText(formatKeyPercent(keyUi.keyChannelG));
+    }
+    if (m_keyBValue) {
+        m_keyBValue->setText(formatKeyPercent(keyUi.keyChannelB));
+    }
+    if (m_keyingEnabled) {
+        m_keyingEnabled->setChecked(keyUi.keyingEnabled);
+    }
+    if (m_keyingMode) {
+        setCombo(m_keyingMode, int(keyUi.keyingMode));
+    }
+    if (m_keyRangeSlider) {
+        m_keyRangeSlider->setRange(
+            qBound(0.0, keyUi.keyLumaCenter - keyUi.keyThreshold, 1.0),
+            qBound(0.0, keyUi.keyLumaCenter + keyUi.keyThreshold, 1.0));
+    }
+    if (m_keyRangeValue) {
+        m_keyRangeValue->setText(formatUnit(keyUi.keyLumaCenter));
+    }
+    if (m_keyLumaTargetGroup) {
+        if (QAbstractButton* b = m_keyLumaTargetGroup->button(keyUi.keyLumaInvert ? 1 : 0)) {
+            b->setChecked(true);
+        }
+    }
+    if (m_keyChromaRangeSlider) {
+        m_keyChromaRangeSlider->setRange(
+            qBound(0.0, keyUi.keyChromaHue - keyUi.keyThreshold, 1.0),
+            qBound(0.0, keyUi.keyChromaHue + keyUi.keyThreshold, 1.0));
+    }
+    if (m_keyChromaRangeValue) {
+        m_keyChromaRangeValue->setText(formatUnit(keyUi.keyChromaHue));
+    }
+    if (m_keyChromaTargetGroup) {
+        if (QAbstractButton* b = m_keyChromaTargetGroup->button(keyUi.keyChromaInvert ? 1 : 0)) {
+            b->setChecked(true);
+        }
+    }
+    syncKeyingModeUi();
+    m_loading = false;
+}
+
 void ParameterInspector::setMidiMappingEditMode(bool on)
 {
     if (m_midiMappingEditMode == on) {
@@ -1582,35 +1771,36 @@ void ParameterInspector::applyMixingPreset(int comboIndex)
         }
     };
     setCombo(m_copyMode, int(cell->props.copyMode));
-    m_keyHardnessSlider->setValue(unitToSlider(cell->props.keyThreshold));
-    m_keyHardnessValue->setText(formatUnit(cell->props.keyThreshold));
-    m_keyFeatherSlider->setValue(unitToSlider(cell->props.keySoftness));
-    m_keyFeatherValue->setText(formatUnit(cell->props.keySoftness));
-    m_keyRSlider->setValue(unitToSlider(cell->props.keyChannelR));
-    m_keyRValue->setText(formatKeyPercent(cell->props.keyChannelR));
-    m_keyGSlider->setValue(unitToSlider(cell->props.keyChannelG));
-    m_keyGValue->setText(formatKeyPercent(cell->props.keyChannelG));
-    m_keyBSlider->setValue(unitToSlider(cell->props.keyChannelB));
-    m_keyBValue->setText(formatKeyPercent(cell->props.keyChannelB));
+    const KeyingUiValues keyUi = keyingUiValues(cell, m_layerKeyingOverride);
+    m_keyHardnessSlider->setValue(unitToSlider(keyUi.keyThreshold));
+    m_keyHardnessValue->setText(formatUnit(keyUi.keyThreshold));
+    m_keyFeatherSlider->setValue(unitToSlider(keyUi.keySoftness));
+    m_keyFeatherValue->setText(formatUnit(keyUi.keySoftness));
+    m_keyRSlider->setValue(unitToSlider(keyUi.keyChannelR));
+    m_keyRValue->setText(formatKeyPercent(keyUi.keyChannelR));
+    m_keyGSlider->setValue(unitToSlider(keyUi.keyChannelG));
+    m_keyGValue->setText(formatKeyPercent(keyUi.keyChannelG));
+    m_keyBSlider->setValue(unitToSlider(keyUi.keyChannelB));
+    m_keyBValue->setText(formatKeyPercent(keyUi.keyChannelB));
     if (m_keyingEnabled) {
-        m_keyingEnabled->setChecked(cell->props.keyingEnabled);
+        m_keyingEnabled->setChecked(keyUi.keyingEnabled);
     }
-    setCombo(m_keyingMode, int(cell->props.keyingMode));
+    setCombo(m_keyingMode, int(keyUi.keyingMode));
     m_keyRangeSlider->setRange(
-        qBound(0.0, cell->props.keyLumaCenter - cell->props.keyThreshold, 1.0),
-        qBound(0.0, cell->props.keyLumaCenter + cell->props.keyThreshold, 1.0));
-    m_keyRangeValue->setText(formatUnit(cell->props.keyLumaCenter));
+        qBound(0.0, keyUi.keyLumaCenter - keyUi.keyThreshold, 1.0),
+        qBound(0.0, keyUi.keyLumaCenter + keyUi.keyThreshold, 1.0));
+    m_keyRangeValue->setText(formatUnit(keyUi.keyLumaCenter));
     if (m_keyLumaTargetGroup) {
-        if (QAbstractButton* b = m_keyLumaTargetGroup->button(cell->props.keyLumaInvert ? 1 : 0)) {
+        if (QAbstractButton* b = m_keyLumaTargetGroup->button(keyUi.keyLumaInvert ? 1 : 0)) {
             b->setChecked(true);
         }
     }
     m_keyChromaRangeSlider->setRange(
-        qBound(0.0, cell->props.keyChromaHue - cell->props.keyThreshold, 1.0),
-        qBound(0.0, cell->props.keyChromaHue + cell->props.keyThreshold, 1.0));
-    m_keyChromaRangeValue->setText(formatUnit(cell->props.keyChromaHue));
+        qBound(0.0, keyUi.keyChromaHue - keyUi.keyThreshold, 1.0),
+        qBound(0.0, keyUi.keyChromaHue + keyUi.keyThreshold, 1.0));
+    m_keyChromaRangeValue->setText(formatUnit(keyUi.keyChromaHue));
     if (m_keyChromaTargetGroup) {
-        if (QAbstractButton* b = m_keyChromaTargetGroup->button(cell->props.keyChromaInvert ? 1 : 0)) {
+        if (QAbstractButton* b = m_keyChromaTargetGroup->button(keyUi.keyChromaInvert ? 1 : 0)) {
             b->setChecked(true);
         }
     }
@@ -1740,13 +1930,16 @@ void ParameterInspector::syncFeedbackForVisualSource(bool hasCell, int visualSou
                      static_cast<QWidget*>(m_feedbackGammaSlider),
                      static_cast<QWidget*>(m_feedbackRotationSlider),
                      static_cast<QWidget*>(m_feedbackZoomSlider),
+                     static_cast<QWidget*>(m_feedbackFrameDelaySlider),
                      static_cast<QWidget*>(m_feedbackInputModeCombo),
                      static_cast<QWidget*>(m_feedbackInputModeHint),
-                     static_cast<QWidget*>(m_feedbackWrapCombo),
-                     m_keyingPanel}) {
+                     static_cast<QWidget*>(m_feedbackWrapCombo)}) {
         if (w) {
             w->setEnabled(feedbackEnabled);
         }
+    }
+    if (m_keyingPanel) {
+        m_keyingPanel->setEnabled(hasCell);
     }
 
     syncKeyingPanelPlacement(hasCell, visualSourceKind);
@@ -1813,6 +2006,7 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b40(m_feedbackGammaSlider);
     QSignalBlocker b41(m_feedbackRotationSlider);
     QSignalBlocker b42(m_feedbackZoomSlider);
+    QSignalBlocker b42a(m_feedbackFrameDelaySlider);
     QSignalBlocker b43(m_feedbackInputModeCombo);
     QSignalBlocker b44(m_feedbackWrapCombo);
     QSignalBlocker b45(m_pictureWrapCombo);
@@ -2049,38 +2243,41 @@ void ParameterInspector::refreshFromCell()
     m_pauseClipBtn->setChecked(cell->props.clipPaused);
     m_overlayLineEdit->setText(cell->props.overlayText);
     m_tcStartEdit->setText(cell->props.tcStart);
-    m_keyHardnessSlider->setValue(unitToSlider(cell->props.keyThreshold));
-    m_keyHardnessValue->setText(formatUnit(cell->props.keyThreshold));
-    m_keyFeatherSlider->setValue(unitToSlider(cell->props.keySoftness));
-    m_keyFeatherValue->setText(formatUnit(cell->props.keySoftness));
-    m_keyRSlider->setValue(unitToSlider(cell->props.keyChannelR));
-    m_keyGSlider->setValue(unitToSlider(cell->props.keyChannelG));
-    m_keyBSlider->setValue(unitToSlider(cell->props.keyChannelB));
-    m_keyRValue->setText(formatKeyPercent(cell->props.keyChannelR));
-    m_keyGValue->setText(formatKeyPercent(cell->props.keyChannelG));
-    m_keyBValue->setText(formatKeyPercent(cell->props.keyChannelB));
-    m_keyRangeSlider->setRange(
-        qBound(0.0, cell->props.keyLumaCenter - cell->props.keyThreshold, 1.0),
-        qBound(0.0, cell->props.keyLumaCenter + cell->props.keyThreshold, 1.0));
-    m_keyRangeValue->setText(formatUnit(cell->props.keyLumaCenter));
-    if (m_keyLumaTargetGroup) {
-        if (QAbstractButton* b = m_keyLumaTargetGroup->button(cell->props.keyLumaInvert ? 1 : 0)) {
-            b->setChecked(true);
+    {
+        const KeyingUiValues keyUi = keyingUiValues(cell, m_layerKeyingOverride);
+        m_keyHardnessSlider->setValue(unitToSlider(keyUi.keyThreshold));
+        m_keyHardnessValue->setText(formatUnit(keyUi.keyThreshold));
+        m_keyFeatherSlider->setValue(unitToSlider(keyUi.keySoftness));
+        m_keyFeatherValue->setText(formatUnit(keyUi.keySoftness));
+        m_keyRSlider->setValue(unitToSlider(keyUi.keyChannelR));
+        m_keyGSlider->setValue(unitToSlider(keyUi.keyChannelG));
+        m_keyBSlider->setValue(unitToSlider(keyUi.keyChannelB));
+        m_keyRValue->setText(formatKeyPercent(keyUi.keyChannelR));
+        m_keyGValue->setText(formatKeyPercent(keyUi.keyChannelG));
+        m_keyBValue->setText(formatKeyPercent(keyUi.keyChannelB));
+        m_keyRangeSlider->setRange(
+            qBound(0.0, keyUi.keyLumaCenter - keyUi.keyThreshold, 1.0),
+            qBound(0.0, keyUi.keyLumaCenter + keyUi.keyThreshold, 1.0));
+        m_keyRangeValue->setText(formatUnit(keyUi.keyLumaCenter));
+        if (m_keyLumaTargetGroup) {
+            if (QAbstractButton* b = m_keyLumaTargetGroup->button(keyUi.keyLumaInvert ? 1 : 0)) {
+                b->setChecked(true);
+            }
         }
-    }
-    m_keyChromaRangeSlider->setRange(
-        qBound(0.0, cell->props.keyChromaHue - cell->props.keyThreshold, 1.0),
-        qBound(0.0, cell->props.keyChromaHue + cell->props.keyThreshold, 1.0));
-    m_keyChromaRangeValue->setText(formatUnit(cell->props.keyChromaHue));
-    if (m_keyChromaTargetGroup) {
-        if (QAbstractButton* b = m_keyChromaTargetGroup->button(cell->props.keyChromaInvert ? 1 : 0)) {
-            b->setChecked(true);
+        m_keyChromaRangeSlider->setRange(
+            qBound(0.0, keyUi.keyChromaHue - keyUi.keyThreshold, 1.0),
+            qBound(0.0, keyUi.keyChromaHue + keyUi.keyThreshold, 1.0));
+        m_keyChromaRangeValue->setText(formatUnit(keyUi.keyChromaHue));
+        if (m_keyChromaTargetGroup) {
+            if (QAbstractButton* b = m_keyChromaTargetGroup->button(keyUi.keyChromaInvert ? 1 : 0)) {
+                b->setChecked(true);
+            }
         }
+        if (m_keyingEnabled) {
+            m_keyingEnabled->setChecked(keyUi.keyingEnabled);
+        }
+        setCombo(m_keyingMode, int(keyUi.keyingMode));
     }
-    if (m_keyingEnabled) {
-        m_keyingEnabled->setChecked(cell->props.keyingEnabled);
-    }
-    setCombo(m_keyingMode, int(cell->props.keyingMode));
     setCombo(m_copyMode, int(cell->props.copyMode));
     setCombo(m_matteRoleCombo, int(cell->props.matteRole));
     if (m_maskRectWidthSlider) m_maskRectWidthSlider->setValue(unitToSlider(cell->props.maskRectWidth));
@@ -2146,6 +2343,13 @@ void ParameterInspector::refreshFromCell()
     if (m_feedbackZoomSlider) {
         m_feedbackZoomSlider->setValue(signedToSlider(cell->props.feedback.zoom, -1.0, 1.0));
         m_feedbackZoomValue->setText(formatSignedUnit(cell->props.feedback.zoom));
+    }
+    if (m_feedbackFrameDelaySlider) {
+        const int delay = qBound(0, cell->props.feedback.frameDelay, 14);
+        m_feedbackFrameDelaySlider->setValue(delay);
+        if (m_feedbackFrameDelayValue) {
+            m_feedbackFrameDelayValue->setText(QString::number(delay));
+        }
     }
     if (m_feedbackInputModeCombo) {
         const int modeIdx = m_feedbackInputModeCombo->findData(int(cell->props.feedback.inputMode));
@@ -2281,6 +2485,19 @@ void ParameterInspector::onFeedbackZoomChanged(int v)
     const double u = sliderToSigned(v, -1.0, 1.0);
     if (m_feedbackZoomValue) m_feedbackZoomValue->setText(formatSignedUnit(u));
     if (auto* c = currentCell()) { c->props.feedback.zoom = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackFrameDelayChanged(int v)
+{
+    if (m_loading) return;
+    const int delay = qBound(0, v, 14);
+    if (m_feedbackFrameDelayValue) {
+        m_feedbackFrameDelayValue->setText(QString::number(delay));
+    }
+    if (auto* c = currentCell()) {
+        c->props.feedback.frameDelay = delay;
+        emitChanged();
+    }
 }
 
 void ParameterInspector::onFeedbackInputModeChanged(int idx)
@@ -2557,6 +2774,12 @@ void ParameterInspector::onKeyLumaRangeChanged(double minV, double maxV)
     if (m_loading) return;
     const double center = 0.5 * (minV + maxV);
     const double width = 0.5 * qMax(0.0, maxV - minV);
+    if (auto* c = currentCell()) {
+        if (qAbs(c->props.keyLumaCenter - center) <= kKeyUnitEpsilon
+            && qAbs(c->props.keyThreshold - width) <= kKeyUnitEpsilon) {
+            return;
+        }
+    }
     if (m_keyRangeValue) {
         m_keyRangeValue->setText(formatUnit(center));
     }
@@ -2590,6 +2813,12 @@ void ParameterInspector::onKeyChromaRangeChanged(double minV, double maxV)
     if (m_loading) return;
     const double center = 0.5 * (minV + maxV);
     const double width = 0.5 * qMax(0.0, maxV - minV);
+    if (auto* c = currentCell()) {
+        if (qAbs(c->props.keyChromaHue - center) <= kKeyUnitEpsilon
+            && qAbs(c->props.keyThreshold - width) <= kKeyUnitEpsilon) {
+            return;
+        }
+    }
     if (m_keyChromaRangeValue) {
         m_keyChromaRangeValue->setText(formatUnit(center));
     }
@@ -2631,17 +2860,21 @@ void ParameterInspector::onKeyHardnessSliderChanged(int v)
 {
     if (m_loading) return;
     const double u = sliderToUnit(v);
+    if (auto* c = currentCell()) {
+        if (qAbs(c->props.keyThreshold - u) <= kKeyUnitEpsilon) {
+            return;
+        }
+    }
     if (m_keyHardnessValue) {
         m_keyHardnessValue->setText(formatUnit(u));
     }
     if (auto* c = currentCell()) {
         c->props.keyThreshold = u;
-        if (m_keyRangeSlider) {
+        if (c->props.keyingMode == KeyingMode::Luma && m_keyRangeSlider) {
             m_keyRangeSlider->setRange(
                 qBound(0.0, c->props.keyLumaCenter - u, 1.0),
                 qBound(0.0, c->props.keyLumaCenter + u, 1.0));
-        }
-        if (m_keyChromaRangeSlider) {
+        } else if (c->props.keyingMode == KeyingMode::Chroma && m_keyChromaRangeSlider) {
             m_keyChromaRangeSlider->setRange(
                 qBound(0.0, c->props.keyChromaHue - u, 1.0),
                 qBound(0.0, c->props.keyChromaHue + u, 1.0));
@@ -2654,6 +2887,11 @@ void ParameterInspector::onKeyFeatherSliderChanged(int v)
 {
     if (m_loading) return;
     const double u = sliderToUnit(v);
+    if (auto* c = currentCell()) {
+        if (qAbs(c->props.keySoftness - u) <= kKeyUnitEpsilon) {
+            return;
+        }
+    }
     if (m_keyFeatherValue) {
         m_keyFeatherValue->setText(formatUnit(u));
     }
@@ -2924,6 +3162,7 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_feedbackGammaSlider, QStringLiteral("feedbackGamma"));
     tagMidiWidget(m_feedbackRotationSlider, QStringLiteral("feedbackRotationDeg"));
     tagMidiWidget(m_feedbackZoomSlider, QStringLiteral("feedbackZoom"));
+    tagMidiWidget(m_feedbackFrameDelaySlider, QStringLiteral("feedbackFrameDelay"));
     tagMidiWidget(m_feedbackInputModeCombo, QStringLiteral("feedbackInputMode"));
     tagMidiWidget(m_feedbackWrapCombo, QStringLiteral("feedbackWrapMode"));
     tagMidiWidget(m_pictureWrapCombo, QStringLiteral("pictureWrapMode"));

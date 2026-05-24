@@ -245,11 +245,100 @@ int MainWindow::gpuLayerFromPreferred(int preferredLayer)
 
 namespace {
 
-QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c)
+struct LayerKeyingView {
+    bool keyingEnabled = false;
+    pvj::core::KeyingMode keyingMode = pvj::core::KeyingMode::Luma;
+    double keyThreshold = 0.25;
+    double keySoftness = 0.12;
+    double keyLumaCenter = 0.5;
+    bool keyLumaInvert = false;
+    double keyChromaHue = 0.33;
+    bool keyChromaInvert = false;
+    pvj::core::MaskType maskType = pvj::core::MaskType::None;
+    double maskFeather = 0.1;
+    double maskRectWidth = 1.0;
+    double maskRectHeight = 1.0;
+    double maskRadius = 0.5;
+    double maskEllipseX = 0.6;
+    double maskEllipseY = 0.45;
+};
+
+LayerKeyingView layerKeyingView(const Cell* c, const LayerKeyingState* layerKeying)
+{
+    LayerKeyingView v;
+    if (layerKeying && layerKeying->valid) {
+        v.keyingEnabled = layerKeying->keyingEnabled;
+        v.keyingMode = layerKeying->keyingMode;
+        v.keyThreshold = layerKeying->keyThreshold;
+        v.keySoftness = layerKeying->keySoftness;
+        v.keyLumaCenter = layerKeying->keyLumaCenter;
+        v.keyLumaInvert = layerKeying->keyLumaInvert;
+        v.keyChromaHue = layerKeying->keyChromaHue;
+        v.keyChromaInvert = layerKeying->keyChromaInvert;
+        v.maskType = layerKeying->maskType;
+        v.maskFeather = layerKeying->maskFeather;
+        v.maskRectWidth = layerKeying->maskRectWidth;
+        v.maskRectHeight = layerKeying->maskRectHeight;
+        v.maskRadius = layerKeying->maskRadius;
+        v.maskEllipseX = layerKeying->maskEllipseX;
+        v.maskEllipseY = layerKeying->maskEllipseY;
+        return v;
+    }
+    if (!c) {
+        return v;
+    }
+    v.keyingEnabled = c->props.keyingEnabled;
+    v.keyingMode = c->props.keyingMode;
+    v.keyThreshold = c->props.keyThreshold;
+    v.keySoftness = c->props.keySoftness;
+    v.keyLumaCenter = c->props.keyLumaCenter;
+    v.keyLumaInvert = c->props.keyLumaInvert;
+    v.keyChromaHue = c->props.keyChromaHue;
+    v.keyChromaInvert = c->props.keyChromaInvert;
+    v.maskType = c->props.maskType;
+    v.maskFeather = c->props.maskFeather;
+    v.maskRectWidth = c->props.maskRectWidth;
+    v.maskRectHeight = c->props.maskRectHeight;
+    v.maskRadius = c->props.maskRadius;
+    v.maskEllipseX = c->props.maskEllipseX;
+    v.maskEllipseY = c->props.maskEllipseY;
+    return v;
+}
+
+void setNodeParam(pvj::core::CellFilterNode& node, const QString& name, double value)
+{
+    for (auto& p : node.params) {
+        if (p.name == name) {
+            p.value = value;
+            return;
+        }
+    }
+    node.params.append({ name, value });
+}
+
+void syncKeyNodeFromView(pvj::core::CellFilterNode& node, const LayerKeyingView& v)
+{
+    const QString t = node.typeId.toLower();
+    if (t == QLatin1String("chroma_key")) {
+        setNodeParam(node, QStringLiteral("mode"), v.keyChromaInvert ? 1.0 : 0.0);
+        setNodeParam(node, QStringLiteral("hue"), qBound(0.0, v.keyChromaHue, 1.0));
+        setNodeParam(node, QStringLiteral("threshold"), qBound(0.0, v.keyThreshold, 1.0));
+        setNodeParam(node, QStringLiteral("softness"), qBound(0.0, v.keySoftness, 1.0));
+    } else if (t == QLatin1String("luma_key")) {
+        setNodeParam(node, QStringLiteral("mode"), v.keyLumaInvert ? 1.0 : 0.0);
+        setNodeParam(node, QStringLiteral("brightness"), qBound(0.0, v.keyLumaCenter, 1.0));
+        setNodeParam(node, QStringLiteral("threshold"), qBound(0.0, v.keyThreshold, 1.0));
+        setNodeParam(node, QStringLiteral("softness"), qBound(0.0, v.keySoftness, 1.0));
+    }
+}
+
+QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c,
+                                                              const LayerKeyingState* layerKeying)
 {
     if (!c) {
         return {};
     }
+    const LayerKeyingView kv = layerKeyingView(c, layerKeying);
     QList<pvj::core::CellFilterNode> chain = c->filterChain;
     bool hasExplicitKeyNode = false;
     bool hasExplicitMaskNode = false;
@@ -263,34 +352,34 @@ QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c)
             hasExplicitMaskNode = true;
         }
     }
-    if (!hasExplicitMaskNode && c->props.maskType != pvj::core::MaskType::None) {
+    if (!hasExplicitMaskNode && kv.maskType != pvj::core::MaskType::None) {
         pvj::core::CellFilterNode maskNode;
         maskNode.typeId = QStringLiteral("mask");
-        const double feather = qBound(0.0, c->props.maskFeather, 1.0);
-        switch (c->props.maskType) {
+        const double feather = qBound(0.0, kv.maskFeather, 1.0);
+        switch (kv.maskType) {
         case pvj::core::MaskType::Rectangle:
         case pvj::core::MaskType::SoftEdge:
             maskNode.params = {
-                { QStringLiteral("mode"), double(int(c->props.maskType)) },
-                { QStringLiteral("sizeX"), qBound(0.0, c->props.maskRectWidth, 1.0) },
-                { QStringLiteral("sizeY"), qBound(0.0, c->props.maskRectHeight, 1.0) },
+                { QStringLiteral("mode"), double(int(kv.maskType)) },
+                { QStringLiteral("sizeX"), qBound(0.0, kv.maskRectWidth, 1.0) },
+                { QStringLiteral("sizeY"), qBound(0.0, kv.maskRectHeight, 1.0) },
                 { QStringLiteral("feather"), feather },
             };
             break;
         case pvj::core::MaskType::Circle:
         case pvj::core::MaskType::Custom:
             maskNode.params = {
-                { QStringLiteral("mode"), double(int(c->props.maskType)) },
-                { QStringLiteral("sizeX"), qBound(0.0, c->props.maskRadius, 1.0) },
-                { QStringLiteral("sizeY"), qBound(0.0, c->props.maskRadius, 1.0) },
+                { QStringLiteral("mode"), double(int(kv.maskType)) },
+                { QStringLiteral("sizeX"), qBound(0.0, kv.maskRadius, 1.0) },
+                { QStringLiteral("sizeY"), qBound(0.0, kv.maskRadius, 1.0) },
                 { QStringLiteral("feather"), feather },
             };
             break;
         case pvj::core::MaskType::Ellipse:
             maskNode.params = {
-                { QStringLiteral("mode"), double(int(c->props.maskType)) },
-                { QStringLiteral("sizeX"), qBound(0.0, c->props.maskEllipseX, 1.0) },
-                { QStringLiteral("sizeY"), qBound(0.0, c->props.maskEllipseY, 1.0) },
+                { QStringLiteral("mode"), double(int(kv.maskType)) },
+                { QStringLiteral("sizeX"), qBound(0.0, kv.maskEllipseX, 1.0) },
+                { QStringLiteral("sizeY"), qBound(0.0, kv.maskEllipseY, 1.0) },
                 { QStringLiteral("feather"), feather },
             };
             break;
@@ -302,31 +391,37 @@ QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c)
         }
     }
     if (hasExplicitKeyNode) {
+        for (auto& n : chain) {
+            const QString t = n.typeId.toLower();
+            if (t == QLatin1String("chroma_key") || t == QLatin1String("luma_key")) {
+                syncKeyNodeFromView(n, kv);
+            }
+        }
         return chain;
     }
-    if (!c->props.keyingEnabled) {
+    if (!kv.keyingEnabled) {
         return chain;
     }
-    if (c->props.maskType != pvj::core::MaskType::None) {
+    if (kv.maskType != pvj::core::MaskType::None) {
         return chain;
     }
 
     pvj::core::CellFilterNode keyNode;
-    if (c->props.keyingMode == pvj::core::KeyingMode::Chroma) {
+    if (kv.keyingMode == pvj::core::KeyingMode::Chroma) {
         keyNode.typeId = QStringLiteral("chroma_key");
         keyNode.params = {
-            { QStringLiteral("mode"), c->props.keyChromaInvert ? 1.0 : 0.0 },
-            { QStringLiteral("hue"), qBound(0.0, c->props.keyChromaHue, 1.0) },
-            { QStringLiteral("threshold"), qBound(0.0, c->props.keyThreshold, 1.0) },
-            { QStringLiteral("softness"), qBound(0.0, c->props.keySoftness, 1.0) },
+            { QStringLiteral("mode"), kv.keyChromaInvert ? 1.0 : 0.0 },
+            { QStringLiteral("hue"), qBound(0.0, kv.keyChromaHue, 1.0) },
+            { QStringLiteral("threshold"), qBound(0.0, kv.keyThreshold, 1.0) },
+            { QStringLiteral("softness"), qBound(0.0, kv.keySoftness, 1.0) },
         };
     } else {
         keyNode.typeId = QStringLiteral("luma_key");
         keyNode.params = {
-            { QStringLiteral("mode"), c->props.keyLumaInvert ? 1.0 : 0.0 },
-            { QStringLiteral("brightness"), qBound(0.0, c->props.keyLumaCenter, 1.0) },
-            { QStringLiteral("threshold"), qBound(0.0, c->props.keyThreshold, 1.0) },
-            { QStringLiteral("softness"), qBound(0.0, c->props.keySoftness, 1.0) },
+            { QStringLiteral("mode"), kv.keyLumaInvert ? 1.0 : 0.0 },
+            { QStringLiteral("brightness"), qBound(0.0, kv.keyLumaCenter, 1.0) },
+            { QStringLiteral("threshold"), qBound(0.0, kv.keyThreshold, 1.0) },
+            { QStringLiteral("softness"), qBound(0.0, kv.keySoftness, 1.0) },
         };
     }
     chain.append(keyNode);
@@ -414,7 +509,16 @@ MainWindow::MainWindow(QWidget* parent)
         if (!m_inspector) {
             return;
         }
+        syncInspectorLayerKeyingOverride();
         m_inspector->refreshFromModel();
+    });
+
+    m_mixerUpdateDebounceTimer = new QTimer(this);
+    m_mixerUpdateDebounceTimer->setSingleShot(true);
+    m_mixerUpdateDebounceTimer->setInterval(16);
+    connect(m_mixerUpdateDebounceTimer, &QTimer::timeout, this, [this]() {
+        updateMixerFromPlayingCells();
+        syncMixerToFullscreen();
     });
 
     setupMenus();
@@ -771,7 +875,9 @@ void MainWindow::stopAllPlaybackAndClear()
             m_fullscreenOut->mixerWidget()->clearFrame(i);
         }
         m_layerSlots[i] = {};
+        m_layerKeying[static_cast<size_t>(i)].valid = false;
     }
+    m_inspectorEditLayer = -1;
     m_mixerSlotHadMedia.fill(false);
     m_previewA->clearFrame();
     updateMixerFromPlayingCells();
@@ -1011,6 +1117,8 @@ void MainWindow::onCellSelected(int bankSetIndex, int bankIndex, int cellIndex)
     if (!cellMatchesPeekSelection(bankSetIndex, bankIndex, cellIndex)) {
         clearClipPeek();
     }
+    syncInspectorEditLayerForCell(bankSetIndex, bankIndex, cellIndex);
+    syncInspectorLayerKeyingOverride();
     if (m_inspector) {
         m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     }
@@ -1112,6 +1220,7 @@ void MainWindow::stopMixLayer(int layer)
         clearClipPeek();
     }
     m_layerSlots[layer] = {};
+    m_layerKeying[static_cast<size_t>(layer)].valid = false;
     m_mixerSlotHadMedia[static_cast<size_t>(layer)] = false;
     m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
 }
@@ -1147,6 +1256,9 @@ bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex,
 
     if (isFeedbackCell) {
         m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
+        snapshotLayerKeyingFromCell(layer, cell);
+        m_inspectorEditLayer = layer;
+        syncInspectorLayerKeyingOverride();
         m_previewB->clearFrame(layer);
         m_lastFrames[static_cast<size_t>(layer)] = QImage();
         if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
@@ -1165,6 +1277,9 @@ bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex,
             continue;
         }
         m_layerSlots[layer] = {bankSetIndex, bankIndex, cellIndex};
+        snapshotLayerKeyingFromCell(layer, cell);
+        m_inspectorEditLayer = layer;
+        syncInspectorLayerKeyingOverride();
         playMediaOnLayer(layer, m.path);
         if (cell->props.fade > 1e-6) {
             startLayerFadeIn(layer, float(cell->props.transparency), float(cell->props.fade));
@@ -1285,10 +1400,86 @@ const Cell* MainWindow::cellAtDeck(const DeckSlot& slot)
     return &bank.cells[slot.cell];
 }
 
+void MainWindow::snapshotLayerKeyingFromCell(int layer, const Cell* cell)
+{
+    if (layer < 0 || layer >= kMixLayers) {
+        return;
+    }
+    LayerKeyingState& s = m_layerKeying[static_cast<size_t>(layer)];
+    if (!cell) {
+        s.valid = false;
+        return;
+    }
+    s.valid = true;
+    s.keyingEnabled = cell->props.keyingEnabled;
+    s.keyingMode = cell->props.keyingMode;
+    s.keyThreshold = cell->props.keyThreshold;
+    s.keySoftness = cell->props.keySoftness;
+    s.keyLumaCenter = cell->props.keyLumaCenter;
+    s.keyLumaInvert = cell->props.keyLumaInvert;
+    s.keyChromaHue = cell->props.keyChromaHue;
+    s.keyChromaInvert = cell->props.keyChromaInvert;
+    s.keyChannelR = cell->props.keyChannelR;
+    s.keyChannelG = cell->props.keyChannelG;
+    s.keyChannelB = cell->props.keyChannelB;
+    s.maskType = cell->props.maskType;
+    s.maskFeather = cell->props.maskFeather;
+    s.maskRectWidth = cell->props.maskRectWidth;
+    s.maskRectHeight = cell->props.maskRectHeight;
+    s.maskRadius = cell->props.maskRadius;
+    s.maskEllipseX = cell->props.maskEllipseX;
+    s.maskEllipseY = cell->props.maskEllipseY;
+}
+
+void MainWindow::syncInspectorLayerKeyingOverride()
+{
+    if (!m_inspector) {
+        return;
+    }
+    const LayerKeyingState* overridePtr = nullptr;
+    if (m_inspectorEditLayer >= kUserLayerMin && m_inspectorEditLayer < kMixLayers) {
+        const DeckSlot& slot = m_layerSlots[static_cast<size_t>(m_inspectorEditLayer)];
+        const bool selectionMatches = slot.bankSet >= 0
+            && slot.bankSet == m_inspector->selectedBankSetIndex()
+            && slot.bank == m_inspector->selectedBankIndex()
+            && slot.cell == m_inspector->selectedCellIndex();
+        if (selectionMatches) {
+            const LayerKeyingState& state = m_layerKeying[static_cast<size_t>(m_inspectorEditLayer)];
+            if (state.valid) {
+                overridePtr = &state;
+            }
+        }
+    }
+    m_inspector->setLayerKeyingOverride(overridePtr);
+}
+
+void MainWindow::scheduleMixerUpdateFromCells()
+{
+    if (!m_mixerUpdateDebounceTimer) {
+        updateMixerFromPlayingCells();
+        syncMixerToFullscreen();
+        return;
+    }
+    m_mixerUpdateDebounceTimer->start();
+}
+
+void MainWindow::syncInspectorEditLayerForCell(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (m_inspectorEditLayer >= kUserLayerMin && m_inspectorEditLayer < kMixLayers) {
+        const DeckSlot& slot = m_layerSlots[static_cast<size_t>(m_inspectorEditLayer)];
+        if (slot.bankSet == bankSetIndex && slot.bank == bankIndex && slot.cell == cellIndex) {
+            return;
+        }
+    }
+    m_inspectorEditLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+}
+
 void MainWindow::updateMixerFromPlayingCells()
 {
     for (int i = kUserLayerMin; i < kMixLayers; ++i) {
         const Cell* c = cellAtDeck(m_layerSlots[i]);
+        const LayerKeyingState& layerKeying = m_layerKeying[static_cast<size_t>(i)];
+        const LayerKeyingState* keyingPtr = layerKeying.valid ? &layerKeying : nullptr;
         const bool isFeedbackCell = c
             && c->visual.type == VisualType::Generator
             && c->visual.generator == GeneratorKind::InternalFeedback;
@@ -1300,9 +1491,12 @@ void MainWindow::updateMixerFromPlayingCells()
             m_previewB->setLayerCopyMode(i, c->props.copyMode);
             m_previewB->setLayerMatteRole(i, c->props.matteRole);
             m_previewB->setLayerPicture(i, c->props.picture);
-            m_previewB->setLayerFilterChain(i, effectiveFilterChainForMixer(c));
-            m_previewB->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),
-                                            float(c->props.keyChannelB));
+            const QList<pvj::core::CellFilterNode> effectiveChain = effectiveFilterChainForMixer(c, keyingPtr);
+            m_previewB->setLayerFilterChain(i, effectiveChain);
+            const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
+            const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
+            const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
+            m_previewB->setLayerKeyChannels(i, float(kr), float(kg), float(kb));
             if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
                 m_previewB->setLayerOpacity(i, float(c->props.transparency));
             }
@@ -1334,10 +1528,12 @@ void MainWindow::updateMixerFromPlayingCells()
         m_previewB->setLayerCopyMode(i, c->props.copyMode);
         m_previewB->setLayerMatteRole(i, c->props.matteRole);
         m_previewB->setLayerPicture(i, c->props.picture);
-        const QList<pvj::core::CellFilterNode> effectiveChain = effectiveFilterChainForMixer(c);
+        const QList<pvj::core::CellFilterNode> effectiveChain = effectiveFilterChainForMixer(c, keyingPtr);
         m_previewB->setLayerFilterChain(i, effectiveChain);
-        m_previewB->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),
-                                        float(c->props.keyChannelB));
+        const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
+        const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
+        const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
+        m_previewB->setLayerKeyChannels(i, float(kr), float(kg), float(kb));
         if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
             m_previewB->setLayerOpacity(i, float(c->props.transparency));
         }
@@ -1413,6 +1609,8 @@ void MainWindow::onMixLayerDirect(int userSlotIndex)
         return;
     }
     const int gpuLayer = userSlotIndex + kUserLayerMin;
+    m_inspectorEditLayer = gpuLayer;
+    syncInspectorLayerKeyingOverride();
     const DeckSlot& s = m_layerSlots[static_cast<size_t>(gpuLayer)];
     if (s.bankSet < 0) {
         statusBar()->showMessage(tr("Mix slot %1 is empty").arg(gpuLayer), 2000);
@@ -1525,9 +1723,13 @@ void MainWindow::syncMixerToFullscreen()
         dst->setLayerPicture(i, src->layerPicture(i));
         dst->setLayerFeedback(i, src->layerFeedbackEnabled(i), src->layerFeedback(i));
         if (const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(i)])) {
-            dst->setLayerFilterChain(i, effectiveFilterChainForMixer(c));
-            dst->setLayerKeyChannels(i, float(c->props.keyChannelR), float(c->props.keyChannelG),
-                                     float(c->props.keyChannelB));
+            const LayerKeyingState& layerKeying = m_layerKeying[static_cast<size_t>(i)];
+            const LayerKeyingState* keyingPtr = layerKeying.valid ? &layerKeying : nullptr;
+            dst->setLayerFilterChain(i, effectiveFilterChainForMixer(c, keyingPtr));
+            const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
+            const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
+            const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
+            dst->setLayerKeyChannels(i, float(kr), float(kg), float(kb));
         } else {
             dst->setLayerFilterChain(i, {});
             dst->setLayerKeyChannels(i, 1.f, 1.f, 1.f);
@@ -1778,6 +1980,20 @@ void MainWindow::onCellEdited(int bankSetIndex, int bankIndex, int cellIndex)
 {
     // Do not call m_bankGrid->refresh() here: it clears/rebuilds all filmstrip thumbnails
     // and stalls the UI on every inspector slider tick while video keeps decoding.
+    if (m_inspectorEditLayer >= kUserLayerMin && m_inspectorEditLayer < kMixLayers) {
+        const DeckSlot& slot = m_layerSlots[static_cast<size_t>(m_inspectorEditLayer)];
+        if (slot.bankSet == bankSetIndex && slot.bank == bankIndex && slot.cell == cellIndex) {
+            snapshotLayerKeyingFromCell(m_inspectorEditLayer, cellAtDeck(slot));
+            syncInspectorLayerKeyingOverride();
+        }
+    } else {
+        const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+        if (layer >= 0) {
+            snapshotLayerKeyingFromCell(layer, cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]));
+            m_inspectorEditLayer = layer;
+            syncInspectorLayerKeyingOverride();
+        }
+    }
     const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
     if (layer >= 0) {
         if (const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)])) {
@@ -1798,7 +2014,7 @@ void MainWindow::onCellEdited(int bankSetIndex, int bankIndex, int cellIndex)
             }
         }
     }
-    updateMixerFromPlayingCells();
+    scheduleMixerUpdateFromCells();
 }
 
 void MainWindow::onInspectorVisualSeekStep(int seconds)
@@ -2217,6 +2433,13 @@ void MainWindow::onInputPropertyMapped(int bankSetIndex, int bankIndex, int cell
         return;
     }
 
+    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
+        const DeckSlot& slot = m_layerSlots[static_cast<size_t>(i)];
+        if (slot.bankSet == bankSetIndex && slot.bank == bankIndex && slot.cell == cellIndex) {
+            snapshotLayerKeyingFromCell(i, cellAtDeck(slot));
+        }
+    }
+
     const bool inspectorShowsMappedCell =
         m_inspector && m_inspector->selectedBankSetIndex() == bankSetIndex
         && m_inspector->selectedBankIndex() == bankIndex && m_inspector->selectedCellIndex() == cellIndex;
@@ -2224,7 +2447,7 @@ void MainWindow::onInputPropertyMapped(int bankSetIndex, int bankIndex, int cell
         m_midiInspectorDebounceTimer->start(33);
     }
 
-    updateMixerFromPlayingCells();
+    scheduleMixerUpdateFromCells();
 }
 
 void MainWindow::onInputPropertyToggle(int bankSetIndex, int bankIndex, int cellIndex,

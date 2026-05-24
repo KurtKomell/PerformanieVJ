@@ -216,6 +216,7 @@ QStringList allPropertyNames()
         QStringLiteral("feedbackGamma"),
         QStringLiteral("feedbackRotationDeg"),
         QStringLiteral("feedbackZoom"),
+        QStringLiteral("feedbackFrameDelay"),
         QStringLiteral("feedbackInputMode"),
         QStringLiteral("feedbackWrapMode"),
         QStringLiteral("playMode"),
@@ -283,6 +284,7 @@ QString labelFor(const QString& name)
         { QStringLiteral("feedbackgamma"), QStringLiteral("Feedback gamma") },
         { QStringLiteral("feedbackrotationdeg"), QStringLiteral("Feedback rotation") },
         { QStringLiteral("feedbackzoom"), QStringLiteral("Feedback zoom") },
+        { QStringLiteral("feedbackframedelay"), QStringLiteral("Feedback frame delay") },
         { QStringLiteral("feedbackinputmode"), QStringLiteral("Feedback input mode") },
         { QStringLiteral("feedbackwrapmode"), QStringLiteral("Feedback wrap mode") },
         { QStringLiteral("playmode"), QStringLiteral("Play mode") },
@@ -431,6 +433,9 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("feedbackrotationdeg")) {
         *minV = 0.0;
         *maxV = 360.0;
+    } else if (p == QLatin1String("feedbackframedelay")) {
+        *minV = 0.0;
+        *maxV = 14.0;
     } else if (p == QLatin1String("feedbackinputmode")) {
         *minV = 0.0;
         *maxV = 2.0;
@@ -619,6 +624,10 @@ bool readValue(const Cell& c, const QString& raw, double* out)
     }
     if (p == QLatin1String("feedbackzoom")) {
         *out = c.props.feedback.zoom;
+        return true;
+    }
+    if (p == QLatin1String("feedbackframedelay")) {
+        *out = double(c.props.feedback.frameDelay);
         return true;
     }
     if (p == QLatin1String("feedbackinputmode")) {
@@ -896,6 +905,10 @@ bool applyValue(Cell& c, const QString& raw, double v)
     }
     if (p == QLatin1String("feedbackzoom")) {
         c.props.feedback.zoom = qBound(-1.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackframedelay")) {
+        c.props.feedback.frameDelay = qBound(0, int(qRound(v)), 14);
         return true;
     }
     if (p == QLatin1String("feedbackinputmode")) {

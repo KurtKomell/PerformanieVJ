@@ -27,6 +27,8 @@ class Project;
 
 namespace pvj::app {
 
+struct LayerKeyingState;
+
 class VisualThumbnailLabel;
 class KeyRangeWidget;
 
@@ -44,6 +46,9 @@ public:
 
     /// Reloads spin boxes from the model (e.g. after MIDI mapped a property).
     void refreshFromModel();
+
+    /// When set, keying sliders read/write through this per-layer snapshot (see MainWindow).
+    void setLayerKeyingOverride(const LayerKeyingState* state);
 
     int outputScreenIndex() const;
 
@@ -122,6 +127,7 @@ private slots:
     void onFeedbackGammaChanged(int v);
     void onFeedbackRotationChanged(int v);
     void onFeedbackZoomChanged(int v);
+    void onFeedbackFrameDelayChanged(int v);
     void onFeedbackInputModeChanged(int idx);
     void onFeedbackWrapModeChanged(int idx);
     void onPictureWrapModeChanged(int idx);
@@ -138,6 +144,7 @@ private:
 
     pvj::core::Cell* currentCell();
     void refreshFromCell();
+    void refreshKeyingUi();
     void emitChanged();
     void emitPlaybackChanged();
 
@@ -162,6 +169,7 @@ private:
     int m_bankSetIndex = -1;
     int m_bankIndex    = -1;
     int m_cellIndex    = -1;
+    const LayerKeyingState* m_layerKeyingOverride = nullptr;
     int m_feedbackTabIndex = -1;
     bool m_loading = false;
     bool m_midiMappingEditMode = false;
@@ -263,6 +271,8 @@ private:
     QLabel*         m_feedbackRotationValue = nullptr;
     QSlider*        m_feedbackZoomSlider = nullptr;
     QLabel*         m_feedbackZoomValue = nullptr;
+    QSlider*        m_feedbackFrameDelaySlider = nullptr;
+    QLabel*         m_feedbackFrameDelayValue = nullptr;
     QComboBox*      m_feedbackInputModeCombo = nullptr;
     QLabel*         m_feedbackInputModeHint = nullptr;
     QComboBox*      m_feedbackWrapCombo = nullptr;

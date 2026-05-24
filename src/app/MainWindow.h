@@ -15,10 +15,8 @@ class QLabel;
 class QMenu;
 class QTimer;
 
-namespace pvj::core {
-struct Cell;
-class Project;
-}
+#include "core/Model.h"
+#include "core/Project.h"
 
 namespace pvj::video {
 class VideoDecoder;
@@ -47,6 +45,29 @@ class FilterNodeEditorWindow;
 class MediaLibraryDock;
 class ParameterInspector;
 class PvjSplitter;
+
+/// Per-mixer-layer keying snapshot (independent even when the same bank cell plays on multiple layers).
+struct LayerKeyingState {
+    bool valid = false;
+    bool keyingEnabled = false;
+    pvj::core::KeyingMode keyingMode = pvj::core::KeyingMode::Luma;
+    double keyThreshold = 0.25;
+    double keySoftness = 0.12;
+    double keyLumaCenter = 0.5;
+    bool keyLumaInvert = false;
+    double keyChromaHue = 0.33;
+    bool keyChromaInvert = false;
+    double keyChannelR = 1.0;
+    double keyChannelG = 1.0;
+    double keyChannelB = 1.0;
+    pvj::core::MaskType maskType = pvj::core::MaskType::None;
+    double maskFeather = 0.1;
+    double maskRectWidth = 1.0;
+    double maskRectHeight = 1.0;
+    double maskRadius = 0.5;
+    double maskEllipseX = 0.6;
+    double maskEllipseY = 0.45;
+};
 
 class MainWindow : public QMainWindow
 {
@@ -135,6 +156,10 @@ private:
     };
 
     const pvj::core::Cell* cellAtDeck(const DeckSlot& slot);
+    void snapshotLayerKeyingFromCell(int layer, const pvj::core::Cell* cell);
+    void syncInspectorEditLayerForCell(int bankSetIndex, int bankIndex, int cellIndex);
+    void syncInspectorLayerKeyingOverride();
+    void scheduleMixerUpdateFromCells();
 
     void updateMixerFromPlayingCells();
     void updateDeckAPreviewRotation();
@@ -182,6 +207,9 @@ private:
     std::unique_ptr<pvj::render::FullscreenOutputWindow> m_fullscreenOut;
 
     std::array<DeckSlot, kMixLayers> m_layerSlots{};
+    std::array<LayerKeyingState, kMixLayers> m_layerKeying{};
+    /// Mix layer whose keying snapshot receives inspector edits (-1 = none).
+    int m_inspectorEditLayer = -1;
     /// Last `updateMixerFromPlayingCells` saw a media clip on this mix slot (for avoiding
     /// redundant `VideoDecoder::stop` / `seek(0)` on slots without media).
     std::array<bool, kMixLayers> m_mixerSlotHadMedia{};
@@ -195,6 +223,7 @@ private:
     QTimer* m_layerFadeTimer = nullptr;
     /// Coalesce inspector `refreshFromModel` after MIDI CC (avoid full UI rebuild per message).
     QTimer* m_midiInspectorDebounceTimer = nullptr;
+    QTimer* m_mixerUpdateDebounceTimer = nullptr;
     std::array<bool, kMixLayers>  m_layerFadeAnimating{};
     std::array<float, kMixLayers> m_layerFadeTarget{};
     std::array<float, kMixLayers> m_layerFadeTargetAudio{};
