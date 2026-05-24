@@ -4,7 +4,11 @@
 #include "video/ThumbnailExtractor.h"
 
 #include <QApplication>
+#include <QDateTime>
 #include <QDragEnterEvent>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QEnterEvent>
@@ -37,6 +41,26 @@
 namespace pvj::app {
 
 namespace {
+
+// #region agent log
+void bankGridDebugLog(const char* location, const char* message, const char* hypothesisId,
+                      const QJsonObject& data = {})
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("sessionId"), QStringLiteral("f36697"));
+    obj.insert(QStringLiteral("runId"), QStringLiteral("load-crash-2"));
+    obj.insert(QStringLiteral("hypothesisId"), QString::fromUtf8(hypothesisId));
+    obj.insert(QStringLiteral("location"), QString::fromUtf8(location));
+    obj.insert(QStringLiteral("message"), QString::fromUtf8(message));
+    obj.insert(QStringLiteral("timestamp"), QDateTime::currentMSecsSinceEpoch());
+    obj.insert(QStringLiteral("data"), data);
+    QFile f(QStringLiteral("d:/PerformanieVJ/debug-f36697.log"));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+        f.write("\n");
+    }
+}
+// #endregion
 
 void drawCellDropShadow(QPainter& p, const QRectF& r, qreal radius)
 {
@@ -486,6 +510,7 @@ void BankGridWidget::setProject(pvj::core::Project* project)
     m_bankSetIndex = 0;
     m_bankIndex    = 0;
     m_selectedCell = -1;
+    ++m_thumbGeneration;
     m_filmCache.clear();
     m_thumbPending.clear();
     if (m_project) {
@@ -711,9 +736,17 @@ void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolu
     m_thumbPending.insert(mediaId);
 
     QPointer<BankGridWidget> safe(this);
-    (void)QtConcurrent::run([safe, mediaId, absolutePath]() {
-        QList<QImage> images = pvj::video::ThumbnailExtractor::extractPreviewKeyframes(
+    const quint64 generation = m_thumbGeneration;
+    (void)QtConcurrent::run([safe, mediaId, absolutePath, generation]() {
+        QVector<QImage> images;
+        const QList<QImage> keyframes = pvj::video::ThumbnailExtractor::extractPreviewKeyframes(
             absolutePath, 5, QSize(160, 96));
+        images.reserve(keyframes.size());
+        for (const QImage& im : keyframes) {
+            if (!im.isNull()) {
+                images.append(im);
+            }
+        }
 
         if (images.size() < 2) {
             images.clear();
@@ -740,15 +773,16 @@ void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolu
         if (!safe) {
             return;
         }
+        const QVector<QImage> framesCopy = images;
         QMetaObject::invokeMethod(
             safe.data(),
-            [safe, mediaId, images]() {
-                if (!safe) {
+            [safe, mediaId, framesCopy, generation]() {
+                if (!safe || safe->m_thumbGeneration != generation) {
                     return;
                 }
                 QVector<QImage> framesOut;
-                framesOut.reserve(images.size());
-                for (const QImage& im : images) {
+                framesOut.reserve(framesCopy.size());
+                for (const QImage& im : framesCopy) {
                     if (!im.isNull()) {
                         QImage safeImage = im;
                         if (safeImage.format() != QImage::Format_RGB32) {
@@ -765,6 +799,16 @@ void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolu
 
 void BankGridWidget::applyThumbnailStrip(const QUuid& mediaId, const QVector<QImage>& frames)
 {
+  // #region agent log
+    {
+        QJsonObject d;
+        d.insert(QStringLiteral("step"), QStringLiteral("applyThumbnailStrip-enter"));
+        d.insert(QStringLiteral("frameCount"), frames.size());
+        d.insert(QStringLiteral("cellCount"), m_cells.size());
+        d.insert(QStringLiteral("generation"), qint64(m_thumbGeneration));
+        bankGridDebugLog("BankGridWidget.cpp:applyThumbnailStrip", "async thumbnail", "H12", d);
+    }
+  // #endregion
     m_thumbPending.remove(mediaId);
     if (!frames.isEmpty()) {
         m_filmCache.insert(mediaId, frames);
@@ -791,6 +835,13 @@ void BankGridWidget::applyThumbnailStrip(const QUuid& mediaId, const QVector<QIm
             }
         }
     }
+  // #region agent log
+    {
+        QJsonObject d;
+        d.insert(QStringLiteral("step"), QStringLiteral("applyThumbnailStrip-exit"));
+        bankGridDebugLog("BankGridWidget.cpp:applyThumbnailStrip", "async thumbnail", "H12", d);
+    }
+  // #endregion
 }
 
 void BankGridWidget::onBankTabChanged(int idx)

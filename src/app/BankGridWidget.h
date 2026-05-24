@@ -116,6 +116,7 @@ private:
 
     QHash<QUuid, QVector<QImage>> m_filmCache;
     QSet<QUuid>          m_thumbPending;
+    quint64                m_thumbGeneration = 0;
 
     std::array<MixSlotCellRef, kMixSlotCount> m_mixSlots{};
     MixSlotCellRef m_peekRef{};

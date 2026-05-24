@@ -1,4 +1,8 @@
 #include <QApplication>
+#include <QDateTime>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPalette>
 #include <QSurfaceFormat>
 #include <QStyleFactory>
@@ -6,6 +10,42 @@
 #include "MainWindow.h"
 
 namespace {
+
+QtMessageHandler g_prevQtMessageHandler = nullptr;
+
+// #region agent log
+void pvjQtMessageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    if (msg.contains(QStringLiteral("ASSERT"), Qt::CaseInsensitive)
+        || msg.contains(QStringLiteral("qlist.h"), Qt::CaseInsensitive)
+        || type == QtFatalMsg) {
+        QJsonObject data;
+        if (ctx.file) {
+            data.insert(QStringLiteral("file"), QString::fromUtf8(ctx.file));
+        }
+        data.insert(QStringLiteral("line"), ctx.line);
+        data.insert(QStringLiteral("type"), int(type));
+
+        QJsonObject obj;
+        obj.insert(QStringLiteral("sessionId"), QStringLiteral("f36697"));
+        obj.insert(QStringLiteral("runId"), QStringLiteral("load-crash-2"));
+        obj.insert(QStringLiteral("hypothesisId"), QStringLiteral("H12"));
+        obj.insert(QStringLiteral("location"), ctx.function ? QString::fromUtf8(ctx.function)
+                                                           : QStringLiteral("qt-message"));
+        obj.insert(QStringLiteral("message"), msg);
+        obj.insert(QStringLiteral("timestamp"), QDateTime::currentMSecsSinceEpoch());
+        obj.insert(QStringLiteral("data"), data);
+        QFile f(QStringLiteral("d:/PerformanieVJ/debug-f36697.log"));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+            f.write("\n");
+        }
+    }
+    if (g_prevQtMessageHandler) {
+        g_prevQtMessageHandler(type, ctx, msg);
+    }
+}
+// #endregion
 
 /// Cohesive dark “studio” skin: Fusion palette + light QSS polish (tabs, docks, inputs).
 void applyPerformanieVjTheme(QApplication& app)
@@ -159,6 +199,7 @@ int main(int argc, char* argv[])
     QSurfaceFormat::setDefaultFormat(fmt);
 
     QApplication app(argc, argv);
+    g_prevQtMessageHandler = qInstallMessageHandler(pvjQtMessageHandler);
     applyPerformanieVjTheme(app);
 
     pvj::app::MainWindow window;
