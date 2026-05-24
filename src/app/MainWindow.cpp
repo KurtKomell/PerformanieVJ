@@ -31,12 +31,8 @@
 #include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
-#include <QFile>
 #include <QEvent>
 #include <QFrame>
-#include <QDateTime>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -247,26 +243,6 @@ int MainWindow::gpuLayerFromPreferred(int preferredLayer)
 }
 
 namespace {
-
-// #region agent log
-void agentDebugLog(const char* location, const char* message, const char* hypothesisId,
-                   const QJsonObject& data)
-{
-    QJsonObject obj;
-    obj.insert(QStringLiteral("sessionId"), QStringLiteral("f36697"));
-    obj.insert(QStringLiteral("runId"), QStringLiteral("load-crash-3"));
-    obj.insert(QStringLiteral("hypothesisId"), QString::fromUtf8(hypothesisId));
-    obj.insert(QStringLiteral("location"), QString::fromUtf8(location));
-    obj.insert(QStringLiteral("message"), QString::fromUtf8(message));
-    obj.insert(QStringLiteral("timestamp"), QDateTime::currentMSecsSinceEpoch());
-    obj.insert(QStringLiteral("data"), data);
-    QFile f(QStringLiteral("d:/PerformanieVJ/debug-f36697.log"));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-        f.write("\n");
-    }
-}
-// #endregion
 
 struct LayerKeyingView {
     bool keyingEnabled = false;
@@ -799,66 +775,11 @@ void MainWindow::setupMenus()
 void MainWindow::rebindUiToProject()
 {
     Project* p = m_project.get();
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("rebind-start"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H5", d);
-    }
-  // #endregion
     p->ensureSingleBankSet();
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-ensureSingleBankSet"));
-        d.insert(QStringLiteral("bankSets"), p->bankSets.size());
-        if (!p->bankSets.isEmpty()) {
-            d.insert(QStringLiteral("banks"), p->bankSets[0].banks.size());
-            if (!p->bankSets[0].banks.isEmpty()) {
-                d.insert(QStringLiteral("cells"), p->bankSets[0].banks[0].cells.size());
-            }
-        }
-        d.insert(QStringLiteral("triggerMappings"), p->triggerMappings.size());
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H5", d);
-    }
-  // #endregion
     p->resizeBanksForGrid(p->settings.matrix.gridRows, p->settings.matrix.gridCols);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-resizeBanksForGrid"));
-        d.insert(QStringLiteral("gridRows"), p->settings.matrix.gridRows);
-        d.insert(QStringLiteral("gridCols"), p->settings.matrix.gridCols);
-        if (!p->bankSets.isEmpty() && !p->bankSets[0].banks.isEmpty()) {
-            d.insert(QStringLiteral("cells"), p->bankSets[0].banks[0].cells.size());
-        }
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H5", d);
-    }
-  // #endregion
     m_bankGrid ->setProject(p);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-bankGrid-setProject"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H6", d);
-    }
-  // #endregion
     m_inspector->setProject(p);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-inspector-setProject"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H7", d);
-    }
-  // #endregion
     m_mediaDock->setProject(p);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-mediaDock-setProject"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H8", d);
-    }
-  // #endregion
     if (m_inputRouter) {
         m_inputRouter->setProject(p);
     }
@@ -866,29 +787,8 @@ void MainWindow::rebindUiToProject()
     m_inspector->setSelection(m_bankGrid->activeBankSetIndex(),
                               m_bankGrid->activeBankIndex(),
                               -1);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-inspector-setSelection"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H7", d);
-    }
-  // #endregion
     refreshPreviewForSelectedCell();
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-refreshPreviewForSelectedCell"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H9", d);
-    }
-  // #endregion
     syncMixSlotHighlightsToBankGrid();
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-syncMixSlotHighlights"));
-        agentDebugLog("MainWindow.cpp:rebindUiToProject", "rebind step", "H10", d);
-    }
-  // #endregion
 }
 
 void MainWindow::applyBankGridDimensions(int rows, int cols)
@@ -1007,42 +907,11 @@ void MainWindow::openProjectFromPath(const QString& path)
 {
     auto next = std::make_unique<Project>();
     auto res = PvjSerializer::load(*next, path);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("path"), path);
-        d.insert(QStringLiteral("ok"), res.ok);
-        d.insert(QStringLiteral("error"), res.errorMessage);
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "project load attempt", "H1", d);
-    }
-  // #endregion
     if (!res.ok) {
         QMessageBox::warning(this, tr("Open failed"), res.errorMessage);
         return;
     }
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("loaded-before-stopAll"));
-        d.insert(QStringLiteral("bankSets"), next->bankSets.size());
-        if (!next->bankSets.isEmpty()) {
-            d.insert(QStringLiteral("banks"), next->bankSets[0].banks.size());
-            if (!next->bankSets[0].banks.isEmpty()) {
-                d.insert(QStringLiteral("cells"), next->bankSets[0].banks[0].cells.size());
-            }
-        }
-        d.insert(QStringLiteral("mediaLibrary"), next->mediaLibrary.size());
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "load step", "H5", d);
-    }
-  // #endregion
     stopAllPlaybackAndClear();
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-stopAllPlaybackAndClear"));
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "load step", "H5", d);
-    }
-  // #endregion
     if (m_bankGrid) {
         m_bankGrid->setProject(nullptr);
     }
@@ -1057,36 +926,10 @@ void MainWindow::openProjectFromPath(const QString& path)
     }
 
     m_project = std::move(next);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-project-move"));
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "load step", "H13", d);
-    }
-  // #endregion
     rebindUiToProject();
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-rebindUiToProject"));
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "load step", "H11", d);
-    }
-  // #endregion
     updateWindowTitle();
     statusBar()->showMessage(tr("Opened %1").arg(path), 5000);
     rememberRecentProject(path);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("after-rememberRecentProject"));
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "load step", "H11", d);
-    }
-    QTimer::singleShot(500, this, [this]() {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("deferred-500ms-after-load"));
-        agentDebugLog("MainWindow.cpp:openProjectFromPath", "load step", "H12", d);
-    });
-  // #endregion
 }
 
 void MainWindow::rememberRecentProject(const QString& path)
@@ -1135,14 +978,6 @@ void MainWindow::onRecentFileTriggered()
     }
     const QString path = a->data().toString();
     const bool exists = !path.isEmpty() && QFileInfo::exists(path);
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("path"), path);
-        d.insert(QStringLiteral("exists"), exists);
-        agentDebugLog("MainWindow.cpp:onRecentFileTriggered", "recent project open", "H2", d);
-    }
-  // #endregion
     if (exists) {
         openProjectFromPath(path);
     } else if (!path.isEmpty()) {
@@ -1513,14 +1348,6 @@ void MainWindow::playMediaOnLayer(int layer, const QString& path)
     }
 
     if (!m_decoders[layer]->open(path)) {
-      // #region agent log
-        {
-            QJsonObject d;
-            d.insert(QStringLiteral("layer"), layer);
-            d.insert(QStringLiteral("path"), path);
-            agentDebugLog("MainWindow.cpp:playMediaOnLayer", "media decoder open failed", "H3", d);
-        }
-      // #endregion
         statusBar()->showMessage(tr("Cannot open %1").arg(path), 5000);
         return;
     }

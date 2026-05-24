@@ -1,35 +1,52 @@
 #pragma once
 
 #include <QChildEvent>
+#include <QEnterEvent>
+#include <QMouseEvent>
 #include <QSplitter>
 #include <QSplitterHandle>
 
 namespace pvj::app {
 
-/// Splitter handle that avoids Qt::SplitHCursor / Qt::SplitVCursor on Windows.
-/// Those shapes use pixmap cursors that can hit Q_ASSERT(bm.format() == QImage::Format_Mono)
-/// in qpixmap_win.cpp (qt_createIconMask) on some Qt / DPI / PNG combinations.
+/// Splitter handle that avoids pixmap-based resize cursors on Windows.
+/// Qt::SplitHCursor / Qt::SplitVCursor / Qt::SizeHorCursor / Qt::SizeVerCursor can
+/// trigger Q_ASSERT(bm.format() == QImage::Format_Mono) in qpixmap_win.cpp when Qt
+/// builds the Win32 cursor mask (Qt 6.10+, some DPI / theme combinations).
 class PvjSplitterHandle final : public QSplitterHandle
 {
 public:
     explicit PvjSplitterHandle(Qt::Orientation orientation, QSplitter* parent)
         : QSplitterHandle(orientation, parent)
     {
-        applyResizeCursor();
+        applySafeCursor();
+    }
+
+protected:
+    void enterEvent(QEnterEvent* event) override
+    {
+        applySafeCursor();
+        QSplitterHandle::enterEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        applySafeCursor();
+        QSplitterHandle::mouseMoveEvent(event);
     }
 
 private:
-    void applyResizeCursor()
+    void applySafeCursor()
     {
 #ifndef QT_NO_CURSOR
-        setCursor(orientation() == Qt::Horizontal ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+        // Do not use Split* or Size* shapes — they go through qt_createIconMask on Windows.
+        unsetCursor();
 #endif
     }
 };
 
-/// QSplitter that keeps system resize cursors on all handles (including hidden handle 0).
+/// QSplitter that keeps handles free of pixmap cursors (including hidden handle 0).
 /// QSplitter::setOrientation is not virtual and restoreState() calls it internally, so this
-/// class also extends childEvent and restoreState to re-apply cursors whenever handles change.
+/// class also extends childEvent and restoreState to re-apply safe cursors whenever handles change.
 class PvjSplitter final : public QSplitter
 {
 public:
@@ -45,14 +62,14 @@ public:
     void setOrientation(Qt::Orientation o)
     {
         QSplitter::setOrientation(o);
-        applyResizeCursorToAllHandles();
+        applySafeCursorToAllHandles();
     }
 
     bool restoreState(const QByteArray& state)
     {
         const bool ok = QSplitter::restoreState(state);
         if (ok) {
-            applyResizeCursorToAllHandles();
+            applySafeCursorToAllHandles();
         }
         return ok;
     }
@@ -64,19 +81,17 @@ protected:
     {
         QSplitter::childEvent(e);
         if (e->added() && qobject_cast<QSplitterHandle*>(e->child()) != nullptr) {
-            applyResizeCursorToAllHandles();
+            applySafeCursorToAllHandles();
         }
     }
 
 private:
-    void applyResizeCursorToAllHandles()
+    void applySafeCursorToAllHandles()
     {
 #ifndef QT_NO_CURSOR
-        const Qt::CursorShape shape = orientation() == Qt::Horizontal ? Qt::SizeHorCursor
-                                                                      : Qt::SizeVerCursor;
         for (int i = 0; i < count(); ++i) {
             if (QSplitterHandle* h = handle(i)) {
-                h->setCursor(shape);
+                h->unsetCursor();
             }
         }
 #endif

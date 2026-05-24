@@ -4,11 +4,7 @@
 #include "video/ThumbnailExtractor.h"
 
 #include <QApplication>
-#include <QDateTime>
 #include <QDragEnterEvent>
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QEnterEvent>
@@ -41,26 +37,6 @@
 namespace pvj::app {
 
 namespace {
-
-// #region agent log
-void bankGridDebugLog(const char* location, const char* message, const char* hypothesisId,
-                      const QJsonObject& data = {})
-{
-    QJsonObject obj;
-    obj.insert(QStringLiteral("sessionId"), QStringLiteral("f36697"));
-    obj.insert(QStringLiteral("runId"), QStringLiteral("load-crash-2"));
-    obj.insert(QStringLiteral("hypothesisId"), QString::fromUtf8(hypothesisId));
-    obj.insert(QStringLiteral("location"), QString::fromUtf8(location));
-    obj.insert(QStringLiteral("message"), QString::fromUtf8(message));
-    obj.insert(QStringLiteral("timestamp"), QDateTime::currentMSecsSinceEpoch());
-    obj.insert(QStringLiteral("data"), data);
-    QFile f(QStringLiteral("d:/PerformanieVJ/debug-f36697.log"));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-        f.write("\n");
-    }
-}
-// #endregion
 
 void drawCellDropShadow(QPainter& p, const QRectF& r, qreal radius)
 {
@@ -799,16 +775,6 @@ void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolu
 
 void BankGridWidget::applyThumbnailStrip(const QUuid& mediaId, const QVector<QImage>& frames)
 {
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("applyThumbnailStrip-enter"));
-        d.insert(QStringLiteral("frameCount"), frames.size());
-        d.insert(QStringLiteral("cellCount"), m_cells.size());
-        d.insert(QStringLiteral("generation"), qint64(m_thumbGeneration));
-        bankGridDebugLog("BankGridWidget.cpp:applyThumbnailStrip", "async thumbnail", "H12", d);
-    }
-  // #endregion
     m_thumbPending.remove(mediaId);
     if (!frames.isEmpty()) {
         m_filmCache.insert(mediaId, frames);
@@ -835,13 +801,6 @@ void BankGridWidget::applyThumbnailStrip(const QUuid& mediaId, const QVector<QIm
             }
         }
     }
-  // #region agent log
-    {
-        QJsonObject d;
-        d.insert(QStringLiteral("step"), QStringLiteral("applyThumbnailStrip-exit"));
-        bankGridDebugLog("BankGridWidget.cpp:applyThumbnailStrip", "async thumbnail", "H12", d);
-    }
-  // #endregion
 }
 
 void BankGridWidget::onBankTabChanged(int idx)
