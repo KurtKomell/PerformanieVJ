@@ -97,6 +97,29 @@ target_link_libraries(test_filter_param_schema
 )
 add_test(NAME filter_param_schema COMMAND test_filter_param_schema)
 
+qt_add_executable(test_filter_effect_ids
+    test_filter_effect_ids.cpp
+)
+target_link_libraries(test_filter_effect_ids
+    PRIVATE
+        pvj_core
+        pvj_render
+        Qt6::Gui
+        Qt6::Test
+)
+add_test(NAME filter_effect_ids COMMAND test_filter_effect_ids)
+
+qt_add_executable(test_maxine_catalog
+    test_maxine_catalog.cpp
+)
+target_link_libraries(test_maxine_catalog
+    PRIVATE
+        pvj_core
+        Qt6::Core
+        Qt6::Test
+)
+add_test(NAME maxine_catalog COMMAND test_maxine_catalog)
+
 qt_add_executable(test_filter_grid_scope
     test_filter_grid_scope.cpp
 )
@@ -119,6 +142,17 @@ target_link_libraries(test_rhi_filter_chain
         Qt6::Test
 )
 add_test(NAME rhi_filter_chain COMMAND test_rhi_filter_chain)
+
+qt_add_executable(test_output_filter
+    test_output_filter.cpp
+)
+target_link_libraries(test_output_filter
+    PRIVATE
+        pvj_core
+        Qt6::Core
+        Qt6::Test
+)
+add_test(NAME output_filter COMMAND test_output_filter)
 
 if(VJ_FEATURE_DXV)
     qt_add_executable(test_hap_decode

@@ -2,16 +2,14 @@
 
 #include "MidiLearnMenu.h"
 #include "core/FilterCatalog.h"
+#include "core/FilterEffectIds.h"
 #include "core/FilterParamSchema.h"
+#include "render/maxine/MaxineFilterBackend.h"
 #include "core/Model.h"
 #include "core/Project.h"
 
 #include <QCoreApplication>
-#include <QCheckBox>
-#include <QComboBox>
 #include <QContextMenuEvent>
-#include <QCursor>
-#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFileInfo>
 #include <QFontMetricsF>
@@ -35,12 +33,74 @@ using pvj::core::Project;
 
 namespace {
 
+constexpr int kUnitSliderMax = 1000;
+
 QString elideMiddle(const QFontMetricsF& fm, const QString& s, double maxW)
 {
     if (fm.horizontalAdvance(s) <= maxW) {
         return s;
     }
     return fm.elidedText(s, Qt::ElideMiddle, int(maxW));
+}
+
+int rangeToSlider(double value, double minValue, double maxValue)
+{
+    if (qFuzzyCompare(minValue, maxValue)) {
+        return 0;
+    }
+    const double t = (qBound(minValue, value, maxValue) - minValue) / (maxValue - minValue);
+    return int(qRound(qBound(0.0, t, 1.0) * double(kUnitSliderMax)));
+}
+
+double sliderToRange(int sliderValue, double minValue, double maxValue)
+{
+    const double t = qBound(0.0, double(sliderValue) / double(kUnitSliderMax), 1.0);
+    return minValue + (maxValue - minValue) * t;
+}
+
+QString formatFilterParamValue(const pvj::core::FilterParamSpec& spec, double value)
+{
+    using pvj::core::FilterParamKind;
+    switch (spec.kind) {
+    case FilterParamKind::Percent:
+        return QString::number(int(qRound(qBound(0.0, value, 1.0) * 100.0))) + QLatin1Char('%');
+    case FilterParamKind::Angle:
+        return QString::number(value, 'f', 1) + QChar(0xB0);
+    case FilterParamKind::Bool:
+        return value >= 0.5 ? QObject::tr("On") : QObject::tr("Off");
+    case FilterParamKind::EnumIndex: {
+        const int idx = qBound(0, int(qRound(value)), qMax(0, spec.enumLabels.size() - 1));
+        return spec.enumLabels.value(idx);
+    }
+    default:
+        return QString::number(value, 'f', 3);
+    }
+}
+
+int sliderValueForParam(const pvj::core::FilterParamSpec& spec, double value)
+{
+    using pvj::core::FilterParamKind;
+    switch (spec.kind) {
+    case FilterParamKind::EnumIndex:
+        return qBound(0, int(qRound(value)), qMax(0, spec.enumLabels.size() - 1));
+    case FilterParamKind::Bool:
+        return value >= 0.5 ? kUnitSliderMax : 0;
+    default:
+        return rangeToSlider(value, spec.minV, spec.maxV);
+    }
+}
+
+double paramValueFromSlider(const pvj::core::FilterParamSpec& spec, int sliderValue)
+{
+    using pvj::core::FilterParamKind;
+    switch (spec.kind) {
+    case FilterParamKind::EnumIndex:
+        return double(qBound(0, sliderValue, qMax(0, spec.enumLabels.size() - 1)));
+    case FilterParamKind::Bool:
+        return sliderValue >= kUnitSliderMax / 2 ? 1.0 : 0.0;
+    default:
+        return sliderToRange(sliderValue, spec.minV, spec.maxV);
+    }
 }
 
 } // namespace
@@ -138,6 +198,7 @@ QString NodeGraphWidget::sourceTitleLine() const
         case pvj::core::GeneratorKind::SolidColor:   return tr("Solid color");
         case pvj::core::GeneratorKind::InputSpout:   return tr("Spout");
         case pvj::core::GeneratorKind::InputNdi:     return tr("NDI");
+        case pvj::core::GeneratorKind::InternalFeedback: return tr("Feedback loop");
         default:                                     return tr("Generator");
         }
     }
@@ -146,6 +207,9 @@ QString NodeGraphWidget::sourceTitleLine() const
 
 QString NodeGraphWidget::filterLabelFor(const QString& typeId) const
 {
+    if (pvj::core::isFeedbackMarkerNode(typeId)) {
+        return tr("Feedback / Render Target");
+    }
     const QString en = pvj::core::filterCatalogEnglishName(typeId);
     if (!en.isEmpty()) {
         return QCoreApplication::translate("FilterCatalog", en.toUtf8().constData());
@@ -157,6 +221,9 @@ void NodeGraphWidget::buildCatalogMenu(QMenu* root, const std::function<void(con
 {
     QHash<QString, QMenu*> catMenus;
     for (const auto& e : pvj::core::filterCatalogEntries()) {
+        if (e.category == pvj::core::maxineFilterCategoryKey()) {
+            continue;
+        }
         const QString cat = QCoreApplication::translate("FilterCatalog", e.category.toUtf8().constData());
         QMenu* sub = catMenus.value(cat);
         if (!sub) {
@@ -165,6 +232,11 @@ void NodeGraphWidget::buildCatalogMenu(QMenu* root, const std::function<void(con
         }
         const QString name = QCoreApplication::translate("FilterCatalog", e.englishName.toUtf8().constData());
         auto* act = sub->addAction(name);
+        if (e.category == pvj::core::maxineFilterCategoryKey()
+            && !pvj::render::maxineFiltersAvailable()) {
+            act->setToolTip(tr("NVIDIA Maxine runtime not available — install NVIDIA Video Effects "
+                               "(NVVideoEffects.dll + models) or rebuild with MAXINE_SDK_ROOT."));
+        }
         connect(act, &QAction::triggered, this, [onPick, id = e.typeId]() { onPick(id); });
     }
 }
@@ -192,6 +264,34 @@ void NodeGraphWidget::insertFilter(int index, const QString& typeId)
     n.params = pvj::core::defaultParamsFor(typeId);
     index = qBound(0, index, m_cell->filterChain.size());
     m_cell->filterChain.insert(index, n);
+    emitChainEdited();
+    refresh();
+}
+
+void NodeGraphWidget::insertFeedbackMarker(int index)
+{
+    if (!m_cell) {
+        return;
+    }
+    auto& chain = m_cell->filterChain;
+    int existingIndex = -1;
+    for (int i = 0; i < chain.size(); ++i) {
+        if (pvj::core::isFeedbackMarkerNode(chain[i].typeId)) {
+            existingIndex = i;
+            break;
+        }
+    }
+    if (existingIndex >= 0) {
+        if (existingIndex < index) {
+            --index;
+        }
+        chain.removeAt(existingIndex);
+    }
+    CellFilterNode marker;
+    marker.typeId = pvj::core::feedbackMarkerTypeId();
+    marker.params.clear();
+    index = qBound(0, index, chain.size());
+    chain.insert(index, marker);
     emitChainEdited();
     refresh();
 }
@@ -246,6 +346,13 @@ void NodeGraphWidget::setFilterTypeId(int filterIndex, const QString& typeId)
     emitChainEdited();
     emitParamsEdited();
     refresh();
+}
+
+bool NodeGraphWidget::isFeedbackCell() const
+{
+    return m_cell
+        && m_cell->visual.type == pvj::core::VisualType::Generator
+        && m_cell->visual.generator == pvj::core::GeneratorKind::InternalFeedback;
 }
 
 int NodeGraphWidget::hitTest(const QPointF& pos) const
@@ -521,6 +628,9 @@ void NodeGraphWidget::rebuildParamEditors()
         if (schemaIt == pvj::core::filterParamSchemas().end()) {
             continue;
         }
+        if (schemaIt.value().params.isEmpty()) {
+            continue;
+        }
         auto* group = new QWidget(m_paramHost);
         auto* form = new QFormLayout(group);
         form->setContentsMargins(8, 6, 8, 6);
@@ -542,93 +652,65 @@ void NodeGraphWidget::rebuildParamEditors()
                 paramIndex = node.params.size() - 1;
             }
 
-            QWidget* editor = nullptr;
-            if (spec.kind == pvj::core::FilterParamKind::Bool) {
-                auto* cb = new QCheckBox(group);
-                cb->setChecked(node.params[paramIndex].value >= 0.5);
-                connect(cb, &QCheckBox::toggled, this, [this, nodeId = node.id, name = spec.name](bool checked) {
-                    if (!m_cell) {
-                        return;
-                    }
-                    for (auto& n : m_cell->filterChain) {
-                        if (n.id != nodeId) {
-                            continue;
-                        }
-                        for (auto& p : n.params) {
-                            if (p.name == name) {
-                                p.value = checked ? 1.0 : 0.0;
-                                emitParamsEdited();
-                                return;
-                            }
-                        }
-                    }
-                });
-                editor = cb;
-            } else if (spec.kind == pvj::core::FilterParamKind::EnumIndex) {
-                auto* combo = new QComboBox(group);
-                for (int enumIdx = 0; enumIdx < spec.enumLabels.size(); ++enumIdx) {
-                    combo->addItem(spec.enumLabels[enumIdx], enumIdx);
-                }
-                combo->setCurrentIndex(
-                    qBound(0, int(qRound(node.params[paramIndex].value)), qMax(0, combo->count() - 1)));
-                connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this,
-                        [this, nodeId = node.id, name = spec.name](int idx) {
-                            if (!m_cell) {
-                                return;
-                            }
-                            for (auto& n : m_cell->filterChain) {
-                                if (n.id != nodeId) {
-                                    continue;
-                                }
-                                for (auto& p : n.params) {
-                                    if (p.name == name) {
-                                        p.value = idx;
-                                        emitParamsEdited();
-                                        return;
-                                    }
-                                }
-                            }
-                        });
-                editor = combo;
+            const double currentValue = node.params[paramIndex].value;
+
+            auto* row = new QWidget(group);
+            auto* rowLayout = new QHBoxLayout(row);
+            rowLayout->setContentsMargins(0, 0, 0, 0);
+            rowLayout->setSpacing(6);
+
+            auto* slider = new QSlider(Qt::Horizontal, row);
+            auto* valueLabel = new QLabel(formatFilterParamValue(spec, currentValue), row);
+            valueLabel->setMinimumWidth(52);
+            valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+            if (spec.kind == pvj::core::FilterParamKind::EnumIndex) {
+                const int maxIdx = qMax(0, spec.enumLabels.size() - 1);
+                slider->setRange(0, maxIdx);
+                slider->setSingleStep(1);
+                slider->setPageStep(1);
+            } else if (spec.kind == pvj::core::FilterParamKind::Bool) {
+                slider->setRange(0, kUnitSliderMax);
             } else {
-                auto* spin = new QDoubleSpinBox(group);
-                spin->setDecimals(3);
-                spin->setRange(spec.minV, spec.maxV);
-                spin->setSingleStep((spec.maxV - spec.minV) / 200.0);
-                spin->setValue(node.params[paramIndex].value);
-                connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-                        [this, nodeId = node.id, name = spec.name, minV = spec.minV, maxV = spec.maxV](double v) {
-                            if (!m_cell) {
-                                return;
-                            }
-                            for (auto& n : m_cell->filterChain) {
-                                if (n.id != nodeId) {
-                                    continue;
-                                }
-                                for (auto& p : n.params) {
-                                    if (p.name == name) {
-                                        p.value = qBound(minV, v, maxV);
-                                        emitParamsEdited();
-                                        return;
-                                    }
-                                }
-                            }
-                        });
-                editor = spin;
+                slider->setRange(0, kUnitSliderMax);
             }
-            if (!editor) {
-                continue;
-            }
+            slider->setValue(sliderValueForParam(spec, currentValue));
+
+            connect(slider, &QSlider::valueChanged, this,
+                    [this, nodeId = node.id, name = spec.name, spec, valueLabel](int v) {
+                        if (!m_cell) {
+                            return;
+                        }
+                        const double paramValue = paramValueFromSlider(spec, v);
+                        valueLabel->setText(formatFilterParamValue(spec, paramValue));
+                        for (auto& n : m_cell->filterChain) {
+                            if (n.id != nodeId) {
+                                continue;
+                            }
+                            for (auto& p : n.params) {
+                                if (p.name == name) {
+                                    p.value = qBound(spec.minV, paramValue, spec.maxV);
+                                    emitParamsEdited();
+                                    return;
+                                }
+                            }
+                        }
+                    });
+
+            rowLayout->addWidget(slider, 1);
+            rowLayout->addWidget(valueLabel);
+
+            QWidget* editor = slider;
             const QString property = QStringLiteral("filter.%1.%2")
                                          .arg(node.id.toString(QUuid::WithoutBraces), spec.name);
             const QVariant noteValue = spec.kind == pvj::core::FilterParamKind::EnumIndex && spec.maxV > 0.0
-                    ? QVariant(node.params[paramIndex].value / spec.maxV)
+                    ? QVariant(currentValue / spec.maxV)
                     : QVariant();
             MidiLearnMenu::tagMidiWidget(editor, property, noteValue);
             editor->installEventFilter(this);
             m_paramWidgets.append({ editor, node.id, spec.name, node.typeId, spec.kind, spec.minV, spec.maxV });
 
-            form->addRow(spec.label, editor);
+            form->addRow(spec.label, row);
         }
         m_paramHostLayout->addWidget(group);
     }
@@ -688,6 +770,7 @@ void NodeGraphWidget::contextMenuEvent(QContextMenuEvent* event)
     }
 
     QMenu menu(this);
+    const bool feedbackCell = isFeedbackCell();
 
     if (m_nodes[hit].kind == NodeKind::Source) {
         auto addSrc = [&](const QString& text, int role) {
@@ -700,6 +783,12 @@ void NodeGraphWidget::contextMenuEvent(QContextMenuEvent* event)
         addSrc(tr("Solid color"), 3);
         addSrc(tr("Spout (Windows)"), 4);
         addSrc(tr("NDI"), 5);
+        if (feedbackCell) {
+            menu.addSeparator();
+            connect(menu.addAction(tr("Insert feedback marker")), &QAction::triggered, this, [this]() {
+                insertFeedbackMarker(0);
+            });
+        }
         menu.exec(event->globalPos());
         return;
     }
@@ -711,12 +800,19 @@ void NodeGraphWidget::contextMenuEvent(QContextMenuEvent* event)
             buildCatalogMenu(&sub, [this](const QString& typeId) { addFilter(typeId); });
             sub.exec(QCursor::pos());
         });
+        if (feedbackCell) {
+            menu.addSeparator();
+            connect(menu.addAction(tr("Insert feedback marker")), &QAction::triggered, this, [this]() {
+                insertFeedbackMarker(m_cell ? m_cell->filterChain.size() : 0);
+            });
+        }
         menu.exec(event->globalPos());
         return;
     }
 
     if (m_nodes[hit].kind == NodeKind::Filter) {
         const int fi = m_nodes[hit].filterIndex;
+        const bool markerNode = pvj::core::isFeedbackMarkerNode(m_cell->filterChain[fi].typeId);
 
         auto* addBefore = menu.addAction(tr("Insert filter before…"));
         connect(addBefore, &QAction::triggered, this, [this, fi]() {
@@ -730,19 +826,29 @@ void NodeGraphWidget::contextMenuEvent(QContextMenuEvent* event)
             buildCatalogMenu(&sub, [this, fi](const QString& typeId) { insertFilter(fi + 1, typeId); });
             sub.exec(QCursor::pos());
         });
+        if (feedbackCell) {
+            connect(menu.addAction(tr("Insert feedback marker before")), &QAction::triggered, this, [this, fi]() {
+                insertFeedbackMarker(fi);
+            });
+            connect(menu.addAction(tr("Insert feedback marker after")), &QAction::triggered, this, [this, fi]() {
+                insertFeedbackMarker(fi + 1);
+            });
+        }
         menu.addSeparator();
 
-        auto* dup = menu.addAction(tr("Duplicate"));
-        connect(dup, &QAction::triggered, this, [this, fi]() { duplicateFilter(fi); });
+        if (!markerNode) {
+            auto* dup = menu.addAction(tr("Duplicate"));
+            connect(dup, &QAction::triggered, this, [this, fi]() { duplicateFilter(fi); });
 
-        auto* ch = menu.addAction(tr("Change type…"));
-        connect(ch, &QAction::triggered, this, [this, fi]() {
-            QMenu sub(this);
-            buildCatalogMenu(&sub, [this, fi](const QString& typeId) { setFilterTypeId(fi, typeId); });
-            sub.exec(QCursor::pos());
-        });
+            auto* ch = menu.addAction(tr("Change type…"));
+            connect(ch, &QAction::triggered, this, [this, fi]() {
+                QMenu sub(this);
+                buildCatalogMenu(&sub, [this, fi](const QString& typeId) { setFilterTypeId(fi, typeId); });
+                sub.exec(QCursor::pos());
+            });
+            menu.addSeparator();
+        }
 
-        menu.addSeparator();
         if (fi > 0) {
             connect(menu.addAction(tr("Move left")), &QAction::triggered, this, [this, fi]() {
                 moveFilter(fi, fi - 1);
@@ -753,9 +859,11 @@ void NodeGraphWidget::contextMenuEvent(QContextMenuEvent* event)
                 moveFilter(fi, fi + 1);
             });
         }
-        connect(menu.addAction(tr("Remove")), &QAction::triggered, this, [this, fi]() {
-            removeFilterAt(fi);
-        });
+        if (!markerNode) {
+            connect(menu.addAction(tr("Remove")), &QAction::triggered, this, [this, fi]() {
+                removeFilterAt(fi);
+            });
+        }
     }
 
     menu.exec(event->globalPos());

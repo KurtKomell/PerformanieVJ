@@ -356,10 +356,16 @@ struct MatrixSettings {
     int gridCols = 12;
 };
 
+/// Project-wide post-mixer NVIDIA filter chain (Output tab only).
+struct OutputSettings {
+    QList<CellFilterNode> filterChain;
+};
+
 struct Settings {
     AudioSettings  audio;
     UiSettings     ui;
     MatrixSettings matrix;
+    OutputSettings output;
 };
 
 } // namespace pvj::core

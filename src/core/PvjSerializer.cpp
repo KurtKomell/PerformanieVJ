@@ -339,6 +339,10 @@ void writeSettings(QXmlStreamWriter& w, const Settings& s)
     w.writeAttribute(QStringLiteral("gridCols"), QString::number(s.matrix.gridCols));
     w.writeEndElement();
 
+    w.writeStartElement(QStringLiteral("Output"));
+    writeFilterChain(w, s.output.filterChain);
+    w.writeEndElement();
+
     w.writeEndElement();
 }
 
@@ -780,6 +784,20 @@ Settings readSettings(QXmlStreamReader& r)
                 s.matrix.gridCols = 12;
             }
             r.skipCurrentElement();
+        } else if (r.name() == QLatin1String("Output")) {
+            while (r.readNextStartElement()) {
+                if (r.name() == QLatin1String("FilterChain")) {
+                    while (r.readNextStartElement()) {
+                        if (r.name() == QLatin1String("FilterNode")) {
+                            s.output.filterChain.append(readFilterNode(r));
+                        } else {
+                            r.skipCurrentElement();
+                        }
+                    }
+                } else {
+                    r.skipCurrentElement();
+                }
+            }
         } else {
             r.skipCurrentElement();
         }
@@ -863,6 +881,8 @@ PvjSerializer::Result PvjSerializer::load(Project& project, const QString& fileP
     } else {
         project.resizeBanksForGrid(project.settings.matrix.gridRows, project.settings.matrix.gridCols);
     }
+    project.stripMaxineFiltersFromCells();
+    project.sanitizeOutputFilters();
     return {true, {}};
 }
 

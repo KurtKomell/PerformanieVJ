@@ -30,6 +30,12 @@ public:
     /// mappings that reference deck B or bank-set switching.
     void ensureSingleBankSet();
 
+    /// Remove NVIDIA/Maxine filters from all cell chains (they belong on the Output tab).
+    void stripMaxineFiltersFromCells();
+
+    /// Normalize output filter chain to allowed NVIDIA entries only.
+    void sanitizeOutputFilters();
+
     // Lookup helpers
     const MediaItem* findMedia(const QUuid& id) const;
     MediaItem*       findMedia(const QUuid& id);

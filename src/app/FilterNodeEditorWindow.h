@@ -31,6 +31,8 @@ public:
 
 signals:
     void chainEdited(int bankSetIndex, int bankIndex, int cellIndex);
+    /// Filter parameter value changed (structure unchanged); avoid heavy UI refresh.
+    void filterParamsEdited(int bankSetIndex, int bankIndex, int cellIndex);
     void midiLearnCcRequested(int bankSetIndex, int bankIndex, int cellIndex, const QString& propertyId);
     void midiLearnNoteRequested(int bankSetIndex, int bankIndex, int cellIndex,
                                 const QString& propertyId, bool toggle, double buttonValue);

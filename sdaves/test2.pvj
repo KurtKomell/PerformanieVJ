@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PerformanieVJ version="1">
+  <Settings>
+    <Audio driver="auto" inputDevice="" outputDevice="" bufferSize="512" sampleRate="48000"/>
+    <UI mediaLibraryVisible="true" bankPanelVisible="true" parameterTabsVisible="true" mediaLibraryWidth="320" bankPanelHeight="260"/>
+    <Matrix width="1920" height="1080" gridRows="4" gridCols="12"/>
+    <Output/>
+  </Settings>
+  <MediaLibrary>
+    <Item id="a93e3e88-ebc8-4152-9791-5daa3514c907" path="D:/komell/vpool720/vpool/b7.mp4" name="b7.mp4"/>
+  </MediaLibrary>
+  <BankSet type="A">
+    <Bank index="0" name="Bank 1">
+      <Cell index="0">
+        <Visual type="media" mediaId="a93e3e88-ebc8-4152-9791-5daa3514c907"/>
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+          <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
+        </Props>
+      </Cell>
+      <Cell index="1">
+        <Visual type="generator" generator="internalFeedback"/>
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="6" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+          <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
+        </Props>
+      </Cell>
+    </Bank>
+    <Bank index="1" name="Bank 2"/>
+    <Bank index="2" name="Bank 3"/>
+    <Bank index="3" name="Bank 4"/>
+    <Bank index="4" name="Bank 5"/>
+    <Bank index="5" name="Bank 6"/>
+    <Bank index="6" name="Bank 7"/>
+    <Bank index="7" name="Bank 8"/>
+    <Bank index="8" name="Bank 9"/>
+    <Bank index="9" name="Bank 10"/>
+    <Bank index="10" name="Bank 11"/>
+    <Bank index="11" name="Bank 12"/>
+    <Bank index="12" name="Bank 13"/>
+    <Bank index="13" name="Bank 14"/>
+    <Bank index="14" name="Bank 15"/>
+    <Bank index="15" name="Bank 16"/>
+    <Bank index="16" name="Bank 17"/>
+    <Bank index="17" name="Bank 18"/>
+    <Bank index="18" name="Bank 19"/>
+    <Bank index="19" name="Bank 20"/>
+    <Bank index="20" name="Bank 21"/>
+    <Bank index="21" name="Bank 22"/>
+    <Bank index="22" name="Bank 23"/>
+    <Bank index="23" name="Bank 24"/>
+    <Bank index="24" name="Bank 25"/>
+    <Bank index="25" name="Bank 26"/>
+    <Bank index="26" name="Bank 27"/>
+    <Bank index="27" name="Bank 28"/>
+    <Bank index="28" name="Bank 29"/>
+    <Bank index="29" name="Bank 30"/>
+    <Bank index="30" name="Bank 31"/>
+    <Bank index="31" name="Bank 32"/>
+    <Bank index="32" name="Bank 33"/>
+    <Bank index="33" name="Bank 34"/>
+    <Bank index="34" name="Bank 35"/>
+    <Bank index="35" name="Bank 36"/>
+    <Bank index="36" name="Bank 37"/>
+    <Bank index="37" name="Bank 38"/>
+    <Bank index="38" name="Bank 39"/>
+    <Bank index="39" name="Bank 40"/>
+    <Bank index="40" name="Bank 41"/>
+    <Bank index="41" name="Bank 42"/>
+    <Bank index="42" name="Bank 43"/>
+    <Bank index="43" name="Bank 44"/>
+    <Bank index="44" name="Bank 45"/>
+    <Bank index="45" name="Bank 46"/>
+    <Bank index="46" name="Bank 47"/>
+    <Bank index="47" name="Bank 48"/>
+    <Bank index="48" name="Bank 49"/>
+    <Bank index="49" name="Bank 50"/>
+    <Bank index="50" name="Bank 51"/>
+    <Bank index="51" name="Bank 52"/>
+    <Bank index="52" name="Bank 53"/>
+    <Bank index="53" name="Bank 54"/>
+    <Bank index="54" name="Bank 55"/>
+    <Bank index="55" name="Bank 56"/>
+    <Bank index="56" name="Bank 57"/>
+    <Bank index="57" name="Bank 58"/>
+    <Bank index="58" name="Bank 59"/>
+    <Bank index="59" name="Bank 60"/>
+    <Bank index="60" name="Bank 61"/>
+    <Bank index="61" name="Bank 62"/>
+    <Bank index="62" name="Bank 63"/>
+    <Bank index="63" name="Bank 64"/>
+  </BankSet>
+  <TriggerMappings/>
+</PerformanieVJ>

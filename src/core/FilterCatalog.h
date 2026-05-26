@@ -18,4 +18,7 @@ const QVector<FilterCatalogEntry>& filterCatalogEntries();
 /// O(1) average — builds hash on first use
 QString filterCatalogEnglishName(const QString& typeId);
 
+/// Catalog category string for a typeId (empty if unknown).
+QString filterCatalogCategory(const QString& typeId);
+
 } // namespace pvj::core

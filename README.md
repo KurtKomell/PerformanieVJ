@@ -153,7 +153,31 @@ The root `CMakeLists.txt` exposes:
 | `VJ_FEATURE_SYPHON`   | ON (macOS only)     | Shared-texture input (Metal)       |
 | `VJ_FEATURE_NDI`      | OFF                 | Cross-platform video-over-network  |
 | `VJ_FEATURE_ASIO`     | OFF (Windows only)  | Low-latency audio on Windows       |
+| `VJ_FEATURE_MAXINE`   | ON (Windows only)   | NVIDIA Maxine VFX filters (SDK)  |
 | `VJ_BUILD_TESTS`      | ON                  | Build unit tests                   |
+
+## NVIDIA Maxine filters (Windows)
+
+Four AI video filters appear under the **NVIDIA** category (including **Video Denoise**, catalog id `noise_reduction`) in the filter node editor when the [NVIDIA Maxine Video Effects SDK](https://developer.nvidia.com/maxine) is available at build time:
+
+- **Encoder Artifact Reduction** — reduces blocky encoding artifacts
+- **Super Resolution** — AI upscale with sharpening (mode + scale)
+- **Upscale** — fast AI upscale (scale + strength)
+- **Video Denoise** — webcam/video noise removal (weak/strong)
+
+Configure the SDK path when CMake cannot find it automatically:
+
+```powershell
+cmake -B build -DMAXINE_SDK_ROOT="C:/Maxine-VFX-SDK"
+# or, if needed:
+# cmake -B build -DMAXINE_SDK_ROOT="C:/Maxine-VFX-SDK/nvvfx"
+```
+
+Headers live at `C:/Maxine-VFX-SDK/nvvfx/include/nvvfx.h`. CMake searches `nvvfx/include` under the root automatically.
+
+Requires an NVIDIA GPU with Tensor Cores (same as the app’s 6 GB VRAM startup check). Runtime DLLs from the SDK `bin` folder are copied next to `performanievj.exe` when the SDK is linked. Without the SDK, the NVIDIA filters still appear in the menu but pass the input through unchanged (no AI processing).
+
+For a classic GPU **Denoise** (blur-based, no SDK), use **Blur & sharpen → Denoise**.
 
 ## License
 

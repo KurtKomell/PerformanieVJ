@@ -18,7 +18,9 @@ class QLineEdit;
 class QPushButton;
 class QSlider;
 class QStackedWidget;
+class QListWidget;
 class QToolButton;
+class QVBoxLayout;
 class QEvent;
 
 namespace pvj::core {
@@ -66,6 +68,8 @@ signals:
     /// Layer, visual source, or media assignment changed — re-apply live playback if active.
     void cellPlaybackChanged(int bankSetIndex, int bankIndex, int cellIndex);
     void fullscreenOutputToggled();
+    /// Project-wide post-mixer NVIDIA filter chain changed (Output tab).
+    void outputFilterChainChanged();
     /// Step playback by whole seconds (±1 from arrow buttons).
     void visualSeekStepRequested(int seconds);
     /// Apply scratch head position to the playing decoder (see `scratchHeadU`).
@@ -132,8 +136,20 @@ private slots:
     void onFeedbackWrapModeChanged(int idx);
     void onPictureWrapModeChanged(int idx);
 
+    void onOutputFilterSelectionChanged();
+    void onOutputFilterAddTriggered();
+    void onOutputFilterMoveUp();
+    void onOutputFilterMoveDown();
+    void onOutputFilterRemove();
+
 private:
     void rebuildScreenList();
+    void refreshOutputFilterUi();
+    void rebuildOutputParamEditors();
+    void clearOutputParamEditors();
+    void emitOutputFilterChanged();
+    QString outputFilterLabelFor(const QString& typeId) const;
+    void ensureOutputNodeParams(pvj::core::CellFilterNode& node) const;
 
     QWidget* buildVisualTab();
     QWidget* buildTransitionTab();
@@ -281,6 +297,14 @@ private:
 
     QComboBox*      m_outputScreen   = nullptr;
     QPushButton*    m_fullscreenBtn  = nullptr;
+    QListWidget*    m_outputFilterList = nullptr;
+    QPushButton*    m_outputFilterUpBtn = nullptr;
+    QPushButton*    m_outputFilterDownBtn = nullptr;
+    QPushButton*    m_outputFilterRemoveBtn = nullptr;
+    QPushButton*    m_outputFilterAddBtn = nullptr;
+    QWidget*        m_outputParamHost = nullptr;
+    QVBoxLayout*    m_outputParamLayout = nullptr;
+    int             m_outputFilterSelectedIndex = -1;
     QGridLayout*    m_visualGrid     = nullptr;
     /// Top of Visual tab (thumbnail row + clip name); clip-only block is `m_visualClipSection`.
     QWidget*        m_visualStandardSection = nullptr;

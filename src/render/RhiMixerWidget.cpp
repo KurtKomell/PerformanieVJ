@@ -1,12 +1,17 @@
 #include "RhiMixerWidget.h"
+#include "FilterUniformPacker.h"
 #include "ShaderLibrary.h"
+#include "maxine/MaxineFilterBackend.h"
+#include "maxine/MaxineTextureBridge.h"
 
+#include "core/FilterEffectIds.h"
 #include "core/FilterParamSchema.h"
 
 #include <rhi/qshader.h>
 #include <rhi/qrhi.h>
 
 #include <QFile>
+#include <QImage>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QVector>
@@ -223,6 +228,10 @@ bool createEffectPipeline(QRhi* r,
 RhiMixerWidget::RhiMixerWidget(QWidget* parent)
     : QRhiWidget(parent)
 {
+#if defined(Q_OS_WIN)
+    // Maxine readback uses D3D11 texture staging; default QRhi backend may be OpenGL.
+    setApi(QRhiWidget::Api::Direct3D11);
+#endif
     setMinimumSize(320, 180);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
@@ -358,10 +367,23 @@ void RhiMixerWidget::setLayerFilterChain(int layer, const QList<pvj::core::CellF
         return;
     }
     m_layerFilterChain[layer] = chain;
+    if (layer == m_activeFeedbackLayer || m_layerIsFeedback[layer]) {
+        releaseFeedbackGpuResources();
+    }
     // Do not reset m_layerFilterLastOut here: updateMixerFromPlayingCells can run
     // between the feedback key filter pass and rebuildMixerShaderResourceBindings,
     // which would drop keyed output and cause visible flicker. runPerLayerFilterChain
     // resets lastOut at the start of each frame's filter pass when needed.
+    update();
+}
+
+void RhiMixerWidget::setOutputFilterChain(const QList<pvj::core::CellFilterNode>& chain)
+{
+    if (filterChainShallowEqual(m_outputFilterChain, chain)) {
+        return;
+    }
+    m_outputFilterChain = chain;
+    m_outputFilterLastOut = -1;
     update();
 }
 
@@ -523,7 +545,7 @@ void RhiMixerWidget::releaseFeedbackGpuResources()
     }
     m_textureCopyPipeline.reset();
     m_textureCopySrb.reset();
-    m_textureCopyRp.reset();
+    m_textureCopyPipelineRp = nullptr;
     m_feedbackPixelSize = {};
     m_feedbackWriteIdx = 0;
     m_sceneHistWriteIdx = 0;
@@ -560,6 +582,11 @@ void RhiMixerWidget::releaseOffscreenGpuResources()
     for (auto& srb : m_layerFilterSrb) {
         srb.reset();
     }
+    m_layerFilterSrbKey.fill(0);
+    for (auto& ready : m_layerFilterSrbReady) {
+        ready = false;
+    }
+    m_blendBlackTex.reset();
     m_filterPixelSize = {};
     m_filterRp.reset();
     m_filterPipelineByTypeId.clear();
@@ -568,6 +595,12 @@ void RhiMixerWidget::releaseOffscreenGpuResources()
 
 void RhiMixerWidget::releaseGpuResources()
 {
+    if (m_maxineBackend) {
+        m_maxineBackend->shutdown();
+        delete m_maxineBackend;
+        m_maxineBackend = nullptr;
+    }
+    m_maxinePixelSize = {};
     releaseOffscreenGpuResources();
     m_pipeline.reset();
     m_srb.reset();
@@ -859,6 +892,10 @@ bool RhiMixerWidget::ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize)
         return false;
     }
     if (m_filterPixelSize != pixelSize) {
+        if (m_maxineBackend) {
+            m_maxineBackend->invalidateSize();
+        }
+        m_maxinePixelSize = {};
         for (auto& pair : m_layerFilterPingRt) {
             for (auto& rt : pair) {
                 rt.reset();
@@ -873,6 +910,22 @@ bool RhiMixerWidget::ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize)
             idx = -1;
         }
         m_filterPixelSize = pixelSize;
+        m_filterPipelineByTypeId.clear();
+        m_filterPipelineOwned.clear();
+        m_filterRp.reset();
+        m_textureCopyPipeline.reset();
+        m_textureCopyPipelineRp = nullptr;
+        m_layerFilterSrbKey.fill(0);
+        for (auto& ready : m_layerFilterSrbReady) {
+            ready = false;
+        }
+        m_outputFilterPingRt[0].reset();
+        m_outputFilterPingRt[1].reset();
+        m_outputFilterPingTex[0].reset();
+        m_outputFilterPingTex[1].reset();
+        m_outputFilterLastOut = -1;
+        m_outputFilterSrbKey = 0;
+        m_outputFilterSrbReady = false;
     }
     bool needed = false;
     for (int i = 0; i < LayerCount; ++i) {
@@ -911,7 +964,7 @@ bool RhiMixerWidget::ensureLayerFilterPassResources(QRhi* r, int layer)
     }
     if (!m_layerFilterUbuf[layer]) {
         m_layerFilterUbuf[layer].reset(r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
-                                                    sizeof(float) * 12));
+                                                    sizeof(EffectQuadUbo2)));
         if (!m_layerFilterUbuf[layer]->create()) {
             m_layerFilterUbuf[layer].reset();
             return false;
@@ -923,10 +976,194 @@ bool RhiMixerWidget::ensureLayerFilterPassResources(QRhi* r, int layer)
     return m_layerFilterUbuf[layer] && m_layerFilterSrb[layer];
 }
 
-void RhiMixerWidget::rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex)
+bool RhiMixerWidget::ensureOutputFilterTargets(QRhi* r, const QSize& pixelSize)
+{
+    if (!r || pixelSize.isEmpty() || m_outputFilterChain.isEmpty()) {
+        return false;
+    }
+    ensureLayerFilterTargets(r, pixelSize);
+    for (int k = 0; k < 2; ++k) {
+        if (!m_outputFilterPingTex[k]) {
+            m_outputFilterPingTex[k].reset(
+                r->newTexture(QRhiTexture::RGBA8, pixelSize, 1, QRhiTexture::RenderTarget));
+            if (!m_outputFilterPingTex[k]->create()) {
+                return false;
+            }
+        }
+        if (!m_outputFilterPingRt[k]) {
+            m_outputFilterPingRt[k].reset(r->newTextureRenderTarget(
+                QRhiTextureRenderTargetDescription(QRhiColorAttachment(m_outputFilterPingTex[k].get()))));
+            if (!m_filterRp) {
+                m_filterRp.reset(m_outputFilterPingRt[k]->newCompatibleRenderPassDescriptor());
+            }
+            m_outputFilterPingRt[k]->setRenderPassDescriptor(m_filterRp.get());
+            if (!m_outputFilterPingRt[k]->create()) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool RhiMixerWidget::ensureOutputFilterPassResources(QRhi* r)
+{
+    if (!r) {
+        return false;
+    }
+    if (!m_outputFilterUbuf) {
+        m_outputFilterUbuf.reset(r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                               sizeof(EffectQuadUbo2)));
+        if (!m_outputFilterUbuf->create()) {
+            m_outputFilterUbuf.reset();
+            return false;
+        }
+    }
+    if (!m_outputFilterSrb) {
+        m_outputFilterSrb.reset(r->newShaderResourceBindings());
+    }
+    return m_outputFilterUbuf && m_outputFilterSrb;
+}
+
+void RhiMixerWidget::rebuildOutputFilterShaderResourceBindings(QRhiTexture* sourceTex,
+                                                               const QString& typeId)
+{
+    if (!m_outputFilterSrb || !m_outputFilterUbuf || !sourceTex) {
+        return;
+    }
+    QRhiTexture* secondTex = sourceTex;
+    if (effectUsesTwoTextures(typeId) && m_blendBlackTex) {
+        secondTex = m_blendBlackTex.get();
+    }
+    const quint64 bindingKey = (quint64(quintptr(sourceTex)) << 1)
+        ^ quint64(quintptr(secondTex));
+    if (m_outputFilterSrbKey == bindingKey && m_outputFilterSrbReady) {
+        return;
+    }
+    m_outputFilterSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+            m_outputFilterUbuf.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage, sourceTex, m_sampler.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            2, QRhiShaderResourceBinding::FragmentStage, secondTex, m_sampler.get()),
+    });
+    m_outputFilterSrb->create();
+    m_outputFilterSrbKey = bindingKey;
+    m_outputFilterSrbReady = true;
+}
+
+QRhiTexture* RhiMixerWidget::outputFilterResultTexture() const
+{
+    if (m_outputFilterLastOut < 0 || !m_outputFilterPingTex[m_outputFilterLastOut]) {
+        return m_sceneTex.get();
+    }
+    return m_outputFilterPingTex[m_outputFilterLastOut].get();
+}
+
+void RhiMixerWidget::runOutputFilterChain(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx,
+                                          const QColor& clear)
+{
+    m_outputFilterLastOut = -1;
+    if (!r || !cb || !m_sceneTex || m_outputFilterChain.isEmpty()) {
+        return;
+    }
+    if (!ensureOutputFilterPassResources(r)) {
+        return;
+    }
+    QRhiBuffer* ubuf = m_outputFilterUbuf.get();
+    QRhiTexture* sourceTex = m_sceneTex.get();
+    int writeIdx = 0;
+
+    if (!m_blendBlackTex) {
+        m_blendBlackTex.reset(r->newTexture(QRhiTexture::RGBA8, QSize(1, 1), 1));
+        if (m_blendBlackTex->create()) {
+            QRhiResourceUpdateBatch* blackBatch = r->nextResourceUpdateBatch();
+            QImage blackImg(1, 1, QImage::Format_RGBA8888);
+            blackImg.fill(Qt::black);
+            blackBatch->uploadTexture(m_blendBlackTex.get(), blackImg);
+            cb->resourceUpdate(blackBatch);
+        } else {
+            m_blendBlackTex.reset();
+        }
+    }
+
+    constexpr int kOutputPipelineLayer = 100;
+
+    for (const auto& node : m_outputFilterChain) {
+        if (pvj::core::filterUsesMaxineBackend(node.typeId)) {
+            if (!m_maxineBackend) {
+                m_maxineBackend = new MaxineFilterBackend();
+            }
+            if (m_maxinePixelSize != stagePx) {
+                m_maxineBackend->invalidateSize();
+                m_maxinePixelSize = stagePx;
+            }
+            m_maxineBackend->ensureInitialized(r);
+            QRhiTextureRenderTarget* destRt = m_outputFilterPingRt[writeIdx].get();
+            QRhiTexture* destTex = m_outputFilterPingTex[writeIdx].get();
+            bool ok = false;
+            bool readOk = false;
+            if (maxineFiltersAvailable()) {
+                r->finish();
+                QImage input;
+                readOk = readRgba8Texture(r, cb, sourceTex, stagePx, input) && !input.isNull();
+                if (readOk) {
+                    ok = m_maxineBackend->applyFromImage(r, cb, node, input, destRt, stagePx);
+                }
+            }
+            if (!ok) {
+                runTextureCopyPass(r, cb, sourceTex, destRt, stagePx);
+            }
+            sourceTex = destTex;
+            m_outputFilterLastOut = writeIdx;
+            writeIdx = 1 - writeIdx;
+            continue;
+        }
+
+        const int internalPasses = qMax(1, pvj::core::filterEffectInternalPasses(node.typeId));
+        for (int pass = 0; pass < internalPasses; ++pass) {
+            rebuildOutputFilterShaderResourceBindings(sourceTex, node.typeId);
+            QRhiGraphicsPipeline* pipeline = ensureFilterPipeline(
+                r, node.typeId, kOutputPipelineLayer, m_outputFilterSrb.get(),
+                m_outputFilterPingRt[writeIdx]->renderPassDescriptor());
+            if (!pipeline) {
+                continue;
+            }
+            QRhiResourceUpdateBatch* ubatch = r->nextResourceUpdateBatch();
+            updateFilterUniformBuffer(ubatch, ubuf, node, stagePx, -1, pass);
+            cb->resourceUpdate(ubatch);
+
+            cb->beginPass(m_outputFilterPingRt[writeIdx].get(), clear, { 1.0f, 0 }, nullptr);
+            cb->setGraphicsPipeline(pipeline);
+            cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
+            cb->setShaderResources(m_outputFilterSrb.get());
+            QRhiCommandBuffer::VertexInput vin(m_vbuf.get(), 0);
+            cb->setVertexInput(0, 1, &vin);
+            cb->draw(4);
+            cb->endPass();
+
+            sourceTex = m_outputFilterPingTex[writeIdx].get();
+            m_outputFilterLastOut = writeIdx;
+            writeIdx = 1 - writeIdx;
+        }
+    }
+}
+
+void RhiMixerWidget::rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex,
+                                                              const QString& typeId)
 {
     if (layer < 0 || layer >= LayerCount || !m_layerFilterSrb[layer] || !m_layerFilterUbuf[layer]
         || !sourceTex) {
+        return;
+    }
+    QRhiTexture* secondTex = sourceTex;
+    if (effectUsesTwoTextures(typeId) && m_blendBlackTex) {
+        secondTex = m_blendBlackTex.get();
+    }
+    const quint64 bindingKey = (quint64(quintptr(sourceTex)) << 1)
+        ^ quint64(quintptr(secondTex));
+    if (m_layerFilterSrbKey[layer] == bindingKey && m_layerFilterSrbReady[layer]) {
         return;
     }
     m_layerFilterSrb[layer]->setBindings({
@@ -936,9 +1173,11 @@ void RhiMixerWidget::rebuildLayerFilterShaderResourceBindings(int layer, QRhiTex
         QRhiShaderResourceBinding::sampledTexture(
             1, QRhiShaderResourceBinding::FragmentStage, sourceTex, m_sampler.get()),
         QRhiShaderResourceBinding::sampledTexture(
-            2, QRhiShaderResourceBinding::FragmentStage, sourceTex, m_sampler.get()),
+            2, QRhiShaderResourceBinding::FragmentStage, secondTex, m_sampler.get()),
     });
     m_layerFilterSrb[layer]->create();
+    m_layerFilterSrbKey[layer] = bindingKey;
+    m_layerFilterSrbReady[layer] = true;
 }
 
 QRhiGraphicsPipeline* RhiMixerWidget::ensureFilterPipeline(QRhi* r, const QString& typeId,
@@ -946,13 +1185,14 @@ QRhiGraphicsPipeline* RhiMixerWidget::ensureFilterPipeline(QRhi* r, const QStrin
                                                            QRhiShaderResourceBindings* srb,
                                                            QRhiRenderPassDescriptor* rp)
 {
-    const QString key = QStringLiteral("%1:L%2").arg(typeId.toLower()).arg(layerIndex);
+    const QString fragPath = effectFragmentShaderForType(typeId);
+    const QString key = QStringLiteral("%1:L%2").arg(fragPath).arg(layerIndex);
     auto it = m_filterPipelineByTypeId.find(key);
     if (it != m_filterPipelineByTypeId.end() && it.value()) {
         return it.value();
     }
     std::unique_ptr<QRhiGraphicsPipeline> pipeline;
-    if (!createEffectPipeline(r, effectFragmentShaderForType(typeId.toLower()), srb, rp, pipeline)) {
+    if (!createEffectPipeline(r, fragPath, srb, rp, pipeline)) {
         return nullptr;
     }
     QRhiGraphicsPipeline* raw = pipeline.get();
@@ -1082,10 +1322,6 @@ bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
     if (!m_stackCombineSrb) {
         m_stackCombineSrb.reset(r->newShaderResourceBindings());
     }
-    if (!m_textureCopySrb) {
-        m_textureCopySrb.reset(r->newShaderResourceBindings());
-    }
-
     rebuildBelowMixerShaderResourceBindings();
     rebuildStackCombineShaderResourceBindings();
 
@@ -1099,16 +1335,6 @@ bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
         if (!createEffectPipeline(r, QStringLiteral(":/shaders/stack_combine.frag.qsb"),
                                   QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
                                   m_stackCombineSrb.get(), m_belowRp.get(), m_stackCombinePipeline)) {
-            return false;
-        }
-    }
-    if (!m_textureCopyRp && m_stackRt) {
-        m_textureCopyRp.reset(m_stackRt->newCompatibleRenderPassDescriptor());
-    }
-    if (!m_textureCopyPipeline && m_textureCopyRp) {
-        if (!createEffectPipeline(r, QStringLiteral(":/shaders/textured_quad.frag.qsb"),
-                                  QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
-                                  m_textureCopySrb.get(), m_textureCopyRp.get(), m_textureCopyPipeline)) {
             return false;
         }
     }
@@ -1167,10 +1393,35 @@ void RhiMixerWidget::runStackCombinePass(QRhi* r, QRhiCommandBuffer* cb, const Q
     cb->endPass();
 }
 
+bool RhiMixerWidget::ensureTextureCopyPipeline(QRhi* r, QRhiRenderPassDescriptor* rp)
+{
+    if (!r || !rp) {
+        return false;
+    }
+    if (!m_textureCopySrb) {
+        m_textureCopySrb.reset(r->newShaderResourceBindings());
+    }
+    if (m_textureCopyPipeline && m_textureCopyPipelineRp != rp) {
+        m_textureCopyPipeline.reset();
+    }
+    if (!m_textureCopyPipeline) {
+        if (!createEffectPipeline(r, QStringLiteral(":/shaders/textured_quad.frag.qsb"),
+                                  QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
+                                  m_textureCopySrb.get(), rp, m_textureCopyPipeline)) {
+            return false;
+        }
+        m_textureCopyPipelineRp = rp;
+    }
+    return m_textureCopyPipeline != nullptr;
+}
+
 void RhiMixerWidget::runTextureCopyPass(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
                                         QRhiTextureRenderTarget* targetRt, const QSize& stagePx)
 {
-    if (!r || !cb || !m_textureCopyPipeline || !sourceTex || !targetRt) {
+    if (!r || !cb || !sourceTex || !targetRt) {
+        return;
+    }
+    if (!ensureTextureCopyPipeline(r, targetRt->renderPassDescriptor())) {
         return;
     }
     rebuildTextureCopyShaderResourceBindings(sourceTex);
@@ -1236,126 +1487,101 @@ void RhiMixerWidget::runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int 
     const QList<pvj::core::CellFilterNode>& chain = chainOverride ? *chainOverride : m_layerFilterChain[i];
     QRhiTexture* sourceTex = firstSource;
     int writeIdx = 0;
+
+    if (!m_blendBlackTex) {
+        m_blendBlackTex.reset(r->newTexture(QRhiTexture::RGBA8, QSize(1, 1), 1));
+        if (m_blendBlackTex->create()) {
+            QRhiResourceUpdateBatch* blackBatch = r->nextResourceUpdateBatch();
+            QImage blackImg(1, 1, QImage::Format_RGBA8888);
+            blackImg.fill(Qt::black);
+            blackBatch->uploadTexture(m_blendBlackTex.get(), blackImg);
+            cb->resourceUpdate(blackBatch);
+        } else {
+            m_blendBlackTex.reset();
+        }
+    }
+
     for (const auto& node : chain) {
-        rebuildLayerFilterShaderResourceBindings(i, sourceTex);
-        QRhiGraphicsPipeline* pipeline = ensureFilterPipeline(
-            r, node.typeId, i, m_layerFilterSrb[i].get(),
-            m_layerFilterPingRt[i][writeIdx]->renderPassDescriptor());
-        if (!pipeline) {
+        if (pvj::core::isFeedbackMarkerNode(node.typeId)) {
             continue;
         }
-        QRhiResourceUpdateBatch* ubatch = r->nextResourceUpdateBatch();
-        updateFilterUniformBuffer(ubatch, ubuf, node, stagePx, i);
-        cb->resourceUpdate(ubatch);
+        if (pvj::core::filterUsesMaxineBackend(node.typeId)) {
+            if (!m_maxineBackend) {
+                m_maxineBackend = new MaxineFilterBackend();
+            }
+            if (m_maxinePixelSize != stagePx) {
+                m_maxineBackend->invalidateSize();
+                m_maxinePixelSize = stagePx;
+            }
+            m_maxineBackend->ensureInitialized(r);
+            QRhiTextureRenderTarget* destRt = m_layerFilterPingRt[i][writeIdx].get();
+            QRhiTexture* destTex = m_layerFilterPingTex[i][writeIdx].get();
+            bool ok = false;
+            bool readOk = false;
+            if (maxineFiltersAvailable()) {
+                r->finish();
+                QImage input;
+                readOk = readRgba8Texture(r, cb, sourceTex, stagePx, input) && !input.isNull();
+                if (readOk) {
+                    ok = m_maxineBackend->applyFromImage(r, cb, node, input, destRt, stagePx);
+                }
+            }
+            if (!ok) {
+                runTextureCopyPass(r, cb, sourceTex, destRt, stagePx);
+            }
+            sourceTex = destTex;
+            m_layerFilterLastOut[i] = writeIdx;
+            writeIdx = 1 - writeIdx;
+            continue;
+        }
 
-        cb->beginPass(m_layerFilterPingRt[i][writeIdx].get(), clear, { 1.0f, 0 }, nullptr);
-        cb->setGraphicsPipeline(pipeline);
-        cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
-        cb->setShaderResources(m_layerFilterSrb[i].get());
-        QRhiCommandBuffer::VertexInput vin(m_vbuf.get(), 0);
-        cb->setVertexInput(0, 1, &vin);
-        cb->draw(4);
-        cb->endPass();
+        const int internalPasses = qMax(1, pvj::core::filterEffectInternalPasses(node.typeId));
+        for (int pass = 0; pass < internalPasses; ++pass) {
+            rebuildLayerFilterShaderResourceBindings(i, sourceTex, node.typeId);
+            QRhiGraphicsPipeline* pipeline = ensureFilterPipeline(
+                r, node.typeId, i, m_layerFilterSrb[i].get(),
+                m_layerFilterPingRt[i][writeIdx]->renderPassDescriptor());
+            if (!pipeline) {
+                continue;
+            }
+            QRhiResourceUpdateBatch* ubatch = r->nextResourceUpdateBatch();
+            updateFilterUniformBuffer(ubatch, ubuf, node, stagePx, i, pass);
+            cb->resourceUpdate(ubatch);
 
-        sourceTex = m_layerFilterPingTex[i][writeIdx].get();
-        m_layerFilterLastOut[i] = writeIdx;
-        writeIdx = 1 - writeIdx;
+            cb->beginPass(m_layerFilterPingRt[i][writeIdx].get(), clear, { 1.0f, 0 }, nullptr);
+            cb->setGraphicsPipeline(pipeline);
+            cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
+            cb->setShaderResources(m_layerFilterSrb[i].get());
+            QRhiCommandBuffer::VertexInput vin(m_vbuf.get(), 0);
+            cb->setVertexInput(0, 1, &vin);
+            cb->draw(4);
+            cb->endPass();
+
+            sourceTex = m_layerFilterPingTex[i][writeIdx].get();
+            m_layerFilterLastOut[i] = writeIdx;
+            writeIdx = 1 - writeIdx;
+        }
     }
 }
 
 void RhiMixerWidget::updateFilterUniformBuffer(QRhiResourceUpdateBatch* batch, QRhiBuffer* ubuf,
                                                const pvj::core::CellFilterNode& node, const QSize& pixelSize,
-                                               int layerIndex)
+                                               int layerIndex, int internalPass)
 {
     if (!batch || !ubuf) {
         return;
     }
-    const auto schemaIt = pvj::core::filterParamSchemas().find(node.typeId);
-    float filterUbo[12] = { 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    filterUbo[2] = float(m_elapsed.isValid() ? m_elapsed.elapsed() * 1e-3 : 0.0);
-    filterUbo[3] = float(pixelSize.width()) / float(qMax(pixelSize.height(), 1));
-    if (schemaIt != pvj::core::filterParamSchemas().end()) {
-        for (int i = 0; i < schemaIt.value().params.size() && i < 4; ++i) {
-            const auto& spec = schemaIt.value().params[i];
-            double v = spec.defaultV;
-            for (const auto& p : node.params) {
-                if (p.name == spec.name) {
-                    v = p.value;
-                    break;
-                }
-            }
-            if (spec.kind == pvj::core::FilterParamKind::Angle) {
-                v = v * 3.14159265358979323846 / 180.0;
-            } else if (spec.kind == pvj::core::FilterParamKind::Bool) {
-                v = v >= 0.5 ? 1.0 : 0.0;
-            }
-            filterUbo[8 + i] = float(v);
-        }
+    EffectQuadUbo2 packed;
+    float keyRgb[3] = { 1.0f, 1.0f, 1.0f };
+    if (layerIndex >= 0 && layerIndex < LayerCount) {
+        const auto& w = m_layerKeyChannel[static_cast<size_t>(layerIndex)];
+        keyRgb[0] = w[0];
+        keyRgb[1] = w[1];
+        keyRgb[2] = w[2];
     }
-    const QString typeIdLower = node.typeId.toLower();
-    const bool isBlur = (typeIdLower == QStringLiteral("blur")
-                         || typeIdLower == QStringLiteral("fast_blur")
-                         || typeIdLower == QStringLiteral("gaussian_blur")
-                         || typeIdLower == QStringLiteral("box_blur")
-                         || typeIdLower == QStringLiteral("temporal_blur")
-                         || typeIdLower == QStringLiteral("radial_blur")
-                         || typeIdLower == QStringLiteral("directional_blur")
-                         || typeIdLower == QStringLiteral("motion_blur")
-                         || typeIdLower == QStringLiteral("zoom_blur"));
-    if (isBlur) {
-        // Blur shader expects UV-space radius in ubuf.params.x (small values).
-        // Node params are authored as "radius" in pixels and "amount" in 0..1.
-        double amount = 1.0;
-        double radiusPx = 0.0;
-        bool hasRadius = false;
-        for (const auto& p : node.params) {
-            if (p.name == QStringLiteral("amount")) {
-                amount = p.value;
-            } else if (p.name == QStringLiteral("radius")) {
-                radiusPx = p.value;
-                hasRadius = true;
-            }
-        }
-        const double minDim = double(qMax(1, qMin(pixelSize.width(), pixelSize.height())));
-        if (!hasRadius) {
-            // Legacy chains using only amount: map to practical UV blur range.
-            radiusPx = qBound(0.0, amount, 1.0) * 16.0;
-        }
-        const double uvRadius = qBound(0.0, (radiusPx / minDim) * qBound(0.0, amount, 1.0), 0.08);
-        filterUbo[8] = float(uvRadius);
-        filterUbo[9] = float(radiusPx);
-    }
-    const bool isChromaKey = (typeIdLower == QStringLiteral("chroma_key"));
-    const bool isLumaKey   = (typeIdLower == QStringLiteral("luma_key"));
-    if (isChromaKey || isLumaKey) {
-        float kr = 1.0f;
-        float kg = 1.0f;
-        float kb = 1.0f;
-        if (layerIndex >= 0 && layerIndex < LayerCount) {
-            const auto& w = m_layerKeyChannel[static_cast<size_t>(layerIndex)];
-            kr = w[0];
-            kg = w[1];
-            kb = w[2];
-        }
-        // Keep rotation.x at 0 for textured_quad.vert (it interprets it as angle in radians).
-        // Pack key weights away from rotation.x to avoid unintended quad rotation.
-        filterUbo[2] = kr;
-        filterUbo[5] = kg;
-        filterUbo[6] = kb;
-        filterUbo[7] = isLumaKey ? 1.0f : 0.0f;
-        if (isLumaKey) {
-            const float minSoft = 0.04f;
-            if (filterUbo[11] < minSoft) {
-                filterUbo[11] = minSoft;
-            }
-        } else if (isChromaKey) {
-            const float minSoft = 0.04f;
-            if (filterUbo[11] < minSoft) {
-                filterUbo[11] = minSoft;
-            }
-        }
-    }
-    batch->updateDynamicBuffer(ubuf, 0, sizeof(filterUbo), filterUbo);
+    const float elapsed = float(m_elapsed.isValid() ? m_elapsed.elapsed() * 1e-3 : 0.0);
+    packFilterUniformBuffer(packed, node, pixelSize, elapsed, internalPass, keyRgb);
+    batch->updateDynamicBuffer(ubuf, 0, sizeof(packed), &packed);
 }
 
 void RhiMixerWidget::initialize(QRhiCommandBuffer* cb)
@@ -1591,16 +1817,20 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     const QSize stagePx = hasStage ? m_stagePixelSize : vp;
     const bool hasFilterChains = std::any_of(m_layerFilterChain.cbegin(), m_layerFilterChain.cend(),
                                              [](const auto& c) { return !c.isEmpty(); });
+    const bool hasOutputFilters = !m_outputFilterChain.isEmpty();
     const int F = m_activeFeedbackLayer;
     const bool hasFeedback = hasActiveFeedbackLayer();
-    const bool useOffscreen = hasStage || hasFilterChains;
+    const bool useOffscreen = hasStage || hasFilterChains || hasOutputFilters;
     const bool useOffscreenScene = useOffscreen || hasFeedback;
     const int mainMinLayer = 0;
     const int mainMaxLayer = -1;
     QRhiResourceUpdateBatch* batch = r->nextResourceUpdateBatch();
     uploadFramesIfNeeded(batch);
-    if (hasFilterChains) {
+    if (hasFilterChains || hasOutputFilters) {
         ensureLayerFilterTargets(r, stagePx);
+        if (hasOutputFilters) {
+            ensureOutputFilterTargets(r, stagePx);
+        }
     }
 
     if (!useOffscreenScene) {
@@ -1671,6 +1901,9 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
             const auto inputMode = activeFeedbackInputMode();
             QRhiTexture* feedbackBelow = m_belowTex.get();
             QRhiTexture* historyRead = feedbackReadTexture();
+            QList<pvj::core::CellFilterNode> preChain;
+            QList<pvj::core::CellFilterNode> postChain;
+            pvj::core::splitFilterChainAtFeedbackMarker(m_layerFilterChain[F], &preChain, &postChain);
 
             if (inputMode == pvj::core::FeedbackInputMode::SceneLoopback) {
                 feedbackBelow = sceneHistReadTexture();
@@ -1691,15 +1924,26 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
                 runPartialMixerPass(r, cb, 0, F, m_belowRt.get(), stagePx, clear);
             }
 
-            if (feedbackBelow && historyRead) {
-                runFeedbackPass(r, cb, F, stagePx, clear, feedbackBelow, historyRead,
+            QRhiTexture* filteredBelow = feedbackBelow;
+            if (feedbackBelow && !preChain.isEmpty()) {
+                runPerLayerFilterChain(r, cb, F, feedbackBelow, stagePx, clear, &preChain);
+                if (QRhiTexture* preFiltered = filterOutputTextureForLayer(F)) {
+                    filteredBelow = preFiltered;
+                }
+                m_layerFilterLastOut[F] = -1;
+            }
+
+            if (filteredBelow && historyRead) {
+                runFeedbackPass(r, cb, F, stagePx, clear, filteredBelow, historyRead,
                                 feedbackWriteRenderTarget());
             }
 
-            if (!m_layerFilterChain[F].isEmpty()) {
+            if (!postChain.isEmpty()) {
                 if (QRhiTexture* fbOut = feedbackWriteTexture()) {
-                    runPerLayerFilterChain(r, cb, F, fbOut, stagePx, clear);
+                    runPerLayerFilterChain(r, cb, F, fbOut, stagePx, clear, &postChain);
                 }
+            } else {
+                m_layerFilterLastOut[F] = -1;
             }
         }
     }
@@ -1728,6 +1972,13 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
         copySceneToHistory(r, cb, stagePx);
         m_feedbackWriteIdx = quint8((m_feedbackWriteIdx + 1) % kFeedbackRingSize);
         m_sceneHistWriteIdx = quint8(1 - m_sceneHistWriteIdx);
+    }
+
+    QRhiTexture* presentTex = m_sceneTex.get();
+    if (hasOutputFilters) {
+        runOutputFilterChain(r, cb, stagePx, clear);
+        presentTex = outputFilterResultTexture();
+        rebuildPresentShaderResourceBindings(presentTex);
     }
 
     // Present pass: letterbox the scene onto the swapchain.

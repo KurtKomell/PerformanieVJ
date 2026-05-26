@@ -1,5 +1,7 @@
 #include "Project.h"
 
+#include "FilterEffectIds.h"
+
 #include <QtGlobal>
 
 namespace pvj::core {
@@ -119,6 +121,30 @@ MediaItem* Project::findMedia(const QUuid& id)
         }
     }
     return nullptr;
+}
+
+void Project::stripMaxineFiltersFromCells()
+{
+    for (BankSet& set : bankSets) {
+        for (Bank& bank : set.banks) {
+            for (Cell& cell : bank.cells) {
+                QList<CellFilterNode> kept;
+                kept.reserve(cell.filterChain.size());
+                for (const CellFilterNode& node : cell.filterChain) {
+                    if (filterUsesMaxineBackend(node.typeId)) {
+                        continue;
+                    }
+                    kept.append(node);
+                }
+                cell.filterChain = std::move(kept);
+            }
+        }
+    }
+}
+
+void Project::sanitizeOutputFilters()
+{
+    sanitizeOutputFilterChain(settings.output.filterChain);
 }
 
 int Project::bankSetIndex(BankSetType type) const

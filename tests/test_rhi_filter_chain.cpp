@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 
 #include "core/FilterCatalog.h"
+#include "core/FilterParamSchema.h"
 #include "core/Model.h"
 #include "render/RhiMixerWidget.h"
 #include "render/ShaderLibrary.h"
@@ -12,6 +13,7 @@ class TestRhiFilterChain : public QObject
 private slots:
     void shader_mapping_exists_for_common_types();
     void mixer_accepts_filter_chains();
+    void mixer_accepts_output_filter_chain();
     /// Every catalog typeId resolves to a loadable :/shaders/*.qsb (including identity pass-through).
     void every_catalog_type_has_resolvable_shader_bundle();
 };
@@ -39,6 +41,19 @@ void TestRhiFilterChain::mixer_accepts_filter_chains()
     mixer.setLayerActive(0, true);
     mixer.setLayerFilterChain(0, chain);
     QVERIFY(mixer.layerActive(0));
+}
+
+void TestRhiFilterChain::mixer_accepts_output_filter_chain()
+{
+    pvj::render::RhiMixerWidget mixer;
+    QList<pvj::core::CellFilterNode> chain;
+    pvj::core::CellFilterNode n;
+    n.typeId = QStringLiteral("nvidia_upscale");
+    n.params = pvj::core::defaultParamsFor(n.typeId);
+    chain.append(n);
+    mixer.setOutputFilterChain(chain);
+    QCOMPARE(mixer.outputFilterChain().size(), 1);
+    QCOMPARE(mixer.outputFilterChain()[0].typeId, QStringLiteral("nvidia_upscale"));
 }
 
 void TestRhiFilterChain::every_catalog_type_has_resolvable_shader_bundle()

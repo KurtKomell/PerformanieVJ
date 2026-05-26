@@ -4,30 +4,60 @@
     <Audio driver="auto" inputDevice="" outputDevice="" bufferSize="512" sampleRate="48000"/>
     <UI mediaLibraryVisible="true" bankPanelVisible="true" parameterTabsVisible="true" mediaLibraryWidth="320" bankPanelHeight="260"/>
     <Matrix width="1920" height="1080" gridRows="4" gridCols="12"/>
+    <Output>
+      <FilterChain>
+        <FilterNode id="f39911c7-5235-48b3-8f1c-a7452c7efd6d" type="noise_reduction">
+          <Param name="blend" value="1"/>
+          <Param name="strength" value="1"/>
+          <Param name="amount" value="0.957"/>
+        </FilterNode>
+      </FilterChain>
+    </Output>
   </Settings>
   <MediaLibrary>
     <Item id="65af6349-47db-47f5-9d72-ec8d4cc63341" path="D:/komell/vpool720/herbst/baum15.mp4" name="baum15.mp4"/>
     <Item id="16b585ef-a839-49ec-9856-4d1122d51ad1" path="D:/komell/vpool720/herbst/bauminpark.mp4" name="bauminpark.mp4"/>
     <Item id="4415a090-fdcb-46a4-8e2f-623ec66d1ff6" path="D:/komell/vpool720/vpool/momobeleuchtet.mp4" name="momobeleuchtet.mp4"/>
+    <Item id="64e18e4c-ab37-48d0-aa88-477e0c17ab39" path="D:/komell/vpool720/vpool/afganischekinder.mp4" name="afganischekinder.mp4"/>
+    <Item id="9a70df54-020a-490d-98fe-151557bb1791" path="D:/komell/vpool720/vpool/akw.mp4" name="akw.mp4"/>
+    <Item id="c6ec6b89-8e22-45aa-a3d0-701e035ced0e" path="D:/komell/vpool720/vpool/alexuhr2.mp4" name="alexuhr2.mp4"/>
+    <Item id="69f11d85-a572-4850-a10e-9b480c94a57b" path="D:/komell/vpool720/vpool/algen.mp4" name="algen.mp4"/>
+    <Item id="caa9467f-1f9a-4b90-95f4-4f32d95f6c8f" path="D:/komell/vpool720/vpool/alpakaska.mp4" name="alpakaska.mp4"/>
+    <Item id="9c0348a0-0eab-4736-b37b-22a216ce28af" path="D:/komell/vpool720/vpool/arbeiterchina.mp4" name="arbeiterchina.mp4"/>
+    <Item id="f8150a9e-8b36-4b31-8d07-b7c4a56e39b2" path="D:/komell/vpool720/vpool/arbeiterausfahrstuhl.mp4" name="arbeiterausfahrstuhl.mp4"/>
+    <Item id="27a80dff-5d3d-4bc7-931d-d0e1edf939f9" path="D:/komell/vpool720/vpool/arbeiterausfabrikschnell.mp4" name="arbeiterausfabrikschnell.mp4"/>
+    <Item id="5f83c2ab-ef58-4253-a67c-52525a5190ab" path="D:/komell/vpool720/vpool/arbeiterausfabrik.mp4" name="arbeiterausfabrik.mp4"/>
+    <Item id="418b4ba0-0550-4ded-9a11-bf9a53fb3781" path="D:/komell/vpool720/vpool/arbeitendeFrau.mp4" name="arbeitendeFrau.mp4"/>
+    <Item id="205c3526-6241-42da-bf19-5a787c76dfbe" path="D:/komell/vpool720/vpool/b7.mp4" name="b7.mp4"/>
   </MediaLibrary>
   <BankSet type="A">
     <Bank index="0" name="Bank 1">
       <Cell index="0">
-        <Visual type="media" mediaId="65af6349-47db-47f5-9d72-ec8d4cc63341"/>
+        <Visual type="media" mediaId="205c3526-6241-42da-bf19-5a787c76dfbe"/>
         <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="1" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
         </Props>
       </Cell>
       <Cell index="1">
         <Visual type="generator" generator="internalFeedback"/>
-        <Props priority="0" transparency="0.871" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="2" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Props priority="0" transparency="0.997" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="2" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.417194" keyLumaInvert="false" keyThreshold="0.417194" keySoftness="0.124" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
-          <Feedback loopRetention="1" liveInject="0.157" saturation="1.752" brightness="-0.008" contrast="1" hueShift="0" gamma="0.958" rotationDeg="6" zoom="0.052" inputMode="sceneLoopback"/>
+          <Feedback loopRetention="0.51" liveInject="0.599" saturation="2" brightness="-0.034" contrast="0.596" hueShift="0.914" gamma="0.5251" rotationDeg="8.28" zoom="-0.04" inputMode="sceneLoopback" wrapMode="mirrorOnce"/>
+        </Props>
+        <FilterChain>
+          <FilterNode id="a8a6910a-ace4-4dda-bcfe-f25b674aab5a" type="feedback_marker"/>
+        </FilterChain>
+      </Cell>
+      <Cell index="2">
+        <Visual type="generator" generator="internalFeedback"/>
+        <Props priority="0" transparency="0" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0" keySoftness="0" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+          <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
+          <Feedback loopRetention="0.854" liveInject="0.076" saturation="1.702" brightness="0" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0" inputMode="sceneLoopback" wrapMode="mirrorOnce"/>
         </Props>
       </Cell>
       <Cell index="12">
         <Visual type="media" mediaId="4415a090-fdcb-46a4-8e2f-623ec66d1ff6"/>
-        <Props priority="0" transparency="0.636" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="7" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.6165" keyLumaInvert="false" keyThreshold="0.3835" keySoftness="0" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Props priority="0" transparency="0.749" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="7" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.6165" keyLumaInvert="false" keyThreshold="0.3835" keySoftness="0" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
         </Props>
       </Cell>

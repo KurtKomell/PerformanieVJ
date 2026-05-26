@@ -160,10 +160,12 @@ private:
     void syncInspectorEditLayerForCell(int bankSetIndex, int bankIndex, int cellIndex);
     void syncInspectorLayerKeyingOverride();
     void scheduleMixerUpdateFromCells();
+    void syncFilterParamsToMixer(int bankSetIndex, int bankIndex, int cellIndex);
 
     void updateMixerFromPlayingCells();
     void updateDeckAPreviewRotation();
     void syncMixerToFullscreen();
+    void syncOutputFilterChainToMixers();
     void refreshPreviewForSelectedCell();
     void applyClipPreviewPane();
     void setClipPreviewPeekChrome(bool active);

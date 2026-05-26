@@ -80,10 +80,12 @@ private:
 
     void addFilter(const QString& typeId);
     void insertFilter(int index, const QString& typeId);
+    void insertFeedbackMarker(int index);
     void removeFilterAt(int filterIndex);
     void moveFilter(int fromIndex, int toIndex);
     void duplicateFilter(int filterIndex);
     void setFilterTypeId(int filterIndex, const QString& typeId);
+    bool isFeedbackCell() const;
     void rebuildParamEditors();
     void clearParamEditors();
     void ensureNodeParams(pvj::core::CellFilterNode& node) const;

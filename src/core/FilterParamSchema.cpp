@@ -1,6 +1,7 @@
 #include "FilterParamSchema.h"
 
 #include "FilterCatalog.h"
+#include "FilterEffectIds.h"
 
 #include <QtGlobal>
 #include <utility>
@@ -92,6 +93,8 @@ QHash<QString, FilterNodeSpec> buildSchemas()
     for (const FilterCatalogEntry& entry : catalog) {
         setParamsById(entry.typeId, { percentParam("amount", "Opacity", 1.0) });
     }
+
+    setParamsById(feedbackMarkerTypeId(), {});
 
     // Blur family
     for (const char* id : { "blur", "fast_blur", "gaussian_blur", "box_blur", "temporal_blur" }) {
@@ -271,6 +274,88 @@ QHash<QString, FilterNodeSpec> buildSchemas()
     setParams("transform_3d",
         { angleParam("rotate_x", "Rotate X", 0.0), angleParam("rotate_y", "Rotate Y", 0.0), angleParam("rotate_z", "Rotate Z", 0.0), floatParam("depth", "Depth", 0.0, 2.0, 0.5) });
 
+    // DaVinci Resolve — blend + 3 core params (V1 simplification)
+    setParams("mosaic_blur", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("lens_blur", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("sharpen_edges", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("soften_sharpen", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("aces_transform", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("chromatic_adaptation", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("color_compressor", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("color_space_transform", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("color_stabilizer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("contrast_pop", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("dehaze", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("false_color", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("flicker_addition", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("gamut_limiter", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("gamut_mapping", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("color_generator", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("color_palette", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("grid", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("key_3d", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("hsl_keyer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("alpha_matte_shrink_glow", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("aperture_diffraction", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("halation", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("lens_flare", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("lens_reflections", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("light_rays", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("beauty", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("automatic_dirt_removal", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("chromatic_aberration_removal", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("dead_pixel_fixer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("deband", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("deflicker", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("frame_replacer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("patch_replacer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("noise_reduction", { percentParam("blend", "Blend", 1.0), enumParam("strength", "Strength", { "Weak", "Strong" }, 1), percentParam("amount", "Amount", 1.0) });
+    setParams("abstraction", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("blanking_fill", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("pencil_sketch", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("prism_blur", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("stylize", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("motion_trails", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("smear", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("stop_motion", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("analog_damage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("film_damage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("jpeg_damage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("texture_pop", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("camera_shake", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("video_collage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("dent", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("lens_distortion", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("ripples", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("vortex", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("warper", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("waviness", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("binoculars", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("cctv", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("colored_border", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("digital_glitch", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("drone_overlay", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("dslr", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("dve", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("video_call", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("video_camera", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("background", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("fast_noise", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("plasma", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("mandelbrot", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("day_sky", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+    setParams("dctl", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
+
+    // NVIDIA Maxine Video Effects SDK
+    setParams("nvidia_artifact_reduction",
+        { enumParam("strength", "Strength", { "Weak", "Strong" }, 0),
+          percentParam("amount", "Opacity", 1.0) });
+    setParams("nvidia_super_resolution",
+        { enumParam("strength", "Mode", { "Lossy", "Lossless" }, 0),
+          floatParam("scale", "Scale", 1.0, 2.0, 1.5) });
+    setParams("nvidia_upscale",
+        { floatParam("scale", "Scale", 1.0, 4.0, 2.0),
+          percentParam("amount", "Strength", 0.5) });
     // Validate against catalog in debug builds.
 #ifndef NDEBUG
     for (const FilterCatalogEntry& entry : catalog) {

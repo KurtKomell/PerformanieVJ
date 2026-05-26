@@ -6,14 +6,13 @@ layout(location = 1) in vec2 a_uv;
 layout(location = 0) out vec2 v_uv;
 
 layout(std140, binding = 0) uniform Block {
-    // xy = post-projection scale (for aspect letterboxing), zw = unused in VS.
-    // CPU filter path stores time/ratio in .zw for *fragment* effects (e.g. distort) —
-    // do not add .zw in vertex position (would shove the quad out of the viewport).
+    // xy = post-projection scale (for aspect letterboxing), zw = time/aspect for fragment effects.
     vec4 scaleOffset;
-    // x = rotation angle (radians), yzw = unused.
+    // x = optional vertex rotation (radians); yzw used by fragment effects (e.g. key weights, effectId).
     vec4 rotation;
-    // Match effect_*.frag / ShaderLibrary::EffectQuadUbo (48 bytes total).
+  // Fragment effect parameters; VS does not read these.
     vec4 params;
+    vec4 params2;
 } ubuf;
 
 void main()

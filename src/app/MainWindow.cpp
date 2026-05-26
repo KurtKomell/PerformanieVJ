@@ -390,12 +390,21 @@ QList<pvj::core::CellFilterNode> effectiveFilterChainForMixer(const Cell* c,
         }
     }
     if (hasExplicitKeyNode) {
+        QList<pvj::core::CellFilterNode> keyNodes;
+        QList<pvj::core::CellFilterNode> nonKeyNodes;
+        keyNodes.reserve(chain.size());
+        nonKeyNodes.reserve(chain.size());
         for (auto& n : chain) {
             const QString t = n.typeId.toLower();
             if (t == QLatin1String("chroma_key") || t == QLatin1String("luma_key")) {
                 syncKeyNodeFromView(n, kv);
+                keyNodes.append(n);
+            } else {
+                nonKeyNodes.append(n);
             }
         }
+        nonKeyNodes.append(keyNodes);
+        chain = std::move(nonKeyNodes);
         return chain;
     }
     if (!kv.keyingEnabled) {
@@ -466,6 +475,10 @@ MainWindow::MainWindow(QWidget* parent)
                     m_inspector->refreshFromModel();
                 }
                 updateMixerFromPlayingCells();
+            });
+    connect(m_filterEditor.get(), &FilterNodeEditorWindow::filterParamsEdited, this,
+            [this](int bankSetIndex, int bankIndex, int cellIndex) {
+                syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
             });
     connect(m_filterEditor.get(), &FilterNodeEditorWindow::midiLearnCcRequested, this,
             [this](int bankSetIndex, int bankIndex, int cellIndex, const QString& propertyId) {
@@ -553,6 +566,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_inspector, &ParameterInspector::fullscreenOutputToggled,
             this, &MainWindow::onFullscreenOutputToggled);
+    connect(m_inspector, &ParameterInspector::outputFilterChainChanged,
+            this, &MainWindow::syncOutputFilterChainToMixers);
     connect(m_inspector, &ParameterInspector::visualSeekStepRequested,
             this, &MainWindow::onInspectorVisualSeekStep);
     connect(m_inspector, &ParameterInspector::scratchApplyRequested,
@@ -789,6 +804,7 @@ void MainWindow::rebindUiToProject()
                               -1);
     refreshPreviewForSelectedCell();
     syncMixSlotHighlightsToBankGrid();
+    syncOutputFilterChainToMixers();
 }
 
 void MainWindow::applyBankGridDimensions(int rows, int cols)
@@ -1478,6 +1494,28 @@ void MainWindow::scheduleMixerUpdateFromCells()
     m_mixerUpdateDebounceTimer->start();
 }
 
+void MainWindow::syncFilterParamsToMixer(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    if (layer < kUserLayerMin || layer >= kMixLayers || !m_previewB) {
+        return;
+    }
+    const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]);
+    if (!c) {
+        return;
+    }
+    const LayerKeyingState& layerKeying = m_layerKeying[static_cast<size_t>(layer)];
+    const LayerKeyingState* keyingPtr = layerKeying.valid ? &layerKeying : nullptr;
+    const QList<pvj::core::CellFilterNode> chain = effectiveFilterChainForMixer(c, keyingPtr);
+    m_previewB->setLayerFilterChain(layer, chain);
+
+    if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
+        if (pvj::render::RhiMixerWidget* dst = m_fullscreenOut->mixerWidget()) {
+            dst->setLayerFilterChain(layer, chain);
+        }
+    }
+}
+
 void MainWindow::syncInspectorEditLayerForCell(int bankSetIndex, int bankIndex, int cellIndex)
 {
     if (m_inspectorEditLayer >= kUserLayerMin && m_inspectorEditLayer < kMixLayers) {
@@ -1719,6 +1757,18 @@ void MainWindow::updateDeckAPreviewRotation()
     }
 }
 
+void MainWindow::syncOutputFilterChainToMixers()
+{
+    if (!m_project || !m_previewB) {
+        return;
+    }
+    const auto& chain = m_project->settings.output.filterChain;
+    m_previewB->setOutputFilterChain(chain);
+    if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
+        m_fullscreenOut->mixerWidget()->setOutputFilterChain(chain);
+    }
+}
+
 void MainWindow::syncMixerToFullscreen()
 {
     if (!m_fullscreenOut || !m_fullscreenOut->isVisible()) return;
@@ -1750,6 +1800,7 @@ void MainWindow::syncMixerToFullscreen()
             dst->setLayerKeyChannels(i, 1.f, 1.f, 1.f);
         }
     }
+    syncOutputFilterChainToMixers();
 }
 
 bool MainWindow::selectionMatchesSlot(const DeckSlot& s) const

@@ -27,6 +27,8 @@ QT_END_NAMESPACE
 
 namespace pvj::render {
 
+class MaxineFilterBackend;
+
 // Stacks up to 13 mix layers: layer 0 = fixed black background, layers 1–12 = user clips.
 class RhiMixerWidget : public QRhiWidget
 {
@@ -60,6 +62,9 @@ public:
     pvj::core::LayerMatteRole layerMatteRole(int layer) const;
 
     void setLayerFilterChain(int layer, const QList<pvj::core::CellFilterNode>& chain);
+    /// Post-mixer NVIDIA output chain (Output tab); applied after layer composite, before present.
+    void setOutputFilterChain(const QList<pvj::core::CellFilterNode>& chain);
+    const QList<pvj::core::CellFilterNode>& outputFilterChain() const { return m_outputFilterChain; }
     /// Weights for chroma/luma key filters (cell inspector key R / G / B), 0–1 each.
     void setLayerKeyChannels(int layer, float r, float g, float b);
 
@@ -112,16 +117,22 @@ private:
     void updatePresentUniformBuffer(QRhiResourceUpdateBatch* batch, const QSize& widgetPx);
     void updateFilterUniformBuffer(QRhiResourceUpdateBatch* batch, QRhiBuffer* ubuf,
                                    const pvj::core::CellFilterNode& node, const QSize& pixelSize,
-                                   int layerIndex);
+                                   int layerIndex, int internalPass = 0);
     bool ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize);
     bool ensureLayerFilterPassResources(QRhi* r, int layer);
-    void rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex);
+    void rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex,
+                                                  const QString& typeId);
     QRhiGraphicsPipeline* ensureFilterPipeline(QRhi* r, const QString& typeId, int layerIndex,
                                                QRhiShaderResourceBindings* srb,
                                                QRhiRenderPassDescriptor* rp);
     void runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int layer, QRhiTexture* firstSource,
                                 const QSize& stagePx, const QColor& clear,
                                 const QList<pvj::core::CellFilterNode>* chainOverride = nullptr);
+    bool ensureOutputFilterTargets(QRhi* r, const QSize& pixelSize);
+    bool ensureOutputFilterPassResources(QRhi* r);
+    void rebuildOutputFilterShaderResourceBindings(QRhiTexture* sourceTex, const QString& typeId);
+    void runOutputFilterChain(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
+    QRhiTexture* outputFilterResultTexture() const;
 
     bool ensureFeedbackTargets(QRhi* r, const QSize& pixelSize);
     void runPartialMixerPass(QRhi* r, QRhiCommandBuffer* cb,
@@ -132,6 +143,7 @@ private:
                          QRhiTexture* belowTex, QRhiTexture* historyRead,
                          QRhiTextureRenderTarget* writeRt);
     void runStackCombinePass(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
+    bool ensureTextureCopyPipeline(QRhi* r, QRhiRenderPassDescriptor* rp);
     void runTextureCopyPass(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx);
     void copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
@@ -165,6 +177,7 @@ private:
     std::array<pvj::core::PictureParams, LayerCount>  m_layerPicture{};
     std::array<pvj::core::LayerMatteRole, LayerCount> m_layerMatteRole{};
     std::array<QList<pvj::core::CellFilterNode>, LayerCount> m_layerFilterChain{};
+    QList<pvj::core::CellFilterNode> m_outputFilterChain;
     /// Per-layer RGB key weights for GPU key filters (defaults 1,1,1).
     std::array<std::array<float, 3>, LayerCount> m_layerKeyChannel{};
 
@@ -203,7 +216,7 @@ private:
 
     std::unique_ptr<QRhiShaderResourceBindings> m_textureCopySrb;
     std::unique_ptr<QRhiGraphicsPipeline> m_textureCopyPipeline;
-    std::unique_ptr<QRhiRenderPassDescriptor> m_textureCopyRp;
+    QRhiRenderPassDescriptor* m_textureCopyPipelineRp = nullptr;
 
     int m_mixerMinLayerInclusive = 0;
     int m_mixerMaxLayerExclusive = -1;
@@ -239,6 +252,21 @@ private:
     std::array<int, LayerCount> m_layerFilterLastOut{};
     std::array<std::unique_ptr<QRhiBuffer>, LayerCount> m_layerFilterUbuf{};
     std::array<std::unique_ptr<QRhiShaderResourceBindings>, LayerCount> m_layerFilterSrb{};
+    std::array<quint64, LayerCount> m_layerFilterSrbKey{};
+    std::array<bool, LayerCount> m_layerFilterSrbReady{};
+
+    std::array<std::unique_ptr<QRhiTexture>, 2> m_outputFilterPingTex{};
+    std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2> m_outputFilterPingRt{};
+    int m_outputFilterLastOut = -1;
+    std::unique_ptr<QRhiBuffer> m_outputFilterUbuf;
+    std::unique_ptr<QRhiShaderResourceBindings> m_outputFilterSrb;
+    quint64 m_outputFilterSrbKey = 0;
+    bool m_outputFilterSrbReady = false;
+
+    std::unique_ptr<QRhiTexture> m_blendBlackTex;
+
+    MaxineFilterBackend* m_maxineBackend = nullptr;
+    QSize m_maxinePixelSize;
 
     QSize m_filterPixelSize;
     QHash<QString, QRhiGraphicsPipeline*> m_filterPipelineByTypeId;

@@ -3,6 +3,7 @@
 #include "NodeGraphWidget.h"
 
 #include "core/FilterCatalog.h"
+#include "core/FilterEffectIds.h"
 #include "core/FilterParamSchema.h"
 #include "core/Project.h"
 
@@ -26,11 +27,28 @@ using pvj::core::VisualType;
 namespace {
 
 // UserRole for source combo (must match graph context menu).
-constexpr int kSourceMedia       = 0;
-constexpr int kSourceTestPattern = 2;
-constexpr int kSourceSolid       = 3;
-constexpr int kSourceSpout       = 4;
-constexpr int kSourceNdi         = 5;
+constexpr int kSourceMedia           = 0;
+constexpr int kSourceTestPattern     = 2;
+constexpr int kSourceSolid           = 3;
+constexpr int kSourceSpout           = 4;
+constexpr int kSourceNdi             = 5;
+constexpr int kSourceInternalFeedback = 6;
+
+void ensureFeedbackMarker(Cell* cell)
+{
+    if (!cell || cell->visual.type != VisualType::Generator
+        || cell->visual.generator != GeneratorKind::InternalFeedback) {
+        return;
+    }
+    for (const auto& node : cell->filterChain) {
+        if (pvj::core::isFeedbackMarkerNode(node.typeId)) {
+            return;
+        }
+    }
+    pvj::core::CellFilterNode marker;
+    marker.typeId = pvj::core::feedbackMarkerTypeId();
+    cell->filterChain.prepend(marker);
+}
 
 } // namespace
 
@@ -54,6 +72,7 @@ FilterNodeEditorWindow::FilterNodeEditorWindow(QWidget* parent)
     m_sourceCombo->addItem(tr("Solid color"), kSourceSolid);
     m_sourceCombo->addItem(tr("Spout (Windows)"), kSourceSpout);
     m_sourceCombo->addItem(tr("NDI"), kSourceNdi);
+    m_sourceCombo->addItem(tr("Feedback loop (internal)"), kSourceInternalFeedback);
     srcLay->addWidget(m_sourceHint);
     srcLay->addWidget(m_sourceCombo);
     root->addWidget(srcBox);
@@ -95,7 +114,9 @@ FilterNodeEditorWindow::FilterNodeEditorWindow(QWidget* parent)
         emitChainEdited();
     });
     connect(m_graph, &NodeGraphWidget::filterParamsChanged, this, [this]() {
-        emitChainEdited();
+        if (m_bankSetIndex >= 0 && m_bankIndex >= 0 && m_cellIndex >= 0) {
+            emit filterParamsEdited(m_bankSetIndex, m_bankIndex, m_cellIndex);
+        }
     });
     connect(m_graph, &NodeGraphWidget::midiLearnCcRequested, this, [this](const QString& propertyId) {
         emit midiLearnCcRequested(m_bankSetIndex, m_bankIndex, m_cellIndex, propertyId);
@@ -150,6 +171,7 @@ void FilterNodeEditorWindow::openForCell(int bankSetIndex, int bankIndex, int ce
             node.params = pvj::core::defaultParamsFor(node.typeId);
         }
     }
+    ensureFeedbackMarker(m_cell);
 
     setWindowTitle(tr("Filters & nodes — bank %1, cell %2")
                        .arg(m_bankIndex + 1)
@@ -176,6 +198,12 @@ void FilterNodeEditorWindow::refreshSourceHint()
         } else {
             m_sourceHint->setText(tr("Media clip: (reference missing)"));
         }
+    } else if (m_cell->visual.type == VisualType::Generator
+               && m_cell->visual.generator == GeneratorKind::InternalFeedback) {
+        m_sourceHint->setText(
+            tr("Feedback layer — insert filters before or after the "
+               "\"Feedback / Render Target\" marker to split pre-feedback and output-only processing. "
+               "Keying is configured in the cell inspector and stays after the marker."));
     } else if (m_cell->visual.type == VisualType::Generator) {
         m_sourceHint->setText(tr("Generator source (no file clip)."));
     } else {
@@ -198,9 +226,18 @@ void FilterNodeEditorWindow::syncSourceComboFromCell()
         case GeneratorKind::SolidColor:   role = kSourceSolid;       break;
         case GeneratorKind::InputSpout:   role = kSourceSpout;       break;
         case GeneratorKind::InputNdi:     role = kSourceNdi;         break;
-        default:                          role = kSourceTestPattern; break;
+        case GeneratorKind::InternalFeedback:
+            role = kSourceInternalFeedback;
+            break;
+        default:
+            role = kSourceTestPattern;
+            break;
         }
     }
+
+    const bool feedbackCell = m_cell->visual.type == VisualType::Generator
+        && m_cell->visual.generator == GeneratorKind::InternalFeedback;
+    m_sourceCombo->setEnabled(!feedbackCell);
 
     const int idx = m_sourceCombo->findData(role);
     if (idx >= 0) {
@@ -242,6 +279,12 @@ void FilterNodeEditorWindow::applySourceToCell()
         m_cell->visual.type = VisualType::Generator;
         m_cell->visual.generator = GeneratorKind::InputNdi;
         m_cell->visual.mediaId = {};
+        break;
+    case kSourceInternalFeedback:
+        m_cell->visual.type = VisualType::Generator;
+        m_cell->visual.generator = GeneratorKind::InternalFeedback;
+        m_cell->visual.mediaId = {};
+        ensureFeedbackMarker(m_cell);
         break;
     default:
         break;

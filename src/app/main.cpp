@@ -5,6 +5,8 @@
 
 #include "MainWindow.h"
 
+#include "render/maxine/MaxineFilterBackend.h"
+
 namespace {
 
 /// Cohesive dark “studio” skin: Fusion palette + light QSS polish (tabs, docks, inputs).
@@ -160,6 +162,8 @@ int main(int argc, char* argv[])
 
     QApplication app(argc, argv);
     applyPerformanieVjTheme(app);
+
+    pvj::render::initializeMaxineRuntime();
 
     pvj::app::MainWindow window;
     window.show();

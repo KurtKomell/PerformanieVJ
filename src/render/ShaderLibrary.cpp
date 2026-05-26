@@ -1,106 +1,60 @@
 #include "ShaderLibrary.h"
 
+#include "FilterEffectShaderMap.h"
+
+#include "core/FilterCatalog.h"
+#include "core/FilterEffectIds.h"
+
 #include <QFile>
-#include <QHash>
-#include <QtGlobal>
+#include <QSet>
 
 namespace pvj::render {
+namespace {
+
+bool isKnownTypeId(const QString& lower)
+{
+    static const QSet<QString> kKnown = [] {
+        QSet<QString> s;
+        s.reserve(pvj::core::filterEffectCatalogCount() + 8);
+        for (const auto& e : pvj::core::filterCatalogEntries()) {
+            s.insert(e.typeId.toLower());
+        }
+        return s;
+    }();
+    return kKnown.contains(lower);
+}
+
+} // namespace
 
 QString effectFragmentShaderResource(EffectShaderId id)
 {
     switch (id) {
     case EffectShaderId::Blur:
-        return QStringLiteral(":/shaders/effect_blur.frag.qsb");
+        return filterFamilyShaderResource(pvj::core::FilterEffectFamily::Blur);
     case EffectShaderId::ColorCorrection:
-        return QStringLiteral(":/shaders/effect_color.frag.qsb");
+        return filterFamilyShaderResource(pvj::core::FilterEffectFamily::Color);
     case EffectShaderId::Kaleido:
-        return QStringLiteral(":/shaders/effect_kaleido.frag.qsb");
+        return filterFamilyShaderResource(pvj::core::FilterEffectFamily::Kaleido);
     case EffectShaderId::Mask:
-        return QStringLiteral(":/shaders/effect_mask.frag.qsb");
+        return filterFamilyShaderResource(pvj::core::FilterEffectFamily::Mask);
     }
     return {};
 }
 
 QString effectFragmentShaderForType(const QString& typeId)
 {
-    static const QHash<QString, QString> kByType = [] {
-        QHash<QString, QString> m;
-        const auto add = [&m](const QStringList& ids, const QString& path) {
-            for (const auto& id : ids) {
-                m.insert(id, path);
-            }
-        };
-        add({ QStringLiteral("blur"), QStringLiteral("fast_blur"), QStringLiteral("gaussian_blur"),
-              QStringLiteral("box_blur") }, QStringLiteral(":/shaders/effect_blur.frag.qsb"));
-        add({ QStringLiteral("color"), QStringLiteral("color_correction"), QStringLiteral("brightness"),
-              QStringLiteral("contrast"), QStringLiteral("gamma"), QStringLiteral("saturation"),
-              QStringLiteral("hue"), QStringLiteral("hue_rotate"), QStringLiteral("invert"),
-              QStringLiteral("black_white"), QStringLiteral("exposure"), QStringLiteral("threshold"),
-              QStringLiteral("posterize"), QStringLiteral("solarize"), QStringLiteral("tint"),
-              QStringLiteral("colorize"), QStringLiteral("duotone"), QStringLiteral("tritone"),
-              QStringLiteral("gradient_map"), QStringLiteral("night_vision"), QStringLiteral("thermal"),
-              QStringLiteral("x_ray"), QStringLiteral("hsl"), QStringLiteral("curves"), QStringLiteral("levels"),
-              QStringLiteral("color_intensity"), QStringLiteral("color_balance") },
-            QStringLiteral(":/shaders/effect_color.frag.qsb"));
-        add({ QStringLiteral("kaleido"), QStringLiteral("kaleidoscope"), QStringLiteral("mirror"),
-              QStringLiteral("mirror_quad"), QStringLiteral("mirror_stripes"), QStringLiteral("multi_mirror") },
-            QStringLiteral(":/shaders/effect_kaleido.frag.qsb"));
-        add({ QStringLiteral("mask"), QStringLiteral("linear_mask") },
-            QStringLiteral(":/shaders/effect_mask.frag.qsb"));
-        add({ QStringLiteral("pixelate"), QStringLiteral("rgb_shift"), QStringLiteral("vignette"),
-              QStringLiteral("scanlines"), QStringLiteral("film_grain"), QStringLiteral("glow"),
-              QStringLiteral("bloom"), QStringLiteral("edges"), QStringLiteral("emboss"),
-              QStringLiteral("ripple"), QStringLiteral("wave"), QStringLiteral("twirl"),
-              QStringLiteral("bulge"), QStringLiteral("fisheye"), QStringLiteral("zoom"),
-              QStringLiteral("halftone"), QStringLiteral("crop_rectangle"), QStringLiteral("tile"), QStringLiteral("strobe"),
-              QStringLiteral("cartoon"), QStringLiteral("watercolor"), QStringLiteral("oil_paint"),
-              QStringLiteral("god_rays"), QStringLiteral("mesh_warp"), QStringLiteral("liquify"),
-              QStringLiteral("slit_scanner"), QStringLiteral("space_warper"), QStringLiteral("shifty"),
-              QStringLiteral("light_leak"), QStringLiteral("total_visual_annihilation"),
-              QStringLiteral("radial_blur"), QStringLiteral("directional_blur"), QStringLiteral("motion_blur"),
-              QStringLiteral("zoom_blur"), QStringLiteral("temporal_blur"), QStringLiteral("sharpen"),
-              QStringLiteral("denoise"), QStringLiteral("transform"), QStringLiteral("scale"),
-              QStringLiteral("rotate"), QStringLiteral("flip"), QStringLiteral("flip_horizontal"),
-              QStringLiteral("flip_vertical"), QStringLiteral("distortion"), QStringLiteral("bend"),
-              QStringLiteral("warp"), QStringLiteral("polar"), QStringLiteral("polarizer"),
-              QStringLiteral("displacement"), QStringLiteral("smooth_transform"), QStringLiteral("screen_shake"),
-              QStringLiteral("trails"), QStringLiteral("noise"), QStringLiteral("rgb_noise"),
-              QStringLiteral("video_noise"), QStringLiteral("spotlight"), QStringLiteral("drop_shadow"),
-              QStringLiteral("rainbow"), QStringLiteral("prismatic"), QStringLiteral("replicate"),
-              QStringLiteral("echo"), QStringLiteral("find_edges"), QStringLiteral("glow_edges"),
-              QStringLiteral("crt"), QStringLiteral("vhs"), QStringLiteral("vhsifyer"),
-              QStringLiteral("broadcast"), QStringLiteral("reducto"),
-              QStringLiteral("crop"), QStringLiteral("add_subtract"),
-              QStringLiteral("mix"), QStringLiteral("fade"), QStringLiteral("shift"),
-              QStringLiteral("tilt_shift"), QStringLiteral("radar"), QStringLiteral("polka_dot"),
-              QStringLiteral("stripes"), QStringLiteral("checkerboard"), QStringLiteral("dots"),
-              QStringLiteral("selective_color"), QStringLiteral("channel_mixer"), QStringLiteral("color_lookup"),
-              QStringLiteral("motion_tile"), QStringLiteral("spherize"), QStringLiteral("cylinder"),
-              QStringLiteral("cube"), QStringLiteral("opacity"), QStringLiteral("transform_3d"),
-              QStringLiteral("chromatic_aberration"), QStringLiteral("stroke"), QStringLiteral("erode"),
-              QStringLiteral("dilate") },
-            QStringLiteral(":/shaders/effect_distort.frag.qsb"));
-        add({ QStringLiteral("chroma_key"), QStringLiteral("luma_key") },
-            QStringLiteral(":/shaders/effect_key.frag.qsb"));
-        add({ QStringLiteral("blend_normal"), QStringLiteral("blend_add"), QStringLiteral("blend_subtract"),
-              QStringLiteral("blend_multiply"), QStringLiteral("blend_screen"), QStringLiteral("blend_overlay"),
-              QStringLiteral("blend_soft_light"), QStringLiteral("blend_hard_light"),
-              QStringLiteral("blend_color_dodge"), QStringLiteral("blend_color_burn"),
-              QStringLiteral("blend_darken"), QStringLiteral("blend_lighten"),
-              QStringLiteral("blend_difference"), QStringLiteral("blend_exclusion"),
-              QStringLiteral("blend_mode") }, QStringLiteral(":/shaders/effect_blend.frag.qsb"));
-        return m;
-    }();
-    return kByType.value(typeId.toLower(), QStringLiteral(":/shaders/effect_identity.frag.qsb"));
+    const QString lower = typeId.toLower();
+    if (!isKnownTypeId(lower)) {
+        return QStringLiteral(":/shaders/effect_identity.frag.qsb");
+    }
+    const pvj::core::FilterEffectMeta meta = pvj::core::filterEffectMeta(lower);
+    return filterFamilyShaderResource(meta.family);
 }
 
 bool effectUsesTwoTextures(const QString& typeId)
 {
-    const QString id = typeId.toLower();
-    return id.contains(QStringLiteral("displacement"))
-        || id.contains(QStringLiteral("mask"))
-        || id.startsWith(QStringLiteral("blend_"))
-        || id == QStringLiteral("blend_mode");
+    const pvj::core::FilterEffectMeta meta = pvj::core::filterEffectMeta(typeId);
+    return meta.family == pvj::core::FilterEffectFamily::Blend;
 }
 
 QString transitionVertexShaderResource()

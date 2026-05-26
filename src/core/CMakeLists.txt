@@ -8,6 +8,8 @@ add_library(pvj_core STATIC
     PropertyRegistry.cpp
     FilterCatalog.h
     FilterCatalog.cpp
+    FilterEffectIds.h
+    FilterEffectIds.cpp
     Project.h
     Project.cpp
     PvjSerializer.h

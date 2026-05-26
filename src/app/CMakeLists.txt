@@ -83,3 +83,11 @@ endif()
 if(VJ_FEATURE_ASIO)
     target_compile_definitions(performanievj PRIVATE VJ_FEATURE_ASIO=1)
 endif()
+if(VJ_FEATURE_MAXINE AND DEFINED PVJ_MAXINE_BIN_DIR AND PVJ_MAXINE_BIN_DIR)
+    add_custom_command(TARGET performanievj POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${PVJ_MAXINE_BIN_DIR}"
+            "$<TARGET_FILE_DIR:performanievj>"
+        COMMENT "Copy Maxine VFX runtime DLLs next to performanievj"
+    )
+endif()
