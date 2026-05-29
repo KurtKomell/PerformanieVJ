@@ -1,9 +1,12 @@
 #include "BankGridWidget.h"
 
+#include "core/FilterCatalog.h"
+#include "core/FilterEffectIds.h"
 #include "core/Project.h"
 #include "video/ThumbnailExtractor.h"
 
 #include <QApplication>
+#include <QKeySequence>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -23,6 +26,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTabBar>
+#include <QThread>
 #include <QTimer>
 #include <QtConcurrent>
 #include <QVBoxLayout>
@@ -119,11 +123,12 @@ public:
         setCheckable(true);
         setAutoExclusive(false);
         setFocusPolicy(Qt::NoFocus);
+        setContextMenuPolicy(Qt::CustomContextMenu);
         setToolTip(tr("Left click: trigger clip on a mix layer (blue outline when playing)\n"
-                      "Right click: show that layer in the large clip preview (orange outline)\n"
+                      "Right click: menu (peek preview, copy, paste)\n"
                       "Hover: short filmstrip preview\n"
                       "Double-click: filters / nodes\n"
-                      "MIDI map mode (Ctrl+M): assign trigger"));
+                      "Mapping mode (Ctrl+M): click cell, then key or MIDI note"));
 
         m_triggerTimer.setSingleShot(true);
         connect(&m_triggerTimer, &QTimer::timeout, this, [this] {
@@ -150,7 +155,15 @@ public:
         }
     }
 
-    /// Mix slot index 1..12 (GPU layer) when this cell is routed to that mixer slot; -1 = none.
+    void setBigLabel(const QString& text)
+    {
+        if (m_bigLabel != text) {
+            m_bigLabel = text;
+            update();
+        }
+    }
+
+    /// Mix slot index 1..13 (GPU layer) when this cell is routed to that mixer slot; -1 = none.
     void setMixSlot(int slotIndex)
     {
         if (m_mixSlot != slotIndex) {
@@ -163,6 +176,14 @@ public:
     {
         if (m_peekHighlight != on) {
             m_peekHighlight = on;
+            update();
+        }
+    }
+
+    void setMixerFilterActive(bool on)
+    {
+        if (m_mixerFilterActive != on) {
+            m_mixerFilterActive = on;
             update();
         }
     }
@@ -204,11 +225,28 @@ public:
         update();
     }
 
+    void setKeyboardShortcutLabel(const QString& label)
+    {
+        if (m_keyboardShortcutLabel == label) {
+            return;
+        }
+        m_keyboardShortcutLabel = label;
+        update();
+    }
+
+    void setMidiTriggerLabel(const QString& label)
+    {
+        if (m_midiTriggerLabel == label) {
+            return;
+        }
+        m_midiTriggerLabel = label;
+        update();
+    }
+
 signals:
     void cellPressedForSelection(int index);
     void cellTriggeredDelayed(int index);
     void cellEditRequested(int index);
-    void cellRightClicked();
     /// MIDI mapping edit mode: left-click should learn trigger for this cell index.
     void midiLearnCellRequested(int index);
 
@@ -234,11 +272,6 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override
     {
-        if (e->button() == Qt::RightButton) {
-            emit cellRightClicked();
-            e->accept();
-            return;
-        }
         if (e->button() == Qt::LeftButton) {
             QPushButton::mousePressEvent(e);
             emit cellPressedForSelection(m_index);
@@ -326,8 +359,9 @@ protected:
         const bool peek   = m_peekHighlight;
         const bool sel    = isChecked();
         const bool highlightOrange = sel || peek;
+        const QColor kPurpleMixerFx(190, 110, 255);
 
-        const bool showShadow = onMix || highlightOrange;
+        const bool showShadow = onMix || highlightOrange || m_mixerFilterActive;
         if (showShadow) {
             drawCellDropShadow(p, r, kCellRadius);
         }
@@ -336,24 +370,29 @@ protected:
         if (onMix) {
             drawGlowFrame(p, r, kCellRadius, kBlueMix, 3);
         }
+        if (m_mixerFilterActive) {
+            const QRectF purpleRect = onMix ? r.adjusted(5, 5, -5, -5) : r;
+            const qreal purpleRadius = onMix ? 4.0 : kCellRadius;
+            drawGlowFrame(p, purpleRect, purpleRadius, kPurpleMixerFx, onMix ? 2 : 3);
+        }
         if (highlightOrange) {
-            const QRectF orangeRect = onMix ? r.adjusted(5, 5, -5, -5) : r;
-            const qreal orangeRadius = onMix ? 4.0 : kCellRadius;
-            const int orangePasses = onMix ? 2 : 3;
+            const QRectF orangeRect = (onMix || m_mixerFilterActive) ? r.adjusted(5, 5, -5, -5) : r;
+            const qreal orangeRadius = (onMix || m_mixerFilterActive) ? 4.0 : kCellRadius;
+            const int orangePasses = (onMix || m_mixerFilterActive) ? 2 : 3;
             drawGlowFrame(p, orangeRect, orangeRadius, kOrangePeek, orangePasses);
-        } else if (!onMix) {
+        } else if (!onMix && !m_mixerFilterActive) {
             p.setPen(QPen(kBorderIdle, 1));
             p.drawRoundedRect(r, kCellRadius, kCellRadius);
         }
 
-        if (onMix) {
-            p.setPen(QColor(220, 236, 255));
-            QFont tag = p.font();
-            tag.setPointSizeF(std::max(6.0, tag.pointSizeF() * 0.65));
-            tag.setBold(true);
-            p.setFont(tag);
-            p.drawText(r.adjusted(3, 2, -3, -3), Qt::AlignTop | Qt::AlignRight,
-                       QStringLiteral("M%1").arg(m_mixSlot));
+        if (!m_keyboardShortcutLabel.isEmpty()) {
+            p.setPen(QColor(200, 220, 255));
+            QFont keyFont = p.font();
+            keyFont.setPointSizeF(std::max(6.0, keyFont.pointSizeF() * 0.62));
+            keyFont.setBold(true);
+            p.setFont(keyFont);
+            const QRectF keyRect = r.adjusted(3, 2, -3, -3);
+            p.drawText(keyRect, Qt::AlignTop | Qt::AlignRight, m_keyboardShortcutLabel);
         }
 
         p.setPen(QColor(255, 255, 255));
@@ -364,7 +403,14 @@ protected:
         p.drawText(r.adjusted(5, 3, -5, -5), Qt::AlignTop | Qt::AlignLeft,
                    QString::number(m_index + 1));
 
-        if (!m_label.isEmpty() && m_filmFrames.isEmpty()) {
+        if (!m_bigLabel.isEmpty() && m_filmFrames.isEmpty()) {
+            QFont big = p.font();
+            big.setBold(true);
+            big.setPointSizeF(big.pointSizeF() * 1.6);
+            p.setFont(big);
+            p.setPen(QColor(235, 240, 255));
+            p.drawText(r, Qt::AlignCenter, m_bigLabel);
+        } else if (!m_label.isEmpty() && m_filmFrames.isEmpty()) {
             QFont f = p.font();
             f.setBold(false);
             p.setFont(f);
@@ -376,6 +422,27 @@ protected:
             p.setPen(QPen(QColor(120, 255, 160), 2));
             p.setBrush(QColor(80, 220, 120, 85));
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), kCellRadius, kCellRadius);
+
+            if (!m_midiTriggerLabel.isEmpty()) {
+                QFont midiFont = p.font();
+                midiFont.setBold(true);
+                midiFont.setPointSizeF(std::max(6.0, midiFont.pointSizeF() * 0.62));
+                p.setFont(midiFont);
+                const QFontMetrics fm(midiFont);
+                const int padH = 3;
+                const int padV = 1;
+                const int tw = fm.horizontalAdvance(m_midiTriggerLabel);
+                const int th = fm.height();
+                QRect badgeRect(width() - tw - padH * 2 - 4,
+                                height() - th - padV * 2 - 4,
+                                tw + padH * 2,
+                                th + padV * 2);
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(20, 32, 24, 210));
+                p.drawRoundedRect(badgeRect, 3, 3);
+                p.setPen(QColor(180, 255, 200));
+                p.drawText(badgeRect, Qt::AlignCenter, m_midiTriggerLabel);
+            }
         }
     }
 
@@ -397,6 +464,7 @@ private:
     int     m_index = 0;
     bool    m_hasContent = false;
     QString m_label;
+    QString m_bigLabel;
     bool    m_peekHighlight = false;
     QTimer           m_triggerTimer;
     QTimer           m_filmTimer;
@@ -405,13 +473,18 @@ private:
     bool             m_cellHovered = false;
     bool             m_skipNextClick = false;
     int              m_mixSlot = -1;
+    bool             m_mixerFilterActive = false;
     bool             m_midiMapMode = false;
+    QString          m_keyboardShortcutLabel;
+    QString          m_midiTriggerLabel;
 };
 
 BankGridWidget::BankGridWidget(QWidget* parent)
     : QWidget(parent)
 {
     setAcceptDrops(true);
+    const int cores = QThread::idealThreadCount();
+    m_preloadPool.setMaxThreadCount(qBound(4, cores > 0 ? cores : 4, 12));
     buildUi();
 }
 
@@ -428,8 +501,11 @@ void BankGridWidget::buildUi()
     m_bankTabs = new QTabBar(this);
     m_bankTabs->setExpanding(false);
     m_bankTabs->setDrawBase(false);
+    m_bankTabs->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_bankTabs, &QTabBar::currentChanged,
             this, &BankGridWidget::onBankTabChanged);
+    connect(m_bankTabs, &QTabBar::customContextMenuRequested,
+            this, &BankGridWidget::onBankTabContextMenu);
 
     header->addWidget(m_bankTabs, 1);
     outer->addLayout(header);
@@ -468,8 +544,10 @@ void BankGridWidget::rebuildGridButtons()
             connect(btn, &CellButton::cellEditRequested, this, [this, idx](int) {
                 emit cellEditRequested(m_bankSetIndex, m_bankIndex, idx);
             });
-            connect(btn, &CellButton::cellRightClicked, this, [this, idx]() {
-                emit cellPeekPreviewRequested(m_bankSetIndex, m_bankIndex, idx);
+            connect(btn, &QWidget::customContextMenuRequested, this, [this, idx, btn](const QPoint& pos) {
+                selectCell(idx);
+                emit cellContextMenuRequested(m_bankSetIndex, m_bankIndex, idx,
+                                              btn->mapToGlobal(pos));
             });
             connect(btn, &CellButton::midiLearnCellRequested, this, [this, idx](int) {
                 emit midiLearnCellTriggerRequested(m_bankSetIndex, m_bankIndex, idx);
@@ -489,12 +567,166 @@ void BankGridWidget::setProject(pvj::core::Project* project)
     ++m_thumbGeneration;
     m_filmCache.clear();
     m_thumbPending.clear();
+    m_preloadBatchIds.clear();
+    m_preloadQueue.clear();
+    m_preloadRunningIds.clear();
+    m_enrichQueue.clear();
+    m_enrichRunningIds.clear();
+    m_preloadBatchTotal     = 0;
+    m_preloadCompletedCount = 0;
     if (m_project) {
         const int rows = qBound(1, m_project->settings.matrix.gridRows, 16);
         const int cols = qBound(1, m_project->settings.matrix.gridCols, 16);
         setGridDimensions(rows, cols);
     }
     refresh();
+}
+
+void BankGridWidget::preloadProjectMediaThumbnails()
+{
+    if (!m_project) {
+        return;
+    }
+
+    using pvj::core::VisualType;
+
+    m_preloadBatchIds.clear();
+    m_preloadQueue.clear();
+    m_preloadRunningIds.clear();
+    m_enrichQueue.clear();
+    m_enrichRunningIds.clear();
+    m_preloadBatchTotal     = 0;
+    m_preloadCompletedCount = 0;
+
+    QSet<QUuid> seen;
+    auto queueIfExists = [this, &seen](const QUuid& id, const QString& path) {
+        if (id.isNull() || path.isEmpty() || !QFileInfo::exists(path) || seen.contains(id)) {
+            return;
+        }
+        seen.insert(id);
+        ++m_preloadBatchTotal;
+        if (m_filmCache.contains(id)) {
+            ++m_preloadCompletedCount;
+            return;
+        }
+        m_preloadBatchIds.insert(id);
+        // Defer the actual extraction: jobs are launched in bounded batches by
+        // startQueuedPreloadJobs() so progress updates arrive continuously.
+        if (!m_thumbPending.contains(id)) {
+            m_preloadQueue.append(qMakePair(id, path));
+        }
+    };
+
+    for (const pvj::core::MediaItem& item : m_project->mediaLibrary) {
+        queueIfExists(item.id, item.path);
+    }
+
+    for (const auto& set : m_project->bankSets) {
+        for (const auto& bank : set.banks) {
+            for (const auto& cell : bank.cells) {
+                if (cell.visual.type != VisualType::Media || cell.visual.mediaId.isNull()) {
+                    continue;
+                }
+                const pvj::core::MediaItem* m = m_project->findMedia(cell.visual.mediaId);
+                if (m) {
+                    queueIfExists(cell.visual.mediaId, m->path);
+                }
+            }
+        }
+    }
+
+    if (m_preloadBatchTotal == 0) {
+        emit mediaPreloadFinished();
+    } else {
+        emit mediaPreloadProgress(m_preloadCompletedCount, m_preloadBatchTotal);
+        startQueuedPreloadJobs();
+        if (m_preloadBatchIds.isEmpty()) {
+            emit mediaPreloadFinished();
+        }
+    }
+}
+
+void BankGridWidget::startQueuedPreloadJobs()
+{
+    const int maxConcurrent = m_preloadPool.maxThreadCount();
+    while (m_preloadRunningIds.size() < maxConcurrent && !m_preloadQueue.isEmpty()) {
+        const QPair<QUuid, QString> job = m_preloadQueue.takeFirst();
+        if (job.first.isNull() || m_filmCache.contains(job.first)) {
+            continue;
+        }
+        m_preloadRunningIds.insert(job.first);
+        ensureThumbnail(job.first, job.second, /*forPreload=*/true);
+    }
+}
+
+void BankGridWidget::markPreloadItemFinished(const QUuid& mediaId)
+{
+    m_preloadRunningIds.remove(mediaId);
+    if (!m_preloadBatchIds.remove(mediaId)) {
+        // Not part of the active batch (e.g. a one-off request) — still keep the
+        // preload queue flowing in case a slot just freed up.
+        startQueuedPreloadJobs();
+        return;
+    }
+    ++m_preloadCompletedCount;
+    if (m_preloadBatchTotal > 0) {
+        emit mediaPreloadProgress(m_preloadCompletedCount, m_preloadBatchTotal);
+    }
+    // Launch the next queued job before deciding whether the batch is done, so
+    // m_preloadBatchIds stays non-empty while work remains.
+    startQueuedPreloadJobs();
+    if (m_preloadBatchIds.isEmpty()) {
+        m_preloadBatchTotal     = 0;
+        m_preloadCompletedCount = 0;
+        m_preloadQueue.clear();
+        m_preloadRunningIds.clear();
+        emit mediaPreloadFinished();
+        queueFilmstripEnrichAfterPreload();
+    }
+}
+
+void BankGridWidget::queueFilmstripEnrichAfterPreload()
+{
+    if (!m_project) {
+        return;
+    }
+    m_enrichQueue.clear();
+    for (auto it = m_filmCache.constBegin(); it != m_filmCache.constEnd(); ++it) {
+        if (it.value().size() >= 2) {
+            continue;
+        }
+        const pvj::core::MediaItem* item = m_project->findMedia(it.key());
+        if (!item || item->path.isEmpty() || !QFileInfo::exists(item->path)) {
+            continue;
+        }
+        m_enrichQueue.append(qMakePair(it.key(), item->path));
+    }
+    startQueuedEnrichJobs();
+}
+
+void BankGridWidget::startQueuedEnrichJobs()
+{
+    constexpr int kMaxConcurrentEnrich = 2;
+    while (m_enrichRunningIds.size() < kMaxConcurrentEnrich && !m_enrichQueue.isEmpty()) {
+        const QPair<QUuid, QString> job = m_enrichQueue.takeFirst();
+        if (job.first.isNull()) {
+            continue;
+        }
+        m_enrichRunningIds.insert(job.first);
+        enrichFilmstripAsync(job.first, job.second);
+    }
+}
+
+void BankGridWidget::requestThumbnailForMedia(const QUuid& mediaId)
+{
+    if (!m_project || mediaId.isNull()) {
+        return;
+    }
+    const pvj::core::MediaItem* item = m_project->findMedia(mediaId);
+    if (!item || item->path.isEmpty() || !QFileInfo::exists(item->path)) {
+        return;
+    }
+    ensureThumbnail(mediaId, item->path);
 }
 
 void BankGridWidget::setGridDimensions(int rows, int cols)
@@ -530,6 +762,12 @@ void BankGridWidget::selectCell(int cellIndex)
 void BankGridWidget::setMixSlotPlayback(const std::array<MixSlotCellRef, kMixSlotCount>& mixSlotRefs)
 {
     m_mixSlots = mixSlotRefs;
+    updateCellVisuals(false);
+}
+
+void BankGridWidget::setActiveMixerFilterCells(const QList<MixSlotCellRef>& refs)
+{
+    m_activeMixerFilterCells = refs;
     updateCellVisuals(false);
 }
 
@@ -609,11 +847,13 @@ void BankGridWidget::updateCellVisuals(bool reloadThumbnails)
     if (!m_project || m_bankSetIndex < 0 || m_bankSetIndex >= m_project->bankSets.size()) {
         for (auto* b : m_cells) {
             b->setCellState(false, {});
+            b->setBigLabel({});
             b->setChecked(false);
             b->setEnabled(false);
             b->setMixSlot(-1);
             b->setPeekHighlight(false);
             b->setMidiMapMode(m_midiMappingEditMode);
+            b->setKeyboardShortcutLabel({});
         }
         return;
     }
@@ -630,8 +870,10 @@ void BankGridWidget::updateCellVisuals(bool reloadThumbnails)
         btn->setChecked(i == m_selectedCell);
         if (i >= bank.cells.size()) {
             btn->setCellState(false, {});
+            btn->setBigLabel({});
             btn->setMixSlot(-1);
             btn->setPeekHighlight(false);
+            btn->setMixerFilterActive(false);
             continue;
         }
         int mixSlot = -1;
@@ -650,9 +892,18 @@ void BankGridWidget::updateCellVisuals(bool reloadThumbnails)
                                && m_peekRef.bank == m_bankIndex
                                && m_peekRef.cell == i);
         btn->setPeekHighlight(peekHere);
+        bool mixerFxActive = false;
+        for (const MixSlotCellRef& ref : m_activeMixerFilterCells) {
+            if (ref.bankSet == m_bankSetIndex && ref.bank == m_bankIndex && ref.cell == i) {
+                mixerFxActive = true;
+                break;
+            }
+        }
+        btn->setMixerFilterActive(mixerFxActive);
         const auto& cell = bank.cells[i];
         bool has = false;
         QString label;
+        QString bigLabel;
         if (reloadThumbnails) {
             btn->clearThumbnail();
         }
@@ -675,13 +926,49 @@ void BankGridWidget::updateCellVisuals(bool reloadThumbnails)
         } else if (cell.visual.type == VisualType::Generator) {
             has = true;
             if (cell.visual.generator == pvj::core::GeneratorKind::InternalFeedback) {
-                label = tr("FB");
+                bigLabel = cell.name.isEmpty() ? tr("FB") : cell.name;
             } else {
                 label = tr("GEN");
             }
+        } else if (cell.visual.type == VisualType::MixerFilter) {
+            has = true;
+            bigLabel = cell.name.isEmpty() ? tr("FX") : cell.name;
+        } else {
+            const bool filterOnly = std::any_of(
+                cell.filterChain.cbegin(), cell.filterChain.cend(),
+                [](const pvj::core::CellFilterNode& n) {
+                    return !pvj::core::isFeedbackMarkerNode(n.typeId);
+                });
+            if (filterOnly) {
+                has = true;
+                bigLabel = cell.name.isEmpty() ? tr("FX") : cell.name;
+            }
         }
         btn->setCellState(has, label);
+        btn->setBigLabel(bigLabel);
         btn->setMidiMapMode(m_midiMappingEditMode);
+        QString keyBadge;
+        const QString keyText =
+            m_project->keyboardTriggerForCell(m_bankSetIndex, m_bankIndex, i);
+        if (!keyText.isEmpty()) {
+            const QKeySequence seq(keyText);
+            keyBadge = seq.toString(QKeySequence::NativeText);
+            if (keyBadge.size() > 6) {
+                keyBadge = keyBadge.left(5) + QChar(0x2026);
+            }
+        }
+        btn->setKeyboardShortcutLabel(keyBadge);
+
+        QString midiBadge = QStringLiteral("—");
+        if (m_project) {
+            int midiCh = -1;
+            int midiNote = -1;
+            m_project->midiCellTriggerForCell(m_bankSetIndex, m_bankIndex, i, &midiCh, &midiNote);
+            if (midiCh >= 0 && midiNote >= 0) {
+                midiBadge = QStringLiteral("CH%1 N%2").arg(midiCh + 1).arg(midiNote);
+            }
+        }
+        btn->setMidiTriggerLabel(midiBadge);
     }
 }
 
@@ -701,7 +988,81 @@ bool BankGridWidget::midiMappingEditMode() const
     return m_midiMappingEditMode;
 }
 
-void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolutePath)
+namespace {
+
+QVector<QImage> extractThumbnailFrames(const QString& absolutePath, bool fastSingleFrame)
+{
+    QVector<QImage> images;
+    const QSize thumbSize(160, 96);
+
+    if (fastSingleFrame) {
+        const pvj::video::ThumbnailResult r =
+            pvj::video::ThumbnailExtractor::extract(absolutePath, thumbSize, -1);
+        if (r.ok && !r.image.isNull()) {
+            images.append(r.image);
+        }
+        return images;
+    }
+
+    const QList<QImage> keyframes =
+        pvj::video::ThumbnailExtractor::extractPreviewKeyframes(absolutePath, 5, thumbSize);
+    images.reserve(keyframes.size());
+    for (const QImage& im : keyframes) {
+        if (!im.isNull()) {
+            images.append(im);
+        }
+    }
+
+    if (images.size() < 2) {
+        images.clear();
+        const QString suf = QFileInfo(absolutePath).suffix().toLower();
+        static const QStringList kRaster = {
+            QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+            QStringLiteral("bmp"), QStringLiteral("gif"), QStringLiteral("webp"),
+        };
+        if (kRaster.contains(suf)) {
+            QImage im;
+            if (im.load(absolutePath)) {
+                images.append(im.scaled(thumbSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            }
+        }
+        if (images.isEmpty()) {
+            const pvj::video::ThumbnailResult r =
+                pvj::video::ThumbnailExtractor::extract(absolutePath, thumbSize, -1);
+            if (r.ok && !r.image.isNull()) {
+                images.append(r.image);
+            }
+        }
+    }
+    return images;
+}
+
+void deliverThumbnailFrames(BankGridWidget* widget,
+                            const QUuid& mediaId,
+                            const QVector<QImage>& framesCopy,
+                            quint64 generation,
+                            bool afterEnrich)
+{
+    if (!widget) {
+        return;
+    }
+    QMetaObject::invokeMethod(
+        widget,
+        [safe = QPointer<BankGridWidget>(widget),
+         mediaId,
+         framesCopy,
+         generation,
+         afterEnrich]() {
+            if (safe) {
+                safe->deliverThumbnailFromWorker(mediaId, framesCopy, generation, afterEnrich);
+            }
+        },
+        Qt::QueuedConnection);
+}
+
+} // namespace
+
+void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolutePath, bool forPreload)
 {
     if (mediaId.isNull() || absolutePath.isEmpty()) {
         return;
@@ -713,74 +1074,108 @@ void BankGridWidget::ensureThumbnail(const QUuid& mediaId, const QString& absolu
 
     QPointer<BankGridWidget> safe(this);
     const quint64 generation = m_thumbGeneration;
-    (void)QtConcurrent::run([safe, mediaId, absolutePath, generation]() {
-        QVector<QImage> images;
-        const QList<QImage> keyframes = pvj::video::ThumbnailExtractor::extractPreviewKeyframes(
-            absolutePath, 5, QSize(160, 96));
-        images.reserve(keyframes.size());
-        for (const QImage& im : keyframes) {
-            if (!im.isNull()) {
-                images.append(im);
-            }
-        }
-
-        if (images.size() < 2) {
-            images.clear();
-            const QString suf = QFileInfo(absolutePath).suffix().toLower();
-            static const QStringList kRaster = {
-                QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-                QStringLiteral("bmp"), QStringLiteral("gif"), QStringLiteral("webp"),
-            };
-            if (kRaster.contains(suf)) {
-                QImage im;
-                if (im.load(absolutePath)) {
-                    images.append(im.scaled(QSize(160, 96), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                }
-            }
-            if (images.isEmpty()) {
-                const pvj::video::ThumbnailResult r = pvj::video::ThumbnailExtractor::extract(
-                    absolutePath, QSize(160, 96), -1);
-                if (r.ok && !r.image.isNull()) {
-                    images.append(r.image);
-                }
-            }
-        }
-
+    auto worker = [safe, mediaId, absolutePath, generation, forPreload]() {
+        const QVector<QImage> images =
+            extractThumbnailFrames(absolutePath, /*fastSingleFrame=*/forPreload);
         if (!safe) {
             return;
         }
-        const QVector<QImage> framesCopy = images;
-        QMetaObject::invokeMethod(
-            safe.data(),
-            [safe, mediaId, framesCopy, generation]() {
-                if (!safe || safe->m_thumbGeneration != generation) {
-                    return;
-                }
-                QVector<QImage> framesOut;
-                framesOut.reserve(framesCopy.size());
-                for (const QImage& im : framesCopy) {
-                    if (!im.isNull()) {
-                        QImage safeImage = im;
-                        if (safeImage.format() != QImage::Format_RGB32) {
-                            safeImage = safeImage.convertToFormat(QImage::Format_RGB32);
-                        }
-                        framesOut.push_back(safeImage);
-                    }
-                }
-                safe->applyThumbnailStrip(mediaId, framesOut);
-            },
-            Qt::QueuedConnection);
+        deliverThumbnailFrames(safe.data(), mediaId, images, generation, /*afterEnrich=*/false);
+    };
+
+    if (forPreload) {
+        (void)QtConcurrent::run(&m_preloadPool, worker);
+    } else {
+        (void)QtConcurrent::run(worker);
+    }
+}
+
+void BankGridWidget::enrichFilmstripAsync(const QUuid& mediaId, const QString& absolutePath)
+{
+    if (mediaId.isNull() || absolutePath.isEmpty()) {
+        m_enrichRunningIds.remove(mediaId);
+        startQueuedEnrichJobs();
+        return;
+    }
+    if (m_thumbPending.contains(mediaId)) {
+        m_enrichRunningIds.remove(mediaId);
+        startQueuedEnrichJobs();
+        return;
+    }
+    m_thumbPending.insert(mediaId);
+
+    QPointer<BankGridWidget> safe(this);
+    const quint64 generation = m_thumbGeneration;
+    (void)QtConcurrent::run([safe, mediaId, absolutePath, generation]() {
+        const QVector<QImage> images =
+            extractThumbnailFrames(absolutePath, /*fastSingleFrame=*/false);
+        if (!safe) {
+            return;
+        }
+        deliverThumbnailFrames(safe.data(), mediaId, images, generation, /*afterEnrich=*/true);
     });
+}
+
+QImage BankGridWidget::cachedCellPreview(int bankSetIndex, int bankIndex, int cellIndex) const
+{
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()
+        || bankIndex < 0 || cellIndex < 0) {
+        return {};
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex >= set.banks.size()) {
+        return {};
+    }
+    const auto& bank = set.banks[bankIndex];
+    if (cellIndex >= bank.cells.size()) {
+        return {};
+    }
+    const auto& cell = bank.cells[cellIndex];
+    if (cell.visual.type != pvj::core::VisualType::Media || cell.visual.mediaId.isNull()) {
+        return {};
+    }
+    const auto it = m_filmCache.constFind(cell.visual.mediaId);
+    if (it == m_filmCache.constEnd() || it->isEmpty() || it->first().isNull()) {
+        return {};
+    }
+    return it->first();
+}
+
+void BankGridWidget::deliverThumbnailFromWorker(const QUuid& mediaId,
+                                              const QVector<QImage>& framesCopy,
+                                              quint64 generation, bool afterEnrich)
+{
+    if (m_thumbGeneration != generation) {
+        return;
+    }
+    QVector<QImage> framesOut;
+    framesOut.reserve(framesCopy.size());
+    for (const QImage& im : framesCopy) {
+        if (!im.isNull()) {
+            QImage safeImage = im;
+            if (safeImage.format() != QImage::Format_RGB32) {
+                safeImage = safeImage.convertToFormat(QImage::Format_RGB32);
+            }
+            framesOut.push_back(safeImage);
+        }
+    }
+    applyThumbnailStrip(mediaId, framesOut);
+    if (afterEnrich) {
+        m_enrichRunningIds.remove(mediaId);
+        startQueuedEnrichJobs();
+    }
 }
 
 void BankGridWidget::applyThumbnailStrip(const QUuid& mediaId, const QVector<QImage>& frames)
 {
     m_thumbPending.remove(mediaId);
+    markPreloadItemFinished(mediaId);
     if (!frames.isEmpty()) {
         m_filmCache.insert(mediaId, frames);
     } else {
         m_filmCache.remove(mediaId);
     }
+    emit cellPreviewCacheUpdated(mediaId);
     if (!m_project) {
         return;
     }
@@ -801,6 +1196,24 @@ void BankGridWidget::applyThumbnailStrip(const QUuid& mediaId, const QVector<QIm
             }
         }
     }
+}
+
+void BankGridWidget::onBankTabContextMenu(const QPoint& pos)
+{
+    if (!m_project || m_bankSetIndex < 0 || m_bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    const int tab = m_bankTabs->tabAt(pos);
+    if (tab < 0) {
+        return;
+    }
+    const auto& set = m_project->bankSets[m_bankSetIndex];
+    if (tab >= set.banks.size()) {
+        return;
+    }
+    selectBank(tab);
+    const QPoint global = m_bankTabs->mapToGlobal(pos);
+    emit bankContextMenuRequested(m_bankSetIndex, tab, global);
 }
 
 void BankGridWidget::onBankTabChanged(int idx)

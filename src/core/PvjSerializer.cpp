@@ -1,7 +1,9 @@
 #include "PvjSerializer.h"
 
 #include "EnumStrings.h"
+#include "FilterEffectIds.h"
 #include "FilterParamSchema.h"
+#include "PropertyRegistry.h"
 
 #include <QFile>
 #include <QXmlStreamReader>
@@ -48,7 +50,7 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     w.writeAttribute(QStringLiteral("rotationZ"),      QString::number(p.rotationZ,      'g', 6));
     w.writeAttribute(QStringLiteral("copyMode"),       enums::toString(p.copyMode));
     w.writeAttribute(QStringLiteral("mixingPresetIndex"), QString::number(p.mixingPresetIndex));
-    w.writeAttribute(QStringLiteral("preferredLayer"), QString::number(qBound(0, p.preferredLayer, 11)));
+    w.writeAttribute(QStringLiteral("preferredLayer"), QString::number(qBound(0, p.preferredLayer, 12)));
     w.writeAttribute(QStringLiteral("keyChannelR"),   QString::number(p.keyChannelR,   'g', 6));
     w.writeAttribute(QStringLiteral("keyChannelG"),   QString::number(p.keyChannelG,   'g', 6));
     w.writeAttribute(QStringLiteral("keyChannelB"),   QString::number(p.keyChannelB,   'g', 6));
@@ -86,6 +88,11 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     const FeedbackParams fbDefault;
     const bool fbNonDefault = p.feedback.loopRetention != fbDefault.loopRetention
         || p.feedback.liveInject != fbDefault.liveInject
+        || p.feedback.inSaturation != fbDefault.inSaturation
+        || p.feedback.inBrightness != fbDefault.inBrightness
+        || p.feedback.inContrast != fbDefault.inContrast
+        || p.feedback.inHueShift != fbDefault.inHueShift
+        || p.feedback.inGamma != fbDefault.inGamma
         || p.feedback.saturation != fbDefault.saturation
         || p.feedback.brightness != fbDefault.brightness
         || p.feedback.contrast != fbDefault.contrast
@@ -100,6 +107,25 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         w.writeStartElement(QStringLiteral("Feedback"));
         w.writeAttribute(QStringLiteral("loopRetention"), QString::number(p.feedback.loopRetention, 'g', 6));
         w.writeAttribute(QStringLiteral("liveInject"),    QString::number(p.feedback.liveInject,    'g', 6));
+        if (p.feedback.inSaturation != fbDefault.inSaturation) {
+            w.writeAttribute(QStringLiteral("inSaturation"),
+                             QString::number(p.feedback.inSaturation, 'g', 6));
+        }
+        if (p.feedback.inBrightness != fbDefault.inBrightness) {
+            w.writeAttribute(QStringLiteral("inBrightness"),
+                             QString::number(p.feedback.inBrightness, 'g', 6));
+        }
+        if (p.feedback.inContrast != fbDefault.inContrast) {
+            w.writeAttribute(QStringLiteral("inContrast"),
+                             QString::number(p.feedback.inContrast, 'g', 6));
+        }
+        if (p.feedback.inHueShift != fbDefault.inHueShift) {
+            w.writeAttribute(QStringLiteral("inHueShift"),
+                             QString::number(p.feedback.inHueShift, 'g', 6));
+        }
+        if (p.feedback.inGamma != fbDefault.inGamma) {
+            w.writeAttribute(QStringLiteral("inGamma"), QString::number(p.feedback.inGamma, 'g', 6));
+        }
         w.writeAttribute(QStringLiteral("saturation"),  QString::number(p.feedback.saturation,  'g', 6));
         w.writeAttribute(QStringLiteral("brightness"),  QString::number(p.feedback.brightness,  'g', 6));
         w.writeAttribute(QStringLiteral("contrast"),    QString::number(p.feedback.contrast,    'g', 6));
@@ -175,6 +201,9 @@ void writeCell(QXmlStreamWriter& w, const Cell& c)
 {
     w.writeStartElement(QStringLiteral("Cell"));
     w.writeAttribute(QStringLiteral("index"), QString::number(c.index));
+    if (!c.name.isEmpty()) {
+        w.writeAttribute(QStringLiteral("name"), c.name);
+    }
     writeVisual(w, c.visual);
     writeProps(w, c.props);
     if (c.effect) {
@@ -199,6 +228,7 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
     for (const auto& c : b.cells) {
         // Skip completely default empty cells to keep file size small.
         const bool isDefault = (c.visual.type == VisualType::Empty)
+            && c.name.isEmpty()
             && !c.effect.has_value()
             && c.propertyMappings.isEmpty()
             && c.filterChain.isEmpty()
@@ -244,8 +274,13 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.picture.saturation == 1.0
             && c.props.picture.circularMotion == 0.0
             && c.props.picture.wrapMode == WrapMode::Clamp
-            && c.props.feedback.loopRetention == 0.85
-            && c.props.feedback.liveInject == 0.15
+            && c.props.feedback.loopRetention == 1.0
+            && c.props.feedback.liveInject == 0.04
+            && c.props.feedback.inSaturation == 1.0
+            && c.props.feedback.inBrightness == 0.0
+            && c.props.feedback.inContrast == 1.0
+            && c.props.feedback.inHueShift == 0.0
+            && c.props.feedback.inGamma == 1.0
             && c.props.feedback.saturation == 1.0
             && c.props.feedback.brightness == 0.0
             && c.props.feedback.contrast == 1.0
@@ -254,7 +289,7 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.feedback.rotationDeg == 0.0
             && c.props.feedback.zoom == 0.0
             && c.props.feedback.frameDelay == 0
-            && c.props.feedback.inputMode == FeedbackInputMode::StackComposite
+            && c.props.feedback.inputMode == FeedbackInputMode::SceneLoopback
             && c.props.feedback.wrapMode == WrapMode::Black;
         if (isDefault) {
             continue;
@@ -404,7 +439,7 @@ CellProps readProps(QXmlStreamReader& r)
         p.mixingPresetIndex = a.value(QStringLiteral("mixingPresetIndex")).toInt();
     }
     if (a.hasAttribute(QStringLiteral("preferredLayer"))) {
-        p.preferredLayer = qBound(0, a.value(QStringLiteral("preferredLayer")).toInt(), 11);
+        p.preferredLayer = qBound(0, a.value(QStringLiteral("preferredLayer")).toInt(), 12);
     } else if (a.hasAttribute(QStringLiteral("layerBand"))) {
         // Legacy migration: old bands Back/Mid/Front map to first slot of each 4-layer block.
         const int lb = a.value(QStringLiteral("layerBand")).toInt();
@@ -519,29 +554,38 @@ CellProps readProps(QXmlStreamReader& r)
                 return fbAttrs.hasAttribute(k) ? fbAttrs.value(k).toDouble() : def;
             };
             if (fbAttrs.hasAttribute(QStringLiteral("loopRetention"))) {
-                p.feedback.loopRetention = rd("loopRetention", 0.85);
+                p.feedback.loopRetention = rd("loopRetention", 1.0);
             } else if (fbAttrs.hasAttribute(QStringLiteral("strength"))) {
                 const double legacy = rd("strength", 0.5);
                 p.feedback.loopRetention = legacy;
             }
             if (fbAttrs.hasAttribute(QStringLiteral("liveInject"))) {
-                p.feedback.liveInject = rd("liveInject", 0.15);
+                p.feedback.liveInject = rd("liveInject", 0.04);
             } else if (fbAttrs.hasAttribute(QStringLiteral("strength"))) {
                 p.feedback.liveInject = 1.0 - rd("strength", 0.5);
             }
+            p.feedback.inSaturation = rd("inSaturation", 1.0);
+            p.feedback.inBrightness = rd("inBrightness", 0.0);
+            p.feedback.inContrast   = rd("inContrast", 1.0);
+            p.feedback.inHueShift   = rd("inHueShift", 0.0);
+            p.feedback.inGamma      = rd("inGamma", 1.0);
             p.feedback.saturation  = rd("saturation", 1.0);
             p.feedback.brightness  = rd("brightness", 0.0);
             p.feedback.contrast    = rd("contrast", 1.0);
             p.feedback.hueShift    = rd("hueShift", 0.0);
             p.feedback.gamma       = rd("gamma", 1.0);
             p.feedback.rotationDeg = rd("rotationDeg", 0.0);
-            p.feedback.zoom        = rd("zoom", 0.0);
+            p.feedback.zoom = qBound(kFeedbackZoomMin, rd("zoom", 0.0), kFeedbackZoomMax);
             if (fbAttrs.hasAttribute(QStringLiteral("frameDelay"))) {
-                p.feedback.frameDelay = qBound(0, int(qRound(rd("frameDelay", 0.0))), 14);
+                p.feedback.frameDelay =
+                    qBound(0, int(qRound(rd("frameDelay", 0.0))), kFeedbackMaxFrameDelay);
             }
             if (fbAttrs.hasAttribute(QStringLiteral("inputMode"))) {
                 p.feedback.inputMode = enums::feedbackInputModeFromString(
-                    fbAttrs.value(QStringLiteral("inputMode")).toString());
+                    fbAttrs.value(QStringLiteral("inputMode")).toString(),
+                    FeedbackInputMode::SceneLoopback);
+            } else {
+                p.feedback.inputMode = FeedbackInputMode::SceneLoopback;
             }
             if (fbAttrs.hasAttribute(QStringLiteral("wrapMode"))) {
                 p.feedback.wrapMode = enums::wrapModeFromString(
@@ -584,6 +628,10 @@ PropertyMapping readMapping(QXmlStreamReader& r)
     m.number   = a.value(QStringLiteral("number")).toInt();
     m.minValue = a.value(QStringLiteral("min")).toDouble();
     m.maxValue = a.value(QStringLiteral("max")).toDouble();
+    {
+        const QString resolved = PropertyRegistry::resolvePropertyId(m.property);
+        PropertyRegistry::learnMinMax(resolved, &m.minValue, &m.maxValue);
+    }
     if (a.hasAttribute(QStringLiteral("buttonMode"))) {
         m.buttonMode = enums::propertyButtonModeFromString(a.value(QStringLiteral("buttonMode")).toString());
     }
@@ -631,6 +679,7 @@ Cell readCell(QXmlStreamReader& r)
 {
     Cell c;
     c.index = r.attributes().value(QStringLiteral("index")).toInt();
+    c.name  = r.attributes().value(QStringLiteral("name")).toString();
     while (r.readNextStartElement()) {
         if (r.name() == QLatin1String("Visual")) {
             c.visual = readVisual(r);
@@ -658,6 +707,7 @@ Cell readCell(QXmlStreamReader& r)
             r.skipCurrentElement();
         }
     }
+    sanitizeCellFilterChain(c.filterChain);
     return c;
 }
 
@@ -802,6 +852,7 @@ Settings readSettings(QXmlStreamReader& r)
             r.skipCurrentElement();
         }
     }
+    sanitizeOutputFilterChain(s.output.filterChain);
     return s;
 }
 
@@ -883,6 +934,7 @@ PvjSerializer::Result PvjSerializer::load(Project& project, const QString& fileP
     }
     project.stripMaxineFiltersFromCells();
     project.sanitizeOutputFilters();
+    project.normalizeCellSlotTriggers();
     return {true, {}};
 }
 

@@ -1,50 +1,60 @@
-# DaVinci Resolve Effects (V1 parameter mapping)
+# Resolve-style filters (PerformanieVJ)
 
-This document describes how Resolve FX / Fusion filters are exposed in PerformanieVJ V1.
+## Blur filters (Resolve 21 baseline)
 
-## Scope
+Phase 1: seven blur effects registered:
 
-- **Included:** Resolve FX (missing entries only), Fusion Effects, Fusion Generators
-- **Excluded:** Titles, Text+, Transitions, Adjustment Clips (separate features)
+| typeId | Display name | Shader `familyId` |
+|--------|--------------|-------------------|
+| `gaussian_blur` | Gaussian Blur | 0 |
+| `box_blur` | Box Blur | 1 |
+| `directional_blur` | Directional Blur | 2 |
+| `radial_blur` | Radial Blur | 3 |
+| `zoom_blur` | Zoom Blur | 4 |
+| `mosaic_blur` | Mosaic Blur | 5 |
+| `lens_blur` | Lens Blur | 6 |
 
-Machine-readable inventory: [`tools/resolve_effects_inventory.json`](../tools/resolve_effects_inventory.json)
+GPU path: `RhiMixerWidget` filter chain → `effect_blur.frag` via `FilterUniformPacker`.
 
-## Parameter convention (4-param limit)
+## Film Emulation (Resolve 21 Film Look Creator)
 
-Every new Resolve catalog entry uses:
+Resolve 21 exposes one **Film Look Creator** effect under **ResolveFX Film Emulation**. PerformanieVJ splits it into separate catalog effects (same parameter names as the Resolve manual sections). Film stock presets are **visual approximations**, not licensed Blackmagic profiles.
 
-| Index | Name | Kind | Role |
-|-------|------|------|------|
-| 0 | `blend` | Percent (0–1, default 1.0) | Resolve-style mix between source and effect |
-| 1 | `strength` | Percent | Primary effect intensity |
-| 2 | `detail` | Float 0–1 | Secondary control (frequency, edge weight, etc.) |
-| 3 | `size` | Float 0–1 | Tertiary control (radius, tile size, patch offset, …) |
+| typeId | Display name | Shader family | `familyId` | Resolve FLC section |
+|--------|--------------|---------------|------------|---------------------|
+| `film_look` | Film Look | Film | 0 | Film Look / Core Looks |
+| `film_color` | Film Color | Film | 1 | Color Settings |
+| `film_split_tone` | Film Split Tone | Film | 2 | Split Tone |
+| `film_vignette` | Film Vignette | Film | 3 | Vignette |
+| `film_halation` | Film Halation | Film | 4 | Halation |
+| `film_bloom` | Film Bloom | Film | 5 | Bloom |
+| `film_grain` | Film Grain | Film | 6 | Grain |
+| `film_flicker` | Film Flicker | Film | 7 | Flicker |
+| `film_gate_weave` | Film Gate Weave | Film | 8 | Gate Weave |
+| `film_gate` | Film Gate | Film | 9 | Film Gate |
 
-Full Resolve parameter sets are not replicated in V1 due to the `CellFilterNode` four-parameter cap.
+GPU path: `effect_film.frag` via `packFilmUniforms()` (80-byte UBO with `params3` for `film_color`).
 
-### Exceptions
+### Parameter mapping (handbook → schema)
 
-- **`noise_reduction`:** Uses Maxine backend (NVIDIA Video Effects SDK denoising). Params: `blend`, `strength` (Weak/Strong), `amount`.
-- **`dctl`:** Utility stub — slight exposure/gamma approximation only (no DCTL script execution).
+**film_look:** `film_look` (Default 65mm, Default 35mm, Cinematic, Nostalgic, Bleach Bypass, Rochester, Akasaka, Elated, Vintage, Aurora), `blend` (Film Look Blend)
 
-## Shader families
+**film_color:** `exposure`, `contrast`, `highlights_fade`, `fade_rolloff` (Resolve 21), `temperature`, `tint`, `subtractive_saturation`, `saturation`, `richness`, `blend` (Color Blend)
 
-| Resolve group | Shader family | Notes |
-|---------------|---------------|-------|
-| Blur / Sharpen | `effect_blur.frag` | familyId 11–14 |
-| Color | `effect_color.frag` | familyId 25–35 |
-| Generate / Fusion Generators | `effect_generate.frag` | familyId 18–24 |
-| Grid | `effect_pattern.frag` | familyId 5 |
-| Key | `effect_key.frag` | familyId 2–4 |
-| Light | `effect_light.frag` | new family |
-| Revival / Refine | `effect_revival.frag` | new family |
-| Temporal | `effect_temporal.frag` | new family |
-| Texture / Stylize / Fusion overlays | `effect_stylize.frag` | familyId 24–41 |
-| Transform | `effect_transform.frag` | familyId 13–14 |
-| Warp | `effect_distort.frag` | familyId 17–22 |
+**film_split_tone:** `amount`, `hue_angle`, `balance`, `blend`
 
-All GLSL paths apply `mix(original, effect, blend)` (or equivalent alpha blend for keys).
+**film_vignette:** `amount`, `size`, `softness`, `roundness`, `blend`
 
-## Duplicates
+**film_halation:** `amount`, `threshold`, `size`, `hue`, `blend`
 
-Existing Resolume-style filters (151 entries) are unchanged. Resolve names that overlap visually (e.g. `god_rays` vs `light_rays`) remain separate `typeId`s with independent schemas.
+**film_bloom:** `amount`, `threshold`, `size`, `blend`
+
+**film_grain:** `size`, `strength`, `monochrome`, `blend`
+
+**film_flicker:** `amount`, `speed`, `blend`
+
+**film_gate_weave:** `amount_h`, `amount_v`, `speed`, `blend`
+
+**film_gate:** `ratio` (4:3, 16:10, 16:9, 1.85, 2.39, Super 16, Super 8), `padding`, `softness` (Resolve 21), `blend`
+
+Keying-only nodes (`chroma_key`, `luma_key`, `mask`) remain in `FilterEffectIds` for layer keying injection but are not listed in the filter picker.

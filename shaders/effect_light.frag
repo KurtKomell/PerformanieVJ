@@ -4,15 +4,16 @@ layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 fragColor;
 
 layout(binding = 1) uniform sampler2D u_tex;
+layout(binding = 2) uniform sampler2D u_orig;
 
 layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
     vec4 rotation;
     vec4 params;
     vec4 params2;
+    vec4 params3;
+    vec4 light[16];
 } ubuf;
-
-// Included by effect_*.frag after the `ubuf` uniform block is declared.
 
 const float PVJ_PI = 3.14159265359;
 const vec3 PVJ_LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -23,67 +24,8 @@ float pvjAspect() { return max(ubuf.scaleOffset.w, 0.001); }
 int pvjPass() { return int(ubuf.params2.x + 0.5); }
 
 vec2 pvjUvCentered(vec2 uv) { return uv - 0.5; }
-vec2 pvjUvFromCentered(vec2 p) { return p + 0.5; }
 
-float pvjHash(vec2 p)
-{
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float pvjNoise(vec2 p)
-{
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = pvjHash(i);
-    float b = pvjHash(i + vec2(1.0, 0.0));
-    float c = pvjHash(i + vec2(0.0, 1.0));
-    float d = pvjHash(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-float hue2rgb(float p, float q, float t)
-{
-    float x = t;
-    if (x < 0.0) x += 1.0;
-    if (x > 1.0) x -= 1.0;
-    if (x < 1.0 / 6.0) return p + (q - p) * 6.0 * x;
-    if (x < 0.5) return q;
-    if (x < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - x) * 6.0;
-    return p;
-}
-
-vec3 pvjHsl2rgb(vec3 hsl)
-{
-    float h = fract(hsl.x);
-    float s = hsl.y;
-    float l = hsl.z;
-    if (s < 1e-5) return vec3(l);
-    float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
-    float p = 2.0 * l - q;
-    return vec3(
-        hue2rgb(p, q, h + 1.0 / 3.0),
-        hue2rgb(p, q, h),
-        hue2rgb(p, q, h - 1.0 / 3.0));
-}
-
-vec3 pvjRgb2hsl(vec3 c)
-{
-    float maxc = max(max(c.r, c.g), c.b);
-    float minc = min(min(c.r, c.g), c.b);
-    float l = (maxc + minc) * 0.5;
-    float delta = maxc - minc;
-    float h = 0.0;
-    float s = 0.0;
-    if (delta > 1e-6) {
-        s = l < 0.5 ? delta / (maxc + minc) : delta / (2.0 - maxc - minc);
-        if (maxc == c.r) h = (c.g - c.b) / delta + (c.g < c.b ? 6.0 : 0.0);
-        else if (maxc == c.g) h = (c.b - c.r) / delta + 2.0;
-        else h = (c.r - c.g) / delta + 4.0;
-        h /= 6.0;
-    }
-    return vec3(h, s, l);
-}
+float pvjLuma(vec3 c) { return dot(c, PVJ_LUMA); }
 
 vec3 pvjSampleRgb(sampler2D tex, vec2 uv)
 {
@@ -112,6 +54,8 @@ vec3 pvjBlur9(sampler2D tex, vec2 uv, vec2 dir, float r)
          + pvjSampleRgb(tex, uv + vec2(o.x, o.y)) * w22;
 }
 
+vec3 pvjBlendAdd(vec3 a, vec3 b) { return a + b; }
+vec3 pvjBlendScreen(vec3 a, vec3 b) { return 1.0 - (1.0 - a) * (1.0 - b); }
 vec3 pvjBlendOverlay(vec3 a, vec3 b)
 {
     vec3 low = 2.0 * a * b;
@@ -119,91 +63,332 @@ vec3 pvjBlendOverlay(vec3 a, vec3 b)
     return mix(low, high, step(0.5, a));
 }
 
-vec3 pvjBlendSoftLight(vec3 a, vec3 b)
+vec3 pvjComposite(vec3 base, vec3 fx, int mode)
 {
-    return mix(2.0 * a * b + a * a * (1.0 - 2.0 * b),
-               sqrt(a) * (2.0 * b - 1.0) + 2.0 * a * (1.0 - b),
-               step(0.5, b));
+    if (mode == 0) return pvjBlendAdd(base, fx);
+    if (mode == 1) return pvjBlendScreen(base, fx);
+    if (mode == 2) return pvjBlendOverlay(base, fx);
+    return mix(base, fx, pvjLuma(fx));
 }
 
-vec3 pvjBlendHardLight(vec3 a, vec3 b)
+float pvjStar(vec2 p, int blades, float angle, float curvature)
 {
-    return pvjBlendSoftLight(b, a);
+    float a = atan(p.y, p.x) + angle;
+    float spikes = float(blades);
+    float v = abs(cos(a * spikes * 0.5));
+    v = mix(v, pow(v, 1.0 + curvature * 4.0), 0.6);
+    float r = length(p);
+    return pow(max(0.0, 1.0 - r * 2.5), 2.0 + ubuf.params.z * 4.0) * v;
 }
 
-vec3 pvjBlendColorDodge(vec3 a, vec3 b)
+vec3 pvjApertureDiffraction(vec2 uv, vec3 src)
 {
-    return a / max(1.0 - b, 1e-4);
+    float thresh = ubuf.params.y;
+    float luma = pvjLuma(src);
+    if (luma < thresh) {
+        return src;
+    }
+    vec2 p = pvjUvCentered(uv);
+    p.x *= mix(1.0, pvjAspect(), ubuf.light[1].x);
+    float rot = ubuf.light[0].w * PVJ_PI / 180.0;
+    float c = cos(rot);
+    float s = sin(rot);
+    p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+
+    int blades = int(ubuf.light[0].x + 0.5) + 3;
+    float star = pvjStar(p, blades, rot, ubuf.light[0].z);
+    float chroma = ubuf.light[1].y;
+    vec3 tint = vec3(1.0, 0.92 - chroma * 0.15, 0.85 - chroma * 0.25);
+    vec3 fx = tint * star * ubuf.params.w * (src * (1.0 + ubuf.light[0].y));
+    return mix(src, src + fx, ubuf.params.x);
 }
 
-vec3 pvjBlendColorBurn(vec3 a, vec3 b)
+vec3 pvjThresholdPass(vec2 uv, float thresh, bool useAlpha)
 {
-    return 1.0 - (1.0 - a) / max(b, 1e-4);
+    vec4 tex = pvjSampleRgba(u_orig, uv);
+    vec3 src = tex.rgb;
+    float m = pvjLuma(src);
+    if (useAlpha) {
+        m = max(m, tex.a);
+    }
+    const float high = min(thresh + 0.22, 1.0);
+    float mask = smoothstep(thresh, high, m);
+    vec3 highlight = max(src - vec3(thresh * 0.5), vec3(0.0));
+    return highlight * mask;
 }
 
-vec3 pvjApplyBlendMode(vec3 a, vec3 b, int mode)
+vec3 pvjBlurPass(vec2 uv, vec2 dir, float radius)
 {
-    if (mode == 0) return b;
-    if (mode == 1) return a + b;
-    if (mode == 2) return max(a - b, vec3(0.0));
-    if (mode == 3) return a * b;
-    if (mode == 4) return 1.0 - (1.0 - a) * (1.0 - b);
-    if (mode == 5) return pvjBlendOverlay(a, b);
-    if (mode == 6) return pvjBlendSoftLight(a, b);
-    if (mode == 7) return pvjBlendHardLight(a, b);
-    if (mode == 8) return pvjBlendColorDodge(a, b);
-    if (mode == 9) return pvjBlendColorBurn(a, b);
-    if (mode == 10) return min(a, b);
-    if (mode == 11) return max(a, b);
-    if (mode == 12) return abs(a - b);
-    return a + b - 2.0 * a * b;
+    return pvjBlur9(u_tex, uv, dir, radius);
 }
 
-float pvjResolveBlend() { return ubuf.params.x; }
-float pvjResolveStrength() { return ubuf.params.y; }
-float pvjResolveDetail() { return ubuf.params.z; }
-float pvjResolveSize() { return ubuf.params.w; }
-vec3 pvjResolveMix(vec3 src, vec3 fx) { return mix(src, fx, pvjResolveBlend()); }
+vec3 pvjCompositeOrig(vec2 uv, vec3 fx, float blend, int compMode)
+{
+    vec3 orig = pvjSampleRgb(u_orig, uv);
+    vec3 outRgb = pvjComposite(orig, fx, compMode);
+    return mix(orig, outRgb, blend);
+}
+
+vec3 pvjGlow(vec2 uv)
+{
+    const int pass = pvjPass();
+    const float blend = ubuf.params.x;
+    const float thresh = ubuf.params.y;
+    const float blurH = max(ubuf.params.z, 0.001);
+    const float blurV = max(ubuf.params.w, 0.001);
+    const float brightness = ubuf.light[0].x;
+    const int compMode = int(ubuf.light[0].y + 0.5);
+    const bool useAlpha = ubuf.light[0].z > 0.5;
+    const vec3 glowColor = ubuf.light[1].rgb;
+    const float gamma = max(ubuf.light[1].w, 0.01);
+
+    if (pass == 0) {
+        return pvjThresholdPass(uv, thresh, useAlpha);
+    }
+    if (pass == 1) {
+        return pvjBlurPass(uv, vec2(1.0 / pvjAspect(), 0.0), blurH);
+    }
+    if (pass == 2) {
+        return pvjBlurPass(uv, vec2(0.0, 1.0), blurV);
+    }
+    vec3 blurred = pvjSampleRgb(u_tex, uv) * brightness;
+    blurred = pow(max(blurred, vec3(0.0)), vec3(1.0 / max(gamma, 0.05)));
+    blurred *= glowColor;
+    return pvjCompositeOrig(uv, blurred, blend, compMode);
+}
+
+// Resolve-style halation: blur first, then threshold on blurred luma (matches film_halation logic).
+vec3 pvjHalation(vec2 uv)
+{
+    const float blend = ubuf.params.x;
+    const float thresh = ubuf.params.y;
+    const float spread = clamp(ubuf.params.z, 0.0, 1.0);
+    const float strength = ubuf.light[0].x;
+    const float filmSat = ubuf.light[0].z;
+    const vec3 halationColor = ubuf.light[1].rgb;
+    const float gamma = ubuf.light[1].w;
+
+  // Spread controls blur radius (0.004 .. 0.14 UV — clearly visible across the slider).
+    const float blurR = 0.004 + spread * 0.136;
+    vec3 blur = pvjBlur9(u_orig, uv, vec2(1.0 / pvjAspect(), 0.0), blurR);
+    blur += pvjBlur9(u_orig, uv, vec2(0.0, 1.0), blurR);
+    blur *= 0.5;
+
+    const float luma = pvjLuma(blur);
+  // Threshold on blurred highlights; knee widens when threshold is lower.
+    const float knee = max(0.06, mix(0.28, 0.08, thresh));
+    const float w = smoothstep(thresh, min(thresh + knee, 1.0), luma);
+
+    vec3 glow = max(blur - vec3(thresh), vec3(0.0)) * w;
+    glow *= halationColor;
+    const float gammaExp = mix(0.35, 2.5, gamma);
+    glow = pow(max(glow, vec3(0.0)), vec3(1.0 / gammaExp));
+    glow *= strength * 2.0;
+    const float l = pvjLuma(glow);
+    glow = mix(vec3(l), glow, 1.0 + filmSat * 1.25);
+
+    return pvjCompositeOrig(uv, glow, blend, 1);
+}
+
+vec3 pvjGhostShape(vec2 uv, vec2 center, float size, int shape, vec3 col, float centerB, float edgeB)
+{
+    vec2 p = (uv - center) / max(size, 0.001);
+    float d = length(p);
+    float ring = smoothstep(1.0, 0.7, d) * edgeB + smoothstep(0.3, 0.0, d) * centerB;
+    if (shape == 1) {
+        float a = atan(p.y, p.x);
+        ring *= abs(cos(a * 3.0)) * 0.6 + 0.4;
+    } else if (shape == 2) {
+        ring *= smoothstep(0.15, 0.0, abs(p.y));
+    } else if (shape == 3) {
+        ring *= smoothstep(1.0, 0.85, d);
+    } else if (shape == 4) {
+        ring *= exp(-d * d * 3.0);
+    } else if (shape == 5) {
+        float a = atan(p.y, p.x);
+        ring *= abs(sin(a * 12.0)) * 0.5 + 0.5;
+    }
+    return col * ring;
+}
+
+vec3 pvjLensFlare(vec2 uv)
+{
+    vec3 src = pvjSampleRgb(u_orig, uv);
+    const float blend = ubuf.params.x;
+    vec2 flarePos = ubuf.params.yz;
+    vec2 lensCenter = ubuf.light[0].xy;
+    float gScale = ubuf.light[0].z;
+    float anam = ubuf.light[0].w;
+    float defocus = ubuf.light[1].x;
+    float gBright = ubuf.light[1].y;
+    float gSat = ubuf.light[1].z;
+    float colorise = ubuf.light[1].w;
+    vec3 colorizeCol = ubuf.light[2].rgb;
+    int blades = int(ubuf.params3.y + 0.5);
+    float apertureAngle = ubuf.params3.z * PVJ_PI / 180.0;
+
+    vec2 p = pvjUvCentered(uv);
+    vec2 fp = pvjUvCentered(flarePos);
+    vec2 lc = pvjUvCentered(lensCenter);
+    vec2 axis = normalize(fp - lc + vec2(1e-5));
+
+    vec3 acc = vec3(0.0);
+    float dist = length(p - fp);
+    acc += vec3(1.0, 0.85, 0.5) * exp(-dist * 18.0 / max(gScale, 0.05)) * ubuf.light[3].x;
+    acc += ubuf.light[3].rgb * exp(-dist * 40.0) * 0.35;
+
+    float star = pvjStar(p - fp, blades, apertureAngle, 0.3);
+    acc += ubuf.light[4].rgb * star * ubuf.light[4].w;
+
+    for (int g = 0; g < 4; ++g) {
+        vec4 gShape = ubuf.light[5 + g];
+        const int shapeId = int(gShape.x + 0.5);
+        if (shapeId <= 0) {
+            continue;
+        }
+        float pos = gShape.y;
+        float size = gShape.z;
+        float centerB = gShape.w;
+        vec4 gExtra = ubuf.light[9 + g];
+        vec2 ghostCenter = lc + axis * pos * 0.35;
+        acc += pvjGhostShape(uv, ghostCenter + 0.5, size * 0.08 * gScale, shapeId,
+                             gExtra.rgb, centerB, gExtra.w) * gExtra.y;
+    }
+
+    vec2 q = p;
+    q.x *= 1.0 + anam * 2.0;
+    float glare = exp(-length(q - fp) * 4.0) * (1.0 - length(p) * 1.2);
+    acc += ubuf.light[3].rgb * max(glare, 0.0) * gBright;
+
+    acc = mix(acc, acc * colorizeCol, colorise);
+    acc *= mix(1.0, gSat, 0.5);
+    if (defocus > 0.01) {
+        acc = pvjBlur9(u_orig, uv, vec2(1.0), defocus * 0.01) * 0.3 + acc * 0.7;
+    }
+    return mix(src, src + acc, blend);
+}
+
+vec3 pvjLensReflections(vec2 uv)
+{
+    vec3 src = pvjSampleRgb(u_orig, uv);
+    const float blend = ubuf.params.x;
+    const float thresh = ubuf.params.y;
+    float luma = pvjLuma(src);
+    if (luma < thresh) {
+        return src;
+    }
+    vec2 p = pvjUvCentered(uv);
+    float bright = ubuf.params.z;
+    float gamma = max(ubuf.params.w, 0.01);
+    vec3 tint = ubuf.light[0].rgb;
+    float smoothK = ubuf.light[0].w;
+
+    vec3 refl = vec3(0.0);
+    float rings = 3.0 + ubuf.light[1].y * 5.0;
+    for (int i = 0; i < 6; ++i) {
+        float fi = float(i);
+        float r = 0.08 + fi * 0.06;
+        float ring = smoothstep(r + 0.02, r - 0.02, length(p));
+        ring = pow(ring, 1.0 + smoothK * 3.0);
+        float chroma = ubuf.light[1].w * fi * 0.1;
+        refl += tint * ring * (1.0 - fi / rings);
+        refl.r += chroma;
+        refl.b -= chroma;
+    }
+    float eclipse = ubuf.light[1].x;
+    if (abs(eclipse) > 0.01) {
+        float e = smoothstep(0.0, abs(eclipse), dot(p, normalize(vec2(1.0, 0.3))));
+        refl *= mix(1.0, e, abs(eclipse));
+    }
+    refl = pow(max(refl, vec3(0.0)), vec3(1.0 / gamma)) * bright;
+    return mix(src, src + refl, blend);
+}
+
+// Volumetric light rays: radial/parallel march through u_orig (single pass, ESSL-safe loop).
+vec3 pvjLightRays(vec2 uv)
+{
+    const float blend = ubuf.params.x;
+    const float thresh = ubuf.params.y;
+    const float lengthK = clamp(ubuf.params.z, 0.0, 1.0);
+    const float soften = clamp(ubuf.params.w, 0.0, 1.0);
+    const int sourceMode = int(ubuf.rotation.y + 0.5);
+    const int dirMode = int(ubuf.rotation.z + 0.5);
+    const float rayX = ubuf.light[0].x;
+    const float rayY = ubuf.light[0].y;
+    const float angleDeg = ubuf.light[0].z;
+    const float brightness = ubuf.light[0].w;
+    const float saturation = ubuf.light[1].x;
+    const int ccdBloom = int(ubuf.light[1].y + 0.5);
+    const int compMode = int(ubuf.light[1].z + 0.5);
+
+    vec2 rayDir;
+    if (dirMode == 0) {
+        vec2 origin = vec2(rayX, rayY);
+        vec2 d = uv - origin;
+        rayDir = length(d) > 1e-5 ? normalize(d) : vec2(0.0, -1.0);
+    } else {
+        float a = angleDeg * PVJ_PI / 180.0;
+        rayDir = vec2(cos(a), sin(a));
+    }
+
+    const int numSamples = 24;
+    const float stepLen = mix(0.003, 0.045, lengthK) * (1.0 + soften * 0.8);
+    const float knee = max(0.06, (1.0 - thresh) * 0.25);
+
+    vec3 rays = vec3(0.0);
+    float weightSum = 0.0;
+    for (int i = 0; i < numSamples; ++i) {
+        float w = 1.0 - float(i) / float(numSamples) * 0.88;
+        vec2 suv = clamp(uv - rayDir * float(i) * stepLen, vec2(0.001), vec2(0.999));
+        vec3 s = pvjSampleRgb(u_orig, suv);
+        float lum = pvjLuma(s);
+        if (sourceMode == 1) {
+            const vec2 px = vec2(0.003 / pvjAspect(), 0.003);
+            float gx = pvjLuma(pvjSampleRgb(u_orig, suv + vec2(px.x, 0.0)))
+                     - pvjLuma(pvjSampleRgb(u_orig, suv - vec2(px.x, 0.0)));
+            float gy = pvjLuma(pvjSampleRgb(u_orig, suv + vec2(0.0, px.y)))
+                     - pvjLuma(pvjSampleRgb(u_orig, suv - vec2(0.0, px.y)));
+            lum = length(vec2(gx, gy));
+        }
+        float mask = smoothstep(thresh, min(thresh + knee, 1.0), lum);
+        rays += s * mask * w;
+        weightSum += w;
+    }
+    rays /= max(weightSum, 1e-4);
+
+    if (ccdBloom == 1) {
+        rays *= 1.0 + lengthK * 2.2;
+    } else if (ccdBloom == 2) {
+        rays *= 1.0 + lengthK * 0.65;
+    }
+    rays *= brightness * 2.8;
+    float sat = 1.0 + saturation * 1.6;
+    rays = mix(vec3(pvjLuma(rays)), rays, sat);
+
+    return pvjCompositeOrig(uv, rays, blend, compMode);
+}
 
 void main()
 {
     vec2 uv = v_uv;
-    vec4 tex = pvjSampleRgba(u_tex, uv);
-    vec3 src = tex.rgb;
-    vec3 fx = src;
-    int id = pvjEffectId();
-    float s = pvjResolveStrength();
-    float d = pvjResolveDetail();
-    float sz = pvjResolveSize();
-    float t = pvjTime();
-    vec2 p = pvjUvCentered(uv);
+    vec3 src = pvjSampleRgb(u_orig, uv);
+    vec3 outRgb = src;
+    const int id = pvjEffectId();
 
-    if (id == 0) { // aperture_diffraction
-        float r = length(p);
-        float spikes = abs(sin(atan(p.y, p.x) * 8.0 + t * 0.2)) * s;
-        fx += vec3(1.0, 0.9, 0.7) * spikes * (1.0 - r) * d;
-    } else if (id == 1) { // halation
-        vec3 blur = pvjBlur9(u_tex, uv, vec2(1.0, 0.0), 0.01 + s * 0.03)
-                  + pvjBlur9(u_tex, uv, vec2(0.0, 1.0), 0.01 + s * 0.03);
-        blur *= 0.5;
-        float bright = max(max(src.r, src.g), src.b);
-        fx = src + blur * smoothstep(0.5, 1.0, bright) * s * 1.5;
-    } else if (id == 2) { // lens_flare
-        vec2 flarePos = vec2(0.65, 0.35);
-        float dist = length(p - flarePos);
-        fx += vec3(1.0, 0.8, 0.4) * exp(-dist * 12.0 / max(s, 0.05)) * s;
-        fx += vec3(0.4, 0.6, 1.0) * exp(-dist * 30.0) * s * d;
-    } else if (id == 3) { // lens_reflections
-        vec2 rp = reflect(normalize(p + 1e-5), normalize(vec2(sin(t * 0.3), cos(t * 0.2))));
-        fx = mix(src, pvjSampleRgb(u_tex, pvjUvFromCentered(p + rp * s * 0.15)), 0.4 + d * 0.4);
-    } else if (id == 4) { // light_rays
-        vec2 c = uv - 0.5;
-        vec3 acc = vec3(0.0);
-        for (int i = 0; i < 14; ++i) {
-            acc += pvjSampleRgb(u_tex, uv - c * float(i) * 0.015 * s);
-        }
-        fx = mix(src, acc / 14.0, s * (0.5 + sz));
+    if (id == 0) {
+        outRgb = pvjApertureDiffraction(uv, src);
+    } else if (id == 1) {
+        outRgb = pvjHalation(uv);
+    } else if (id == 2) {
+        outRgb = pvjLensFlare(uv);
+    } else if (id == 3) {
+        outRgb = pvjLensReflections(uv);
+    } else if (id == 4) {
+        outRgb = pvjLightRays(uv);
+    } else if (id == 5) {
+        outRgb = pvjGlow(uv);
     }
 
-    fragColor = vec4(clamp(pvjResolveMix(src, fx), 0.0, 1.0), tex.a);
+    vec4 origA = pvjSampleRgba(u_orig, uv);
+    fragColor = vec4(clamp(outRgb, 0.0, 1.0), origA.a);
 }

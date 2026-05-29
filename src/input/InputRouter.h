@@ -5,6 +5,8 @@
 #include "core/Model.h"
 
 #include <QHash>
+#include <QKeyCombination>
+#include <QKeySequence>
 #include <QObject>
 #include <QString>
 
@@ -44,12 +46,25 @@ public:
     void handleMidiBytes(const unsigned char* data, size_t len);
     /// Returns true if the key event should be swallowed (learn capture).
     bool handleKeyEvent(int qtKey, int keyboardModifiers, bool press);
+    bool handleKeyEvent(QKeyCombination combo, bool press);
+
+    void assignKeyboardTriggerForCell(int bankSetIndex, int bankIndex, int cellIndex,
+                                      const QString& keyText, int qtKey = 0);
+
+    /// Portable `QKeySequence` text for persistence / matching (empty when invalid).
+    static QString portableTextFromCombination(const QKeyCombination& combo);
+    static QString portableTextFromSequence(const QKeySequence& seq);
+    static bool    isUsableCellKeyboardKeyText(const QString& keyText);
+    /// True for standalone modifier keys (Ctrl/Shift/Alt/Meta alone).
+    static bool    isModifierOnlyKey(const QKeyCombination& combo);
 
 signals:
     /// Fixed mapping: MIDI channel 16 (index 15), notes 60–65 → mix slots 0–5.
     void mixLayerDirect(int slotIndex);
 
-    void triggerCell(int bankSetIndex, int bankIndex, int cellIndex);
+    void triggerCell(int bankSetIndex, int bankIndex, int cellIndex, bool fromMidiNote);
+    /// MIDI note-off for a mapped cell slot (momentary pads).
+    void releaseCell(int bankSetIndex, int bankIndex, int cellIndex);
     void bankNext(int bankSetIndex);
     void bankPrev(int bankSetIndex);
     void bankSelect(int bankSetIndex, int bankIndex);
@@ -59,7 +74,11 @@ signals:
                                  const QString& propertyName);
 
     void learnFinished(const QString& message);
+    /// Non-terminal hint during learn (wrong message type, etc.).
+    void learnHint(const QString& message);
     void learnCancelled();
+    void triggerMappingsChanged();
+    void propertyMappingsChanged();
 
 private:
     static QString keyTextFromQt(int qtKey, int keyboardModifiers);
@@ -68,14 +87,19 @@ private:
     void applyLearnPropertyCc(const InputEvent& ev);
     void applyLearnPropertyNote(const InputEvent& ev);
     void applyLearnBankNav(const InputEvent& ev);
+    void emitLearnTypeMismatch(const InputEvent& ev, const QString& expected);
     void removeConflictingTriggers(const core::TriggerMapping& except);
     void removeConflictingPropertyMapping(int bankSetIndex, int bankIndex, int cellIndex,
                                           const QString& property, const core::PropertyMapping& except);
     void removeAllPropertyMappingsForProperty(int bankSetIndex, int bankIndex, int cellIndex,
                                               const QString& propertyName);
 
-    void dispatchPlayback(const InputEvent& ev);
+    bool dispatchPlayback(const InputEvent& ev);
+    void dispatchCellNoteReleased(int channel, int note);
+    static void midiNoteReleasedThunk(void* ctx, int channel, int note);
+    void clearMidiNoteDown(int channel, int note);
     bool matchTrigger(const core::TriggerMapping& t, const InputEvent& ev) const;
+    static bool keyboardTriggersMatch(const QString& stored, const QString& incoming);
     double scaleCcToProperty(double normalized01, double minV, double maxV) const;
 
     pvj::core::Project* m_project = nullptr;
@@ -93,6 +117,10 @@ private:
 
     /// Last CC values for edge detection when TRIGGERMAPPINGS use MidiCC → cell.
     QHash<quint32, int> m_lastCcValue;
+    /// Note-on latch per ch+note (cleared on note-off) so cell triggers fire once per press.
+    QHash<quint32, bool> m_midiNoteDown;
+
+    unsigned char m_runningStatus = 0;
 };
 
 } // namespace pvj::input

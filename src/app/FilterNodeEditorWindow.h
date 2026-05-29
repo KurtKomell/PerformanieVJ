@@ -5,7 +5,9 @@
 #include <QDialog>
 
 class QComboBox;
+class QGroupBox;
 class QLabel;
+class QPushButton;
 class QScrollArea;
 
 namespace pvj::app {
@@ -29,6 +31,9 @@ public:
     void openForCell(int bankSetIndex, int bankIndex, int cellIndex,
                      pvj::core::Cell* cell, pvj::core::Project* project);
 
+    void setMidiMappingEditMode(bool on);
+    void refreshMidiMapOverlays();
+
 signals:
     void chainEdited(int bankSetIndex, int bankIndex, int cellIndex);
     /// Filter parameter value changed (structure unchanged); avoid heavy UI refresh.
@@ -42,7 +47,9 @@ private:
     void emitChainEdited();
     void refreshSourceHint();
     void syncSourceComboFromCell();
+    void syncSourceUiForCell();
     void applySourceToCell();
+    void pickMixerSourceFilter();
 
     int m_bankSetIndex = -1;
     int m_bankIndex    = -1;
@@ -51,7 +58,9 @@ private:
     pvj::core::Cell*    m_cell    = nullptr;
     pvj::core::Project* m_project = nullptr;
 
+    QGroupBox*       m_srcBox      = nullptr;
     QComboBox*       m_sourceCombo = nullptr;
+    QPushButton*     m_pickSourceFilterBtn = nullptr;
     QLabel*          m_sourceHint  = nullptr;
     QScrollArea*     m_scrollArea  = nullptr;
     NodeGraphWidget* m_graph       = nullptr;

@@ -21,20 +21,23 @@ enum class TransitionShaderId {
 
 // --- std140 UBO layouts (match shaders; safe to memcpy into dynamic UBOs) ---
 
-/// Shared with `textured_quad.vert` + most `effect_*.frag` (64 bytes).
+/// Shared with `textured_quad.vert` + most `effect_*.frag` (80 bytes with params3).
 struct alignas(16) EffectQuadUbo {
     float scaleOffset[4] = { 1, 1, 0, 0 };
-    float rotation[4] = {}; ///< radians in .x (vertex rotation)
+    float rotation[4] = {}; ///< .x = vertex rotation (radians); .y/.z = fragment data; .w = effect familyId
     float params[4] = {};
     float params2[4] = {};
+    float params3[4] = {}; ///< Film family extras (effect_film.frag only).
 };
 
-/// Alias for filter-chain UBO (same 64-byte layout as EffectQuadUbo).
+/// Filter-chain UBO (80-byte base + 256-byte light extension for ResolveFX Light).
 struct alignas(16) EffectQuadUbo2 {
     float scaleOffset[4] = { 1, 1, 0, 0 };
     float rotation[4] = {};
     float params[4] = {};
     float params2[4] = {};
+    float params3[4] = {};
+    float light[16][4] = {};
 };
 
 /// `transition_*.frag` + `transition.vert` (32 bytes).

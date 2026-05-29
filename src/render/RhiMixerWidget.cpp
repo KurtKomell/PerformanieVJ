@@ -10,8 +10,13 @@
 #include <rhi/qshader.h>
 #include <rhi/qrhi.h>
 
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QVector>
@@ -24,6 +29,44 @@ namespace pvj::render {
 
 namespace {
 
+// #region agent log
+QString agentDebugLogPath()
+{
+    const QStringList candidates = {
+        QStringLiteral("D:/PerformanieVJ/debug-5c45ef.log"),
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("debug-5c45ef.log")),
+        QDir::current().filePath(QStringLiteral("debug-5c45ef.log")),
+    };
+    for (const QString& p : candidates) {
+        QFile probe(p);
+        if (probe.open(QIODevice::WriteOnly | QIODevice::Append)) {
+            probe.close();
+            return p;
+        }
+    }
+    return candidates.front();
+}
+
+void agentDebugLog(const char* location, const char* message, const char* hypothesisId,
+                   const QJsonObject& data = {})
+{
+    QFile f(agentDebugLogPath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        return;
+    }
+    QJsonObject entry;
+    entry[QStringLiteral("sessionId")] = QStringLiteral("5c45ef");
+    entry[QStringLiteral("hypothesisId")] = hypothesisId;
+    entry[QStringLiteral("location")] = QString::fromUtf8(location);
+    entry[QStringLiteral("message")] = QString::fromUtf8(message);
+    entry[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    entry[QStringLiteral("data")] = data;
+    f.write(QJsonDocument(entry).toJson(QJsonDocument::Compact));
+    f.write("\n");
+    f.flush();
+}
+// #endregion
+
 bool pictureParamsEqual(const pvj::core::PictureParams& a, const pvj::core::PictureParams& b)
 {
     return a.zoom == b.zoom && a.rotationDeg == b.rotationDeg && a.brightness == b.brightness
@@ -31,10 +74,26 @@ bool pictureParamsEqual(const pvj::core::PictureParams& a, const pvj::core::Pict
         && a.circularMotion == b.circularMotion && a.wrapMode == b.wrapMode;
 }
 
+bool filterChainTopologyEqual(const QList<pvj::core::CellFilterNode>& a,
+                              const QList<pvj::core::CellFilterNode>& b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (int i = 0; i < a.size(); ++i) {
+        if (a.at(i).typeId != b.at(i).typeId) {
+            return false;
+        }
+        // Param names/count are not topology: MIDI or inspector edits may append
+        // params lazily (first touch) without adding/removing filter nodes.
+    }
+    return true;
+}
+
 bool filterChainShallowEqual(const QList<pvj::core::CellFilterNode>& a,
                              const QList<pvj::core::CellFilterNode>& b)
 {
-    if (a.size() != b.size()) {
+    if (!filterChainTopologyEqual(a, b)) {
         return false;
     }
     auto paramValue = [](const pvj::core::CellFilterNode& node, const QString& name) -> std::optional<double> {
@@ -46,20 +105,10 @@ bool filterChainShallowEqual(const QList<pvj::core::CellFilterNode>& a,
         return std::nullopt;
     };
     for (int i = 0; i < a.size(); ++i) {
-        if (a.at(i).typeId != b.at(i).typeId) {
-            return false;
-        }
         const auto& pa = a.at(i).params;
-        const auto& pb = b.at(i).params;
-        if (pa.size() != pb.size()) {
-            return false;
-        }
         for (const auto& p : pa) {
             const auto bv = paramValue(b.at(i), p.name);
-            if (!bv.has_value()) {
-                return false;
-            }
-            if (qAbs(p.value - *bv) > 1e-9) {
+            if (!bv.has_value() || qAbs(p.value - *bv) > 1e-9) {
                 return false;
             }
         }
@@ -70,6 +119,8 @@ bool filterChainShallowEqual(const QList<pvj::core::CellFilterNode>& a,
 bool feedbackParamsEqual(const pvj::core::FeedbackParams& a, const pvj::core::FeedbackParams& b)
 {
     return a.loopRetention == b.loopRetention && a.liveInject == b.liveInject
+        && a.inSaturation == b.inSaturation && a.inBrightness == b.inBrightness
+        && a.inContrast == b.inContrast && a.inHueShift == b.inHueShift && a.inGamma == b.inGamma
         && a.saturation == b.saturation
         && a.brightness == b.brightness && a.contrast == b.contrast
         && a.hueShift == b.hueShift && a.gamma == b.gamma
@@ -87,9 +138,9 @@ constexpr float kQuadVertices[] = {
 
 // std140 layout (see mixer.vert / mixer.frag Block):
 //   vec4 scaleOffset
-//   vec4 layers[12]
-//   vec4 picUvA[12]
-//   vec4 picColor[12]
+//   vec4 layers[LayerCount]
+//   vec4 picUvA[LayerCount]
+//   vec4 picColor[LayerCount]
 //   vec4 mixerCfg
 // = 38 vec4. Keep in sync with the shader.
 static constexpr int kUboFloats = 4 + 3 * 4 * RhiMixerWidget::LayerCount + 4;
@@ -270,7 +321,7 @@ void RhiMixerWidget::setLabel(const QString& text)
     }
 }
 
-void RhiMixerWidget::setLayerOpacity(int layer, float o)
+void RhiMixerWidget::setLayerOpacity(int layer, float o, bool requestRepaint)
 {
     if (layer == BackgroundLayerIndex) {
         return;
@@ -279,7 +330,9 @@ void RhiMixerWidget::setLayerOpacity(int layer, float o)
     const float v = qBound(0.0f, o, 1.0f);
     if (m_opacity[layer] != v) {
         m_opacity[layer] = v;
-        update();
+        if (requestRepaint) {
+            update();
+        }
     }
 }
 
@@ -366,8 +419,36 @@ void RhiMixerWidget::setLayerFilterChain(int layer, const QList<pvj::core::CellF
     if (filterChainShallowEqual(m_layerFilterChain[layer], chain)) {
         return;
     }
+    const bool topologyChanged =
+        !filterChainTopologyEqual(m_layerFilterChain[layer], chain);
     m_layerFilterChain[layer] = chain;
-    if (layer == m_activeFeedbackLayer || m_layerIsFeedback[layer]) {
+    // #region agent log
+    if (m_layerIsFeedback[layer] || layer == m_activeFeedbackLayer) {
+        QString types;
+        bool hasPostMarker = false;
+        bool afterMarker = false;
+        for (const auto& n : chain) {
+            if (pvj::core::isFeedbackMarkerNode(n.typeId)) {
+                hasPostMarker = true;
+                afterMarker = true;
+                continue;
+            }
+            if (afterMarker) {
+                types += n.typeId + QLatin1Char(',');
+            }
+        }
+        agentDebugLog("RhiMixerWidget.cpp:setLayerFilterChain",
+                      "feedback layer chain updated", "F",
+                      QJsonObject{
+                          { QStringLiteral("layer"), layer },
+                          { QStringLiteral("chainLen"), chain.size() },
+                          { QStringLiteral("topologyChanged"), topologyChanged },
+                          { QStringLiteral("postMarkerTypes"), types },
+                      });
+    }
+    // #endregion
+    // Param-only tweaks must not clear the feedback ring buffer (would restart trails).
+    if (topologyChanged && (layer == m_activeFeedbackLayer || m_layerIsFeedback[layer])) {
         releaseFeedbackGpuResources();
     }
     // Do not reset m_layerFilterLastOut here: updateMixerFromPlayingCells can run
@@ -410,15 +491,21 @@ void RhiMixerWidget::setLayerFeedback(int layer, bool enabled, const pvj::core::
     if (layer < 0 || layer >= LayerCount) {
         return;
     }
-    const bool changed = m_layerIsFeedback[layer] != enabled
+    const bool wasEnabled = m_layerIsFeedback[layer];
+    const bool changed = wasEnabled != enabled
         || !feedbackParamsEqual(m_layerFeedback[layer], p);
     if (!changed) {
         return;
     }
+    // Only clear the ring when feedback is newly enabled. Wrap / zoom / rotation are applied
+    // on every history sample (see sampleWarpedHistory in feedback shaders), like history color.
+    const bool resetRing = enabled && !wasEnabled;
     m_layerIsFeedback[layer] = enabled;
     m_layerFeedback[layer] = p;
-    if (enabled) {
+    if (resetRing) {
         m_feedbackWriteIdx = 0;
+        m_feedbackRingFilled = 0;
+        m_sceneHistPrimed = false;
     }
     recomputeActiveFeedbackLayer();
     update();
@@ -478,9 +565,52 @@ bool RhiMixerWidget::feedbackKeyFromAboveActive() const
 pvj::core::FeedbackInputMode RhiMixerWidget::activeFeedbackInputMode() const
 {
     if (!hasActiveFeedbackLayer()) {
-        return pvj::core::FeedbackInputMode::StackComposite;
+        return pvj::core::FeedbackInputMode::SceneLoopback;
     }
     return m_layerFeedback[m_activeFeedbackLayer].inputMode;
+}
+
+QRhiTexture* RhiMixerWidget::feedbackInjectSourceTexture(QRhi* r, QRhiCommandBuffer* cb,
+                                                         int feedbackLayer, const QSize& stagePx,
+                                                         const QColor& clear)
+{
+    if (!r || !cb || !m_belowRt || feedbackLayer < 0 || feedbackLayer >= LayerCount) {
+        return nullptr;
+    }
+
+    const auto mode = activeFeedbackInputMode();
+    const bool hasLayersBelow = std::any_of(
+        m_layerActive.cbegin(), m_layerActive.cbegin() + feedbackLayer,
+        [](bool active) { return active; });
+    const bool hasLayersAbove = std::any_of(
+        m_layerActive.cbegin() + feedbackLayer + 1, m_layerActive.cend(),
+        [](bool active) { return active; });
+
+    if (mode == pvj::core::FeedbackInputMode::BelowOnly) {
+        runPartialMixerPass(r, cb, 0, feedbackLayer, m_belowRt.get(), stagePx, clear);
+        return m_belowTex.get();
+    }
+
+    // Live inject = all mix layers except the feedback layer (video above/below the FB cell).
+    if (hasLayersBelow || hasLayersAbove) {
+        runPartialMixerPass(r, cb, 0, feedbackLayer, m_belowRt.get(), stagePx, clear);
+        if (hasLayersAbove && m_aboveRt) {
+            runPartialMixerPass(r, cb, feedbackLayer + 1, LayerCount, m_aboveRt.get(), stagePx,
+                                clear);
+            runStackCombinePass(r, cb, stagePx, clear);
+            return m_stackTex.get();
+        }
+        return m_belowTex.get();
+    }
+
+    if (mode == pvj::core::FeedbackInputMode::SceneLoopback && m_sceneHistPrimed) {
+        if (QRhiTexture* sceneRead = sceneHistReadTexture()) {
+            return sceneRead;
+        }
+    }
+
+    runPartialMixerPass(r, cb, 0, feedbackLayer, m_belowRt.get(), stagePx, clear);
+    return m_belowTex.get();
 }
 
 void RhiMixerWidget::setFrame(int layer, QImage frame, qint64 /*pts*/)
@@ -516,6 +646,8 @@ void RhiMixerWidget::clearFrame(int layer)
 void RhiMixerWidget::releaseFeedbackGpuResources()
 {
     m_feedbackPipeline.reset();
+    m_feedbackHistPipeline.reset();
+    m_feedbackHistSrb.reset();
     m_feedbackSrb.reset();
     m_feedbackUbuf.reset();
     m_feedbackRp.reset();
@@ -548,7 +680,9 @@ void RhiMixerWidget::releaseFeedbackGpuResources()
     m_textureCopyPipelineRp = nullptr;
     m_feedbackPixelSize = {};
     m_feedbackWriteIdx = 0;
+    m_feedbackRingFilled = 0;
     m_sceneHistWriteIdx = 0;
+    m_sceneHistPrimed = false;
 }
 
 void RhiMixerWidget::releaseOffscreenGpuResources()
@@ -573,6 +707,14 @@ void RhiMixerWidget::releaseOffscreenGpuResources()
             tex.reset();
         }
     }
+    for (auto& tex : m_layerFilterOrigTex) {
+        tex.reset();
+    }
+    for (auto& rt : m_layerFilterOrigRt) {
+        rt.reset();
+    }
+    m_outputFilterOrigTex.reset();
+    m_outputFilterOrigRt.reset();
     for (auto& idx : m_layerFilterLastOut) {
         idx = -1;
     }
@@ -641,8 +783,11 @@ QRhiTexture* RhiMixerWidget::feedbackReadTexture() const
         return nullptr;
     }
     const int delay = qBound(0, m_layerFeedback[m_activeFeedbackLayer].frameDelay,
-                             kFeedbackRingSize - 2);
-    const int readIdx = (m_feedbackWriteIdx + kFeedbackRingSize - 1 - delay) % kFeedbackRingSize;
+                             pvj::core::kFeedbackMaxFrameDelay);
+    const int maxSafeDelay = qMax(0, int(m_feedbackRingFilled) - 1);
+    const int effectiveDelay = qMin(delay, maxSafeDelay);
+    const int readIdx =
+        (m_feedbackWriteIdx + kFeedbackRingSize - 1 - effectiveDelay) % kFeedbackRingSize;
     return m_feedbackTex[readIdx].get();
 }
 
@@ -701,11 +846,18 @@ void RhiMixerWidget::rebuildMixerShaderResourceBindings()
     }
     QRhiTexture* placeholder = m_tex[0].get();
     binds.append(QRhiShaderResourceBinding::sampledTexture(
-        13, QRhiShaderResourceBinding::FragmentStage,
+        LayerCount, QRhiShaderResourceBinding::FragmentStage,
         placeholder, m_sampler.get()));
     binds.append(QRhiShaderResourceBinding::sampledTexture(
-        14, QRhiShaderResourceBinding::FragmentStage,
+        LayerCount + 1, QRhiShaderResourceBinding::FragmentStage,
         placeholder, m_sampler.get()));
+    QRhiTexture* feedbackHistTex = placeholder;
+    if (hasActiveFeedbackLayer() && m_stackTex) {
+        feedbackHistTex = m_stackTex.get();
+    }
+    binds.append(QRhiShaderResourceBinding::sampledTexture(
+        LayerCount + 2, QRhiShaderResourceBinding::FragmentStage,
+        feedbackHistTex, m_sampler.get()));
     m_srb->setBindings(binds.cbegin(), binds.cend());
     m_srb->create();
 }
@@ -730,10 +882,10 @@ void RhiMixerWidget::rebuildBelowMixerShaderResourceBindings()
     }
     QRhiTexture* placeholder = m_tex[0].get();
     binds.append(QRhiShaderResourceBinding::sampledTexture(
-        13, QRhiShaderResourceBinding::FragmentStage,
+        LayerCount, QRhiShaderResourceBinding::FragmentStage,
         placeholder, m_sampler.get()));
     binds.append(QRhiShaderResourceBinding::sampledTexture(
-        14, QRhiShaderResourceBinding::FragmentStage,
+        LayerCount + 1, QRhiShaderResourceBinding::FragmentStage,
         placeholder, m_sampler.get()));
     m_belowSrb->setBindings(binds.cbegin(), binds.cend());
     m_belowSrb->create();
@@ -745,7 +897,6 @@ void RhiMixerWidget::rebuildFeedbackShaderResourceBindings(QRhiTexture* belowTex
     if (!m_feedbackSrb || !belowTex || !historyRead) {
         return;
     }
-    QRhiTexture* aboveTex = m_aboveTex ? m_aboveTex.get() : belowTex;
     m_feedbackSrb->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
             0, QRhiShaderResourceBinding::FragmentStage,
@@ -756,11 +907,24 @@ void RhiMixerWidget::rebuildFeedbackShaderResourceBindings(QRhiTexture* belowTex
         QRhiShaderResourceBinding::sampledTexture(
             2, QRhiShaderResourceBinding::FragmentStage,
             historyRead, m_sampler.get()),
-        QRhiShaderResourceBinding::sampledTexture(
-            3, QRhiShaderResourceBinding::FragmentStage,
-            aboveTex, m_sampler.get()),
     });
     m_feedbackSrb->create();
+}
+
+void RhiMixerWidget::rebuildFeedbackHistShaderResourceBindings(QRhiTexture* historyRead)
+{
+    if (!m_feedbackHistSrb || !historyRead) {
+        return;
+    }
+    m_feedbackHistSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::FragmentStage,
+            m_feedbackUbuf.get()),
+        QRhiShaderResourceBinding::sampledTexture(
+            2, QRhiShaderResourceBinding::FragmentStage,
+            historyRead, m_sampler.get()),
+    });
+    m_feedbackHistSrb->create();
 }
 
 void RhiMixerWidget::rebuildStackCombineShaderResourceBindings()
@@ -923,9 +1087,17 @@ bool RhiMixerWidget::ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize)
         m_outputFilterPingRt[1].reset();
         m_outputFilterPingTex[0].reset();
         m_outputFilterPingTex[1].reset();
+        m_outputFilterOrigTex.reset();
+        m_outputFilterOrigRt.reset();
         m_outputFilterLastOut = -1;
         m_outputFilterSrbKey = 0;
         m_outputFilterSrbReady = false;
+        for (auto& tex : m_layerFilterOrigTex) {
+            tex.reset();
+        }
+        for (auto& rt : m_layerFilterOrigRt) {
+            rt.reset();
+        }
     }
     bool needed = false;
     for (int i = 0; i < LayerCount; ++i) {
@@ -933,6 +1105,24 @@ bool RhiMixerWidget::ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize)
             continue;
         }
         needed = true;
+        if (!m_layerFilterOrigTex[i]) {
+            m_layerFilterOrigTex[i].reset(
+                r->newTexture(QRhiTexture::RGBA8, pixelSize, 1, QRhiTexture::RenderTarget));
+            if (!m_layerFilterOrigTex[i]->create()) {
+                return false;
+            }
+        }
+        if (!m_layerFilterOrigRt[i]) {
+            m_layerFilterOrigRt[i].reset(r->newTextureRenderTarget(
+                QRhiTextureRenderTargetDescription(QRhiColorAttachment(m_layerFilterOrigTex[i].get()))));
+            if (!m_filterRp) {
+                m_filterRp.reset(m_layerFilterOrigRt[i]->newCompatibleRenderPassDescriptor());
+            }
+            m_layerFilterOrigRt[i]->setRenderPassDescriptor(m_filterRp.get());
+            if (!m_layerFilterOrigRt[i]->create()) {
+                return false;
+            }
+        }
         for (int k = 0; k < 2; ++k) {
             if (!m_layerFilterPingTex[i][k]) {
                 m_layerFilterPingTex[i][k].reset(
@@ -982,6 +1172,24 @@ bool RhiMixerWidget::ensureOutputFilterTargets(QRhi* r, const QSize& pixelSize)
         return false;
     }
     ensureLayerFilterTargets(r, pixelSize);
+    if (!m_outputFilterOrigTex) {
+        m_outputFilterOrigTex.reset(
+            r->newTexture(QRhiTexture::RGBA8, pixelSize, 1, QRhiTexture::RenderTarget));
+        if (!m_outputFilterOrigTex->create()) {
+            return false;
+        }
+    }
+    if (!m_outputFilterOrigRt) {
+        m_outputFilterOrigRt.reset(r->newTextureRenderTarget(
+            QRhiTextureRenderTargetDescription(QRhiColorAttachment(m_outputFilterOrigTex.get()))));
+        if (!m_filterRp) {
+            m_filterRp.reset(m_outputFilterOrigRt->newCompatibleRenderPassDescriptor());
+        }
+        m_outputFilterOrigRt->setRenderPassDescriptor(m_filterRp.get());
+        if (!m_outputFilterOrigRt->create()) {
+            return false;
+        }
+    }
     for (int k = 0; k < 2; ++k) {
         if (!m_outputFilterPingTex[k]) {
             m_outputFilterPingTex[k].reset(
@@ -1025,13 +1233,17 @@ bool RhiMixerWidget::ensureOutputFilterPassResources(QRhi* r)
 }
 
 void RhiMixerWidget::rebuildOutputFilterShaderResourceBindings(QRhiTexture* sourceTex,
-                                                               const QString& typeId)
+                                                               const QString& typeId,
+                                                               QRhiTexture* origTex)
 {
     if (!m_outputFilterSrb || !m_outputFilterUbuf || !sourceTex) {
         return;
     }
     QRhiTexture* secondTex = sourceTex;
-    if (effectUsesTwoTextures(typeId) && m_blendBlackTex) {
+    const pvj::core::FilterEffectMeta meta = pvj::core::filterEffectMeta(typeId);
+    if (meta.family == pvj::core::FilterEffectFamily::Light && origTex) {
+        secondTex = origTex;
+    } else if (meta.family == pvj::core::FilterEffectFamily::Blend && m_blendBlackTex) {
         secondTex = m_blendBlackTex.get();
     }
     const quint64 bindingKey = (quint64(quintptr(sourceTex)) << 1)
@@ -1121,9 +1333,16 @@ void RhiMixerWidget::runOutputFilterChain(QRhi* r, QRhiCommandBuffer* cb, const 
             continue;
         }
 
+        const pvj::core::FilterEffectMeta nodeMeta = pvj::core::filterEffectMeta(node.typeId);
+        QRhiTexture* nodeOrigTex = nullptr;
+        if (nodeMeta.family == pvj::core::FilterEffectFamily::Light && m_outputFilterOrigRt) {
+            runTextureCopyPass(r, cb, sourceTex, m_outputFilterOrigRt.get(), stagePx);
+            nodeOrigTex = m_outputFilterOrigTex.get();
+        }
+
         const int internalPasses = qMax(1, pvj::core::filterEffectInternalPasses(node.typeId));
         for (int pass = 0; pass < internalPasses; ++pass) {
-            rebuildOutputFilterShaderResourceBindings(sourceTex, node.typeId);
+            rebuildOutputFilterShaderResourceBindings(sourceTex, node.typeId, nodeOrigTex);
             QRhiGraphicsPipeline* pipeline = ensureFilterPipeline(
                 r, node.typeId, kOutputPipelineLayer, m_outputFilterSrb.get(),
                 m_outputFilterPingRt[writeIdx]->renderPassDescriptor());
@@ -1151,14 +1370,18 @@ void RhiMixerWidget::runOutputFilterChain(QRhi* r, QRhiCommandBuffer* cb, const 
 }
 
 void RhiMixerWidget::rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex,
-                                                              const QString& typeId)
+                                                              const QString& typeId,
+                                                              QRhiTexture* origTex)
 {
     if (layer < 0 || layer >= LayerCount || !m_layerFilterSrb[layer] || !m_layerFilterUbuf[layer]
         || !sourceTex) {
         return;
     }
     QRhiTexture* secondTex = sourceTex;
-    if (effectUsesTwoTextures(typeId) && m_blendBlackTex) {
+    const pvj::core::FilterEffectMeta meta = pvj::core::filterEffectMeta(typeId);
+    if (meta.family == pvj::core::FilterEffectFamily::Light && origTex) {
+        secondTex = origTex;
+    } else if (meta.family == pvj::core::FilterEffectFamily::Blend && m_blendBlackTex) {
         secondTex = m_blendBlackTex.get();
     }
     const quint64 bindingKey = (quint64(quintptr(sourceTex)) << 1)
@@ -1311,13 +1534,16 @@ bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
         m_belowSrb.reset(r->newShaderResourceBindings());
     }
     if (!m_feedbackUbuf) {
-        m_feedbackUbuf.reset(r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 48));
+        m_feedbackUbuf.reset(r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 80));
         if (!m_feedbackUbuf->create()) {
             return false;
         }
     }
     if (!m_feedbackSrb) {
         m_feedbackSrb.reset(r->newShaderResourceBindings());
+    }
+    if (!m_feedbackHistSrb) {
+        m_feedbackHistSrb.reset(r->newShaderResourceBindings());
     }
     if (!m_stackCombineSrb) {
         m_stackCombineSrb.reset(r->newShaderResourceBindings());
@@ -1342,6 +1568,13 @@ bool RhiMixerWidget::ensureFeedbackTargets(QRhi* r, const QSize& pixelSize)
         if (!createEffectPipeline(r, QStringLiteral(":/shaders/layer_feedback.frag.qsb"),
                                   QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
                                   m_feedbackSrb.get(), m_feedbackRp.get(), m_feedbackPipeline)) {
+            return false;
+        }
+    }
+    if (!m_feedbackHistPipeline) {
+        if (!createEffectPipeline(r, QStringLiteral(":/shaders/layer_feedback_hist.frag.qsb"),
+                                  QStringLiteral(":/shaders/layer_feedback.vert.qsb"),
+                                  m_feedbackHistSrb.get(), m_feedbackRp.get(), m_feedbackHistPipeline)) {
             return false;
         }
     }
@@ -1441,6 +1674,30 @@ void RhiMixerWidget::copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QS
         return;
     }
     runTextureCopyPass(r, cb, m_sceneTex.get(), sceneHistWriteRenderTarget(), stagePx);
+    m_sceneHistPrimed = true;
+}
+
+void RhiMixerWidget::clearFeedbackHistoryRing(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx)
+{
+    m_feedbackWriteIdx = 0;
+    m_feedbackRingFilled = 0;
+    if (!r || !cb || stagePx.isEmpty()) {
+        return;
+    }
+    if (!ensureFeedbackTargets(r, stagePx)) {
+        return;
+    }
+    const QColor black(0, 0, 0);
+    for (int k = 0; k < kFeedbackRingSize; ++k) {
+        if (m_feedbackRt[k]) {
+            cb->beginPass(m_feedbackRt[k].get(), black, { 1.0f, 0 }, nullptr);
+            cb->endPass();
+        }
+    }
+    if (m_stackRt) {
+        cb->beginPass(m_stackRt.get(), black, { 1.0f, 0 }, nullptr);
+        cb->endPass();
+    }
 }
 
 void RhiMixerWidget::runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
@@ -1468,6 +1725,30 @@ void RhiMixerWidget::runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbac
     cb->endPass();
 }
 
+void RhiMixerWidget::runFeedbackHistDisplayPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                                const QSize& stagePx, const QColor& clear,
+                                                QRhiTexture* historyRead)
+{
+    if (!r || !cb || !m_feedbackHistPipeline || !historyRead || !m_stackRt) {
+        return;
+    }
+
+    rebuildFeedbackHistShaderResourceBindings(historyRead);
+
+    QRhiResourceUpdateBatch* batch = r->nextResourceUpdateBatch();
+    updateFeedbackUniformBuffer(batch, feedbackLayer);
+    cb->resourceUpdate(batch);
+
+    cb->beginPass(m_stackRt.get(), clear, { 1.0f, 0 }, nullptr);
+    cb->setGraphicsPipeline(m_feedbackHistPipeline.get());
+    cb->setViewport(QRhiViewport(0, 0, stagePx.width(), stagePx.height()));
+    cb->setShaderResources(m_feedbackHistSrb.get());
+    QRhiCommandBuffer::VertexInput vin(m_vbuf.get(), 0);
+    cb->setVertexInput(0, 1, &vin);
+    cb->draw(4);
+    cb->endPass();
+}
+
 void RhiMixerWidget::runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int i,
                                             QRhiTexture* firstSource, const QSize& stagePx,
                                             const QColor& clear,
@@ -1478,6 +1759,15 @@ void RhiMixerWidget::runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int 
         return;
     }
     if (!m_layerFilterPingRt[i][0] || !m_layerFilterPingRt[i][1]) {
+        // #region agent log
+        agentDebugLog("RhiMixerWidget.cpp:runPerLayerFilterChain",
+                      "missing ping RT", "A",
+                      QJsonObject{
+                          { QStringLiteral("layer"), i },
+                          { QStringLiteral("ping0"), m_layerFilterPingRt[i][0] != nullptr },
+                          { QStringLiteral("ping1"), m_layerFilterPingRt[i][1] != nullptr },
+                      });
+        // #endregion
         return;
     }
     if (!ensureLayerFilterPassResources(r, i)) {
@@ -1487,6 +1777,28 @@ void RhiMixerWidget::runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int 
     const QList<pvj::core::CellFilterNode>& chain = chainOverride ? *chainOverride : m_layerFilterChain[i];
     QRhiTexture* sourceTex = firstSource;
     int writeIdx = 0;
+    // Never render into the same texture we are sampling on the first pass.
+    if (m_layerFilterPingTex[i][writeIdx].get() == firstSource) {
+        writeIdx = 1;
+    }
+    // #region agent log
+    if (i == m_activeFeedbackLayer && chainOverride) {
+        static int s_fbFilterLogCount = 0;
+        if (s_fbFilterLogCount < 40) {
+            ++s_fbFilterLogCount;
+            agentDebugLog("RhiMixerWidget.cpp:runPerLayerFilterChain",
+                          "feedback filter chain start", "B",
+                          QJsonObject{
+                              { QStringLiteral("layer"), i },
+                              { QStringLiteral("chainLen"), chain.size() },
+                              { QStringLiteral("firstSource"), qint64(reinterpret_cast<quintptr>(firstSource)) },
+                              { QStringLiteral("fbOut"), qint64(reinterpret_cast<quintptr>(feedbackWriteTexture())) },
+                              { QStringLiteral("sameAsFbOut"), firstSource == feedbackWriteTexture() },
+                              { QStringLiteral("initialWriteIdx"), writeIdx },
+                          });
+        }
+    }
+    // #endregion
 
     if (!m_blendBlackTex) {
         m_blendBlackTex.reset(r->newTexture(QRhiTexture::RGBA8, QSize(1, 1), 1));
@@ -1535,12 +1847,44 @@ void RhiMixerWidget::runPerLayerFilterChain(QRhi* r, QRhiCommandBuffer* cb, int 
             continue;
         }
 
+        const pvj::core::FilterEffectMeta nodeMeta = pvj::core::filterEffectMeta(node.typeId);
+        QRhiTexture* nodeOrigTex = nullptr;
+        if (nodeMeta.family == pvj::core::FilterEffectFamily::Light) {
+            if (!m_layerFilterOrigRt[i] && !ensureLayerFilterTargets(r, stagePx)) {
+                continue;
+            }
+            if (m_layerFilterOrigRt[i]) {
+                runTextureCopyPass(r, cb, sourceTex, m_layerFilterOrigRt[i].get(), stagePx);
+                nodeOrigTex = m_layerFilterOrigTex[i].get();
+            }
+        }
+
         const int internalPasses = qMax(1, pvj::core::filterEffectInternalPasses(node.typeId));
         for (int pass = 0; pass < internalPasses; ++pass) {
-            rebuildLayerFilterShaderResourceBindings(i, sourceTex, node.typeId);
+            rebuildLayerFilterShaderResourceBindings(i, sourceTex, node.typeId, nodeOrigTex);
             QRhiGraphicsPipeline* pipeline = ensureFilterPipeline(
                 r, node.typeId, i, m_layerFilterSrb[i].get(),
                 m_layerFilterPingRt[i][writeIdx]->renderPassDescriptor());
+            // #region agent log
+            if (nodeMeta.family == pvj::core::FilterEffectFamily::Light) {
+                static int s_lightDrawLog = 0;
+                if (s_lightDrawLog < 40) {
+                    ++s_lightDrawLog;
+                    QRhiTexture* destTex = m_layerFilterPingTex[i][writeIdx].get();
+                    agentDebugLog("RhiMixerWidget.cpp:runPerLayerFilterChain",
+                                  "light pass draw", "D",
+                                  QJsonObject{
+                                      { QStringLiteral("typeId"), node.typeId },
+                                      { QStringLiteral("layer"), i },
+                                      { QStringLiteral("pass"), pass },
+                                      { QStringLiteral("pipelineOk"), pipeline != nullptr },
+                                      { QStringLiteral("origOk"), nodeOrigTex != nullptr },
+                                      { QStringLiteral("rwHazard"), sourceTex == destTex },
+                                      { QStringLiteral("writeIdx"), writeIdx },
+                                  });
+                }
+            }
+            // #endregion
             if (!pipeline) {
                 continue;
             }
@@ -1780,10 +2124,12 @@ void RhiMixerWidget::updateFeedbackUniformBuffer(QRhiResourceUpdateBatch* batch,
         return;
     }
     const auto& fb = m_layerFeedback[feedbackLayer];
-    const float ubo[12] = {
+    const float ubo[20] = {
         float(fb.loopRetention), float(fb.saturation), float(fb.brightness), float(fb.contrast),
         float(fb.hueShift), float(fb.gamma), float(fb.rotationDeg), float(fb.zoom),
         0.5f, 0.5f, float(fb.liveInject), float(static_cast<int>(fb.wrapMode)),
+        float(fb.inBrightness), float(fb.inContrast), float(fb.inSaturation), float(fb.inHueShift),
+        float(fb.inGamma), m_opacity[feedbackLayer], 0.f, 0.f,
     };
     batch->updateDynamicBuffer(m_feedbackUbuf.get(), 0, sizeof(ubo), ubo);
 }
@@ -1808,6 +2154,22 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     if (!r || !m_pipelineReady || !m_pipeline) {
         return;
     }
+    // #region agent log
+    {
+        static bool s_loggedPath = false;
+        static int s_renderLog = 0;
+        if (!s_loggedPath) {
+            s_loggedPath = true;
+            agentDebugLog("RhiMixerWidget.cpp:render", "log path", "G",
+                          QJsonObject{ { QStringLiteral("path"), agentDebugLogPath() } });
+        }
+        if (s_renderLog < 5 && hasActiveFeedbackLayer()) {
+            ++s_renderLog;
+            agentDebugLog("RhiMixerWidget.cpp:render", "render tick with feedback", "G",
+                          QJsonObject{ { QStringLiteral("tick"), s_renderLog } });
+        }
+    }
+    // #endregion
 
     applyBackgroundLayerState();
 
@@ -1896,51 +2258,123 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
         }
     }
 
+    // Advance feedback history every rendered frame (feedback pass always runs above).
+    const bool stepFeedbackRing = hasFeedback;
+
     if (hasFeedback) {
         if (ensureFeedbackTargets(r, stagePx)) {
-            const auto inputMode = activeFeedbackInputMode();
-            QRhiTexture* feedbackBelow = m_belowTex.get();
+            QRhiTexture* feedbackBelow =
+                feedbackInjectSourceTexture(r, cb, F, stagePx, clear);
             QRhiTexture* historyRead = feedbackReadTexture();
             QList<pvj::core::CellFilterNode> preChain;
             QList<pvj::core::CellFilterNode> postChain;
             pvj::core::splitFilterChainAtFeedbackMarker(m_layerFilterChain[F], &preChain, &postChain);
-
-            if (inputMode == pvj::core::FeedbackInputMode::SceneLoopback) {
-                feedbackBelow = sceneHistReadTexture();
-                if (!feedbackBelow) {
-                    feedbackBelow = m_belowTex.get();
-                }
-            } else if (inputMode == pvj::core::FeedbackInputMode::StackComposite) {
-                runPartialMixerPass(r, cb, 0, F, m_belowRt.get(), stagePx, clear);
-                const bool hasLayersAbove = std::any_of(
-                    m_layerActive.cbegin() + F + 1, m_layerActive.cend(),
-                    [](bool active) { return active; });
-                if (hasLayersAbove && m_aboveRt) {
-                    runPartialMixerPass(r, cb, F + 1, LayerCount, m_aboveRt.get(), stagePx, clear);
-                    runStackCombinePass(r, cb, stagePx, clear);
-                    feedbackBelow = m_stackTex.get();
-                }
-            } else {
-                runPartialMixerPass(r, cb, 0, F, m_belowRt.get(), stagePx, clear);
+            if (!preChain.isEmpty() || !postChain.isEmpty()) {
+                ensureLayerFilterTargets(r, stagePx);
             }
-
-            QRhiTexture* filteredBelow = feedbackBelow;
-            if (feedbackBelow && !preChain.isEmpty()) {
-                runPerLayerFilterChain(r, cb, F, feedbackBelow, stagePx, clear, &preChain);
-                if (QRhiTexture* preFiltered = filterOutputTextureForLayer(F)) {
-                    filteredBelow = preFiltered;
+            // #region agent log
+            {
+                static int s_fbFrameLog = 0;
+                if (s_fbFrameLog < 40) {
+                    ++s_fbFrameLog;
+                    QString postType;
+                    if (!postChain.isEmpty()) {
+                        postType = postChain.last().typeId;
+                    }
+                    agentDebugLog("RhiMixerWidget.cpp:render",
+                                  "feedback frame", "A",
+                                  QJsonObject{
+                                      { QStringLiteral("frame"), s_fbFrameLog },
+                                      { QStringLiteral("F"), F },
+                                      { QStringLiteral("preLen"), preChain.size() },
+                                      { QStringLiteral("postLen"), postChain.size() },
+                                      { QStringLiteral("postType"), postType },
+                                      { QStringLiteral("ping0"), m_layerFilterPingRt[F][0] != nullptr },
+                                      { QStringLiteral("ping1"), m_layerFilterPingRt[F][1] != nullptr },
+                                      { QStringLiteral("origRt"), m_layerFilterOrigRt[F] != nullptr },
+                                      { QStringLiteral("fbOut"), feedbackWriteTexture() != nullptr },
+                                      { QStringLiteral("stageW"), stagePx.width() },
+                                      { QStringLiteral("stageH"), stagePx.height() },
+                                  });
                 }
+            }
+            // #endregion
+
+            const float feedbackOpacity = m_opacity[F];
+            const bool accumulateFeedback = feedbackOpacity > 1e-4f;
+
+            if (!accumulateFeedback) {
+                clearFeedbackHistoryRing(r, cb, stagePx);
                 m_layerFilterLastOut[F] = -1;
-            }
+            } else {
+                QRhiTexture* filteredBelow = feedbackBelow;
+                if (feedbackBelow && !preChain.isEmpty()
+                    && m_layerFilterPingRt[F][0] && m_layerFilterPingRt[F][1]) {
+                    runPerLayerFilterChain(r, cb, F, feedbackBelow, stagePx, clear, &preChain);
+                    if (QRhiTexture* preFiltered = filterOutputTextureForLayer(F)) {
+                        filteredBelow = preFiltered;
+                    }
+                    m_layerFilterLastOut[F] = -1;
+                }
 
-            if (filteredBelow && historyRead) {
-                runFeedbackPass(r, cb, F, stagePx, clear, filteredBelow, historyRead,
-                                feedbackWriteRenderTarget());
+                if (filteredBelow && historyRead) {
+                    runFeedbackPass(r, cb, F, stagePx, clear, filteredBelow, historyRead,
+                                    feedbackWriteRenderTarget());
+                    // History display: warp + wrap on the ring slot we just wrote (live params).
+                    if (QRhiTexture* histSrc = feedbackWriteTexture()) {
+                        runFeedbackHistDisplayPass(r, cb, F, stagePx, clear, histSrc);
+                    }
+                }
             }
 
             if (!postChain.isEmpty()) {
-                if (QRhiTexture* fbOut = feedbackWriteTexture()) {
-                    runPerLayerFilterChain(r, cb, F, fbOut, stagePx, clear, &postChain);
+                QRhiTexture* fbOut = feedbackWriteTexture();
+                QRhiTextureRenderTarget* fbWriteRt = feedbackWriteRenderTarget();
+                // #region agent log
+                {
+                    static int s_postLog = 0;
+                    if (s_postLog < 40) {
+                        ++s_postLog;
+                        agentDebugLog("RhiMixerWidget.cpp:render",
+                                      "postChain branch", "C",
+                                      QJsonObject{
+                                          { QStringLiteral("fbOutOk"), fbOut != nullptr },
+                                          { QStringLiteral("fbWriteRtOk"), fbWriteRt != nullptr },
+                                          { QStringLiteral("ping1Ok"), m_layerFilterPingRt[F][1] != nullptr },
+                                          { QStringLiteral("willRun"),
+                                            fbOut && fbWriteRt && m_layerFilterPingRt[F][1] },
+                                          { QStringLiteral("filterRp"), qint64(reinterpret_cast<quintptr>(m_filterRp.get())) },
+                                          { QStringLiteral("feedbackRp"),
+                                            qint64(reinterpret_cast<quintptr>(m_feedbackRp.get())) },
+                                      });
+                    }
+                }
+                // #endregion
+                if (fbOut && fbWriteRt && m_layerFilterPingRt[F][1]) {
+                    // Copy feedback output into ping-pong first — do not sample the RT we
+                    // just wrote in the feedback pass (undefined on some GPU backends).
+                    runTextureCopyPass(r, cb, fbOut, m_layerFilterPingRt[F][1].get(), stagePx);
+                    runPerLayerFilterChain(r, cb, F, m_layerFilterPingTex[F][1].get(),
+                                           stagePx, clear, &postChain);
+                    if (QRhiTexture* filtered = filterOutputTextureForLayer(F)) {
+                        // #region agent log
+                        {
+                            static int s_copyBackLog = 0;
+                            if (s_copyBackLog < 40) {
+                                ++s_copyBackLog;
+                                agentDebugLog("RhiMixerWidget.cpp:render",
+                                              "postChain copy back to fb ring", "C",
+                                              QJsonObject{
+                                                  { QStringLiteral("filteredOk"), true },
+                                                  { QStringLiteral("lastOut"), m_layerFilterLastOut[F] },
+                                              });
+                            }
+                        }
+                        // #endregion
+                        runTextureCopyPass(r, cb, filtered, fbWriteRt, stagePx);
+                    }
+                } else {
+                    m_layerFilterLastOut[F] = -1;
                 }
             } else {
                 m_layerFilterLastOut[F] = -1;
@@ -1968,10 +2402,17 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     cb->draw(4);
     cb->endPass();
 
-    if (hasFeedback) {
-        copySceneToHistory(r, cb, stagePx);
-        m_feedbackWriteIdx = quint8((m_feedbackWriteIdx + 1) % kFeedbackRingSize);
-        m_sceneHistWriteIdx = quint8(1 - m_sceneHistWriteIdx);
+    if (stepFeedbackRing) {
+        const bool accumulateFeedback =
+            F >= 0 && F < LayerCount && m_opacity[F] > 1e-4f;
+        if (accumulateFeedback) {
+            copySceneToHistory(r, cb, stagePx);
+            m_feedbackWriteIdx = quint8((m_feedbackWriteIdx + 1) % kFeedbackRingSize);
+            if (m_feedbackRingFilled < kFeedbackRingSize) {
+                ++m_feedbackRingFilled;
+            }
+            m_sceneHistWriteIdx = quint8(1 - m_sceneHistWriteIdx);
+        }
     }
 
     QRhiTexture* presentTex = m_sceneTex.get();
@@ -1993,6 +2434,10 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     cb->draw(4);
     cb->endPass();
 
+    if (hasFeedback) {
+        update();
+        emit feedbackRepaintTick();
+    }
 }
 
 void RhiMixerWidget::paintEvent(QPaintEvent* event)

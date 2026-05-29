@@ -29,16 +29,16 @@ namespace pvj::render {
 
 class MaxineFilterBackend;
 
-// Stacks up to 13 mix layers: layer 0 = fixed black background, layers 1–12 = user clips.
+// Stacks up to 14 mix layers: layer 0 = fixed black background, layers 1–13 = user clips.
 class RhiMixerWidget : public QRhiWidget
 {
     Q_OBJECT
 public:
-    static constexpr int LayerCount = 13;
-    static constexpr int kFeedbackRingSize = 16;
+    static constexpr int LayerCount = 14;
+    static constexpr int kFeedbackRingSize = pvj::core::kFeedbackRingCapacity;
     static constexpr int BackgroundLayerIndex = 0;
     static constexpr int UserLayerMin = 1;
-    static constexpr int UserLayerMax = 12;
+    static constexpr int UserLayerMax = 13;
 
     explicit RhiMixerWidget(QWidget* parent = nullptr);
     ~RhiMixerWidget() override;
@@ -46,7 +46,7 @@ public:
     void setLabel(const QString& text);
     QString label() const { return m_label; }
 
-    void setLayerOpacity(int layer, float o);
+    void setLayerOpacity(int layer, float o, bool requestRepaint = true);
     void setLayerCopyMode(int layer, pvj::core::CopyMode mode);
     void setLayerActive(int layer, bool active);
 
@@ -81,9 +81,15 @@ public:
     void setStagePixelSize(QSize px);
     QSize stagePixelSize() const { return m_stagePixelSize; }
 
+    bool hasActiveFeedbackLayer() const;
+
 public slots:
     void setFrame(int layer, QImage frame, qint64 pts = 0);
     void clearFrame(int layer);
+
+signals:
+    /// Emitted when this mixer schedules another feedback animation frame (preview → fullscreen).
+    void feedbackRepaintTick();
 
 protected:
     void initialize(QRhiCommandBuffer* cb) override;
@@ -102,6 +108,7 @@ private:
     void rebuildMixerShaderResourceBindings();
     void rebuildBelowMixerShaderResourceBindings();
     void rebuildFeedbackShaderResourceBindings(QRhiTexture* belowTex, QRhiTexture* historyRead);
+    void rebuildFeedbackHistShaderResourceBindings(QRhiTexture* historyRead);
     void rebuildStackCombineShaderResourceBindings();
     void rebuildTextureCopyShaderResourceBindings(QRhiTexture* sourceTex);
     void rebuildPresentShaderResourceBindings(QRhiTexture* sourceTex);
@@ -109,7 +116,6 @@ private:
     void uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch);
     void updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive = -1,
                                   int minLayerInclusive = 0);
-    bool hasActiveFeedbackLayer() const;
     bool feedbackKeyFromAboveActive() const;
     void updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batch,
                                        int minLayerInclusive, int maxLayerExclusive);
@@ -121,7 +127,8 @@ private:
     bool ensureLayerFilterTargets(QRhi* r, const QSize& pixelSize);
     bool ensureLayerFilterPassResources(QRhi* r, int layer);
     void rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex,
-                                                  const QString& typeId);
+                                                  const QString& typeId,
+                                                  QRhiTexture* origTex = nullptr);
     QRhiGraphicsPipeline* ensureFilterPipeline(QRhi* r, const QString& typeId, int layerIndex,
                                                QRhiShaderResourceBindings* srb,
                                                QRhiRenderPassDescriptor* rp);
@@ -130,7 +137,8 @@ private:
                                 const QList<pvj::core::CellFilterNode>* chainOverride = nullptr);
     bool ensureOutputFilterTargets(QRhi* r, const QSize& pixelSize);
     bool ensureOutputFilterPassResources(QRhi* r);
-    void rebuildOutputFilterShaderResourceBindings(QRhiTexture* sourceTex, const QString& typeId);
+    void rebuildOutputFilterShaderResourceBindings(QRhiTexture* sourceTex, const QString& typeId,
+                                                   QRhiTexture* origTex = nullptr);
     void runOutputFilterChain(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
     QRhiTexture* outputFilterResultTexture() const;
 
@@ -142,16 +150,22 @@ private:
                          const QSize& stagePx, const QColor& clear,
                          QRhiTexture* belowTex, QRhiTexture* historyRead,
                          QRhiTextureRenderTarget* writeRt);
+    void runFeedbackHistDisplayPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                    const QSize& stagePx, const QColor& clear,
+                                    QRhiTexture* historyRead);
     void runStackCombinePass(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
     bool ensureTextureCopyPipeline(QRhi* r, QRhiRenderPassDescriptor* rp);
     void runTextureCopyPass(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx);
     void copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
+    void clearFeedbackHistoryRing(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
     void recomputeActiveFeedbackLayer();
 
     void applyBackgroundLayerState();
 
     pvj::core::FeedbackInputMode activeFeedbackInputMode() const;
+    QRhiTexture* feedbackInjectSourceTexture(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                             const QSize& stagePx, const QColor& clear);
     QRhiTexture* feedbackWriteTexture() const;
     QRhiTexture* feedbackReadTexture() const;
     QRhiTextureRenderTarget* feedbackWriteRenderTarget() const;
@@ -186,6 +200,8 @@ private:
     std::array<bool, LayerCount> m_layerIsFeedback{};
     std::array<pvj::core::FeedbackParams, LayerCount> m_layerFeedback{};
     quint8 m_feedbackWriteIdx = 0;
+    /// Completed feedback writes since ring reset (caps frameDelay reads).
+    int m_feedbackRingFilled = 0;
     QSize m_feedbackPixelSize;
 
     std::array<std::unique_ptr<QRhiTexture>, kFeedbackRingSize> m_feedbackTex{};
@@ -194,6 +210,8 @@ private:
     std::unique_ptr<QRhiBuffer> m_feedbackUbuf;
     std::unique_ptr<QRhiShaderResourceBindings> m_feedbackSrb;
     std::unique_ptr<QRhiGraphicsPipeline> m_feedbackPipeline;
+    std::unique_ptr<QRhiShaderResourceBindings> m_feedbackHistSrb;
+    std::unique_ptr<QRhiGraphicsPipeline> m_feedbackHistPipeline;
 
     std::unique_ptr<QRhiTexture> m_belowTex;
     std::unique_ptr<QRhiTextureRenderTarget> m_belowRt;
@@ -213,6 +231,7 @@ private:
     std::array<std::unique_ptr<QRhiTexture>, 2> m_sceneHistTex{};
     std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2> m_sceneHistRt{};
     quint8 m_sceneHistWriteIdx = 0;
+    bool m_sceneHistPrimed = false;
 
     std::unique_ptr<QRhiShaderResourceBindings> m_textureCopySrb;
     std::unique_ptr<QRhiGraphicsPipeline> m_textureCopyPipeline;
@@ -249,6 +268,10 @@ private:
     // Generic per-layer filter chain ping-pong targets.
     std::array<std::array<std::unique_ptr<QRhiTexture>, 2>, LayerCount> m_layerFilterPingTex{};
     std::array<std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2>, LayerCount> m_layerFilterPingRt{};
+    std::array<std::unique_ptr<QRhiTexture>, LayerCount> m_layerFilterOrigTex{};
+    std::array<std::unique_ptr<QRhiTextureRenderTarget>, LayerCount> m_layerFilterOrigRt{};
+    std::unique_ptr<QRhiTexture> m_outputFilterOrigTex;
+    std::unique_ptr<QRhiTextureRenderTarget> m_outputFilterOrigRt;
     std::array<int, LayerCount> m_layerFilterLastOut{};
     std::array<std::unique_ptr<QRhiBuffer>, LayerCount> m_layerFilterUbuf{};
     std::array<std::unique_ptr<QRhiShaderResourceBindings>, LayerCount> m_layerFilterSrb{};

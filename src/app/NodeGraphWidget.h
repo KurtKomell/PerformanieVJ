@@ -40,6 +40,9 @@ public:
     explicit NodeGraphWidget(QWidget* parent = nullptr);
 
     void setCell(pvj::core::Cell* cell, pvj::core::Project* project);
+    void setDeckContext(int bankSetIndex, int bankIndex, int cellIndex);
+    void setMidiMappingEditMode(bool on);
+    void syncMidiMapOverlays();
     void refresh();
 
 signals:
@@ -74,7 +77,7 @@ private:
     void rebuildLayout();
     int  hitTest(const QPointF& pos) const;
     int  finalIndexFromGhostX(double gx) const;
-    void buildCatalogMenu(QMenu* root, const std::function<void(const QString& typeId)>& onPick);
+    void pickFilterType(const std::function<void(const QString& typeId)>& onPick);
     QString sourceTitleLine() const;
     QString filterLabelFor(const QString& typeId) const;
 
@@ -92,10 +95,15 @@ private:
     const core::FilterParamSpec* paramSpecFor(const QString& typeId, const QString& paramName) const;
     void emitChainEdited();
     void emitParamsEdited();
+    QString midiLabelForWidget(QWidget* w) const;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
     pvj::core::Cell*    m_cell    = nullptr;
     pvj::core::Project* m_project = nullptr;
+    int m_bankSetIndex = -1;
+    int m_bankIndex    = -1;
+    int m_cellIndex    = -1;
+    bool m_midiMappingEditMode = false;
 
     QVector<GraphNode> m_nodes;
     int                  m_selectedGraphIndex = -1;

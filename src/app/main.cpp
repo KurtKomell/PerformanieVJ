@@ -3,6 +3,7 @@
 #include <QSurfaceFormat>
 #include <QStyleFactory>
 
+#include "AppUserPaths.h"
 #include "MainWindow.h"
 
 #include "render/maxine/MaxineFilterBackend.h"
@@ -149,6 +150,7 @@ int main(int argc, char* argv[])
     QCoreApplication::setOrganizationName("PerformanieVJ");
     QCoreApplication::setApplicationName("PerformanieVJ");
     QCoreApplication::setApplicationVersion("0.1.0");
+    pvj::app::configureUserStorage();
 
     // Request a modern OpenGL context up front so QRhi/QOpenGLWidget can use it
     // consistently across platforms once the render pipeline (M5) is wired in.

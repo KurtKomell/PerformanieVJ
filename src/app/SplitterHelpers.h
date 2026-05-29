@@ -2,7 +2,10 @@
 
 #include <QChildEvent>
 #include <QEnterEvent>
+#include <QEvent>
 #include <QMouseEvent>
+#include <QResizeEvent>
+#include <QShowEvent>
 #include <QSplitter>
 #include <QSplitterHandle>
 
@@ -22,26 +25,14 @@ public:
     }
 
 protected:
-    void enterEvent(QEnterEvent* event) override
-    {
-        applySafeCursor();
-        QSplitterHandle::enterEvent(event);
-    }
-
-    void mouseMoveEvent(QMouseEvent* event) override
-    {
-        applySafeCursor();
-        QSplitterHandle::mouseMoveEvent(event);
-    }
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void changeEvent(QEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
 
 private:
-    void applySafeCursor()
-    {
-#ifndef QT_NO_CURSOR
-        // Do not use Split* or Size* shapes — they go through qt_createIconMask on Windows.
-        unsetCursor();
-#endif
-    }
+    void applySafeCursor();
 };
 
 /// QSplitter that keeps handles free of pixmap cursors (including hidden handle 0).
@@ -50,52 +41,20 @@ private:
 class PvjSplitter final : public QSplitter
 {
 public:
-    explicit PvjSplitter(QWidget* parent = nullptr)
-        : QSplitter(parent)
-    {
-    }
-    explicit PvjSplitter(Qt::Orientation orientation, QWidget* parent = nullptr)
-        : QSplitter(orientation, parent)
-    {
-    }
+    explicit PvjSplitter(QWidget* parent = nullptr);
+    explicit PvjSplitter(Qt::Orientation orientation, QWidget* parent = nullptr);
 
-    void setOrientation(Qt::Orientation o)
-    {
-        QSplitter::setOrientation(o);
-        applySafeCursorToAllHandles();
-    }
-
-    bool restoreState(const QByteArray& state)
-    {
-        const bool ok = QSplitter::restoreState(state);
-        if (ok) {
-            applySafeCursorToAllHandles();
-        }
-        return ok;
-    }
+    void setOrientation(Qt::Orientation o);
+    bool restoreState(const QByteArray& state);
 
 protected:
     QSplitterHandle* createHandle() override { return new PvjSplitterHandle(orientation(), this); }
 
-    void childEvent(QChildEvent* e) override
-    {
-        QSplitter::childEvent(e);
-        if (e->added() && qobject_cast<QSplitterHandle*>(e->child()) != nullptr) {
-            applySafeCursorToAllHandles();
-        }
-    }
+    void childEvent(QChildEvent* e) override;
 
 private:
-    void applySafeCursorToAllHandles()
-    {
-#ifndef QT_NO_CURSOR
-        for (int i = 0; i < count(); ++i) {
-            if (QSplitterHandle* h = handle(i)) {
-                h->unsetCursor();
-            }
-        }
-#endif
-    }
+    void ensureSafeSplitterHandles();
+    void applySafeCursorToAllHandles();
 };
 
 } // namespace pvj::app

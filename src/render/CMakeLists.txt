@@ -20,6 +20,7 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/mixer.frag
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.vert
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.frag
+    ${CMAKE_SOURCE_DIR}/shaders/layer_feedback_hist.frag
     ${CMAKE_SOURCE_DIR}/shaders/stack_combine.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_blur.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_color.frag
@@ -37,6 +38,7 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/effect_light.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_revival.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_temporal.frag
+    ${CMAKE_SOURCE_DIR}/shaders/effect_film.frag
     ${CMAKE_SOURCE_DIR}/shaders/transition.vert
     ${CMAKE_SOURCE_DIR}/shaders/transition_crossfade.frag
     ${CMAKE_SOURCE_DIR}/shaders/transition_luma.frag
@@ -49,6 +51,7 @@ set(_pvj_shader_outputs
     mixer.frag.qsb
     layer_feedback.vert.qsb
     layer_feedback.frag.qsb
+    layer_feedback_hist.frag.qsb
     stack_combine.frag.qsb
     effect_blur.frag.qsb
     effect_color.frag.qsb
@@ -66,6 +69,7 @@ set(_pvj_shader_outputs
     effect_light.frag.qsb
     effect_revival.frag.qsb
     effect_temporal.frag.qsb
+    effect_film.frag.qsb
     transition.vert.qsb
     transition_crossfade.frag.qsb
     transition_luma.frag.qsb

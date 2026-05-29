@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/Model.h"
+
 #include <QPoint>
 #include <QVariant>
 
@@ -12,6 +14,8 @@ namespace pvj::app {
 class MidiLearnMenu
 {
 public:
+    static QString formatLabel(const pvj::core::PropertyMapping& mapping);
+
     static void tagMidiWidget(QWidget* widget, const QString& propertyId,
                               const QVariant& noteValue = QVariant());
 

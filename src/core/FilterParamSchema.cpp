@@ -3,6 +3,8 @@
 #include "FilterCatalog.h"
 #include "FilterEffectIds.h"
 
+#include <QSet>
+
 #include <QtGlobal>
 #include <utility>
 
@@ -10,11 +12,13 @@ namespace pvj::core {
 namespace {
 
 FilterParamSpec floatParam(
-    const char* name, const char* label, double minV, double maxV, double defaultV)
+    const char* name, const char* label, double minV, double maxV, double defaultV,
+    const char* section = "")
 {
     FilterParamSpec p;
     p.name = QString::fromLatin1(name);
     p.label = QString::fromLatin1(label);
+    p.section = QString::fromLatin1(section);
     p.kind = FilterParamKind::Float;
     p.minV = minV;
     p.maxV = maxV;
@@ -22,38 +26,36 @@ FilterParamSpec floatParam(
     return p;
 }
 
-FilterParamSpec angleParam(const char* name, const char* label, double defaultV = 0.0)
+FilterParamSpec angleParam(const char* name, const char* label, double defaultV = 0.0,
+                           const char* section = "")
 {
-    FilterParamSpec p = floatParam(name, label, -180.0, 180.0, defaultV);
+    FilterParamSpec p = floatParam(name, label, -180.0, 180.0, defaultV, section);
     p.kind = FilterParamKind::Angle;
     return p;
 }
 
-FilterParamSpec percentParam(const char* name, const char* label, double defaultV = 0.5)
+FilterParamSpec percentParam(const char* name, const char* label, double defaultV = 0.5,
+                             const char* section = "")
 {
-    FilterParamSpec p = floatParam(name, label, 0.0, 1.0, defaultV);
+    FilterParamSpec p = floatParam(name, label, 0.0, 1.0, defaultV, section);
     p.kind = FilterParamKind::Percent;
     return p;
 }
 
-FilterParamSpec colorParam(const char* name, const char* label, double defaultV = 1.0)
+FilterParamSpec boolParam(const char* name, const char* label, bool defaultV = false,
+                          const char* section = "")
 {
-    FilterParamSpec p = floatParam(name, label, 0.0, 1.0, defaultV);
-    p.kind = FilterParamKind::Color;
-    return p;
-}
-
-FilterParamSpec boolParam(const char* name, const char* label, bool defaultV = false)
-{
-    FilterParamSpec p = floatParam(name, label, 0.0, 1.0, defaultV ? 1.0 : 0.0);
+    FilterParamSpec p = floatParam(name, label, 0.0, 1.0, defaultV ? 1.0 : 0.0, section);
     p.kind = FilterParamKind::Bool;
     return p;
 }
 
-FilterParamSpec enumParam(
-    const char* name, const char* label, std::initializer_list<const char*> labels, int defaultIndex = 0)
+FilterParamSpec enumParam(const char* name, const char* label,
+                          std::initializer_list<const char*> labels, int defaultIndex = 0,
+                          const char* section = "")
 {
-    FilterParamSpec p = floatParam(name, label, 0.0, static_cast<double>(labels.size() - 1), defaultIndex);
+    FilterParamSpec p = floatParam(name, label, 0.0, static_cast<double>(labels.size() - 1),
+                                   defaultIndex, section);
     p.kind = FilterParamKind::EnumIndex;
     for (const char* item : labels) {
         p.enumLabels.push_back(QString::fromLatin1(item));
@@ -61,306 +63,499 @@ FilterParamSpec enumParam(
     return p;
 }
 
+FilterParamSpec colorParam(const char* name, const char* label, int defaultRgb = 0xFFFFFF,
+                           const char* section = "")
+{
+    FilterParamSpec p = floatParam(name, label, 0.0, 16777215.0, double(defaultRgb), section);
+    p.kind = FilterParamKind::Color;
+    return p;
+}
+
+bool isBlurTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("gaussian_blur"),
+        QStringLiteral("box_blur"),
+        QStringLiteral("directional_blur"),
+        QStringLiteral("radial_blur"),
+        QStringLiteral("zoom_blur"),
+        QStringLiteral("mosaic_blur"),
+        QStringLiteral("lens_blur"),
+        QStringLiteral("sharpen"),
+        QStringLiteral("sharpen_edges"),
+        QStringLiteral("soften_sharpen"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+bool isLightTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("aperture_diffraction"),
+        QStringLiteral("glow"),
+        QStringLiteral("halation"),
+        QStringLiteral("lens_flare"),
+        QStringLiteral("lens_reflections"),
+        QStringLiteral("light_rays"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+bool isFilmTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("film_look"),
+        QStringLiteral("film_color"),
+        QStringLiteral("film_split_tone"),
+        QStringLiteral("film_vignette"),
+        QStringLiteral("film_halation"),
+        QStringLiteral("film_bloom"),
+        QStringLiteral("film_grain"),
+        QStringLiteral("film_flicker"),
+        QStringLiteral("film_gate_weave"),
+        QStringLiteral("film_gate"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+QVector<FilterParamSpec> gaussianBlurParams()
+{
+    return {
+        percentParam("horizontal_strength", "Horizontal Strength", 0.5, "Controls"),
+        percentParam("vertical_strength", "Vertical Strength", 0.5, "Controls"),
+        enumParam("border_type", "Border Type",
+                  { "Black", "Replicate", "Reflect", "Wrap Around" }, 0, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> boxBlurParams()
+{
+    return {
+        floatParam("iterations", "Iterations", 1.0, 6.0, 1.0, "Controls"),
+        percentParam("horizontal_strength", "Horizontal Strength", 0.5, "Controls"),
+        percentParam("vertical_strength", "Vertical Strength", 0.5, "Controls"),
+        boolParam("same_horizontal_vertical", "Same Horizontal/Vertical", true, "Controls"),
+        enumParam("blur_type", "Blur Type", { "Realistic", "Stylized" }, 0, "Controls"),
+        enumParam("border_type", "Border Type",
+                  { "Black", "Replicate", "Reflect", "Wrap Around" }, 0, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> directionalBlurParams()
+{
+    return {
+        percentParam("blur_strength", "Blur Strength", 0.5, "Controls"),
+        angleParam("blur_angle", "Blur Angle", 0.0, "Controls"),
+        boolParam("symmetric_blur", "Symmetric Blur", false, "Controls"),
+        enumParam("blur_type", "Blur Type", { "Realistic", "Stylized" }, 0, "Controls"),
+        enumParam("border_type", "Border Type",
+                  { "Black", "Replicate", "Reflect", "Wrap Around" }, 0, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> radialBlurParams()
+{
+    return {
+        percentParam("smooth_strength", "Smooth Strength", 0.5, "Controls"),
+        enumParam("blur_symmetry", "Blur Symmetry",
+                  { "Symmetric", "Clockwise", "Anti-Clockwise" }, 0, "Controls"),
+        enumParam("blur_type", "Blur Type", { "Realistic", "Stylized" }, 0, "Controls"),
+        enumParam("border_type", "Border Type",
+                  { "Black", "Replicate", "Reflect", "Wrap Around" }, 0, "Controls"),
+        enumParam("quality", "Quality", { "Faster", "Better", "Best" }, 1, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> zoomBlurParams()
+{
+    return {
+        enumParam("blur_type", "Blur Type", { "Realistic", "Stylized" }, 0, "Controls"),
+        percentParam("zoom_amount", "Zoom Amount", 0.5, "Controls"),
+        percentParam("smooth_strength", "Smooth Strength", 0.5, "Controls"),
+        percentParam("center_exclusion", "Center Exclusion", 0.0, "Controls"),
+        enumParam("border_type", "Border Type",
+                  { "Black", "Replicate", "Reflect", "Wrap Around" }, 0, "Controls"),
+        enumParam("quality", "Quality", { "Faster", "Better", "Best" }, 1, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> mosaicBlurParams()
+{
+    return {
+        floatParam("pixel_frequency", "Pixel Frequency", 1.0, 500.0, 100.0, "Controls"),
+        enumParam("cell_shape", "Cell Shape", { "Square", "Hexagon", "Triangle" }, 0, "Controls"),
+        floatParam("aliasing", "Aliasing", 0.0, 1.0, 1.0, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> lensBlurParams()
+{
+    return {
+        floatParam("blur_size", "Blur Size", 0.0, 64.0, 4.0, "Controls"),
+        percentParam("highlights", "Highlights", 0.35, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+        boolParam("use_alpha", "Use Alpha", true, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> sharpenParams()
+{
+    return {
+        floatParam("sharpen_amount", "Sharpen Amount", 0.0, 5.0, 1.8, "Main Controls"),
+        floatParam("fine_detail_size", "Fine Detail Size", 0.0, 1.0, 0.05, "Detail Levels"),
+        floatParam("fine_detail", "Fine Detail", 0.0, 2.0, 1.0, "Detail Levels"),
+        floatParam("medium_details", "Medium Details", 0.0, 2.0, 1.0, "Detail Levels"),
+        floatParam("large_details", "Large Details", 0.0, 2.0, 1.0, "Detail Levels"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> sharpenEdgesParams()
+{
+    return {
+        floatParam("sharpen_amount", "Sharpen Amount", 0.0, 2.0, 0.5, "Main Controls"),
+        percentParam("sharpen_radius", "Sharpen Radius", 0.5, "Main Controls"),
+        boolParam("display_edges", "Display Edges", false, "Edge Detection"),
+        percentParam("pre_denoise", "Pre Denoise", 0.0, "Edge Detection"),
+        percentParam("edge_detect_threshold", "Edge Detect Threshold", 0.2, "Edge Detection"),
+        percentParam("edge_mask_strength", "Edge Mask Strength", 0.5, "Edge Detection"),
+        percentParam("edge_blur", "Edge Blur", 0.5, "Edge Detection"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> softenSharpenParams()
+{
+    return {
+        floatParam("small_texture", "Small Texture", -1.0, 1.0, 0.0, "Texture"),
+        floatParam("medium_texture", "Medium Texture", -1.0, 1.0, -0.8, "Texture"),
+        floatParam("large_texture", "Large Texture", -1.0, 1.0, -0.3, "Texture"),
+        floatParam("small_texture_size", "Small Texture Size", 0.0, 1.0, 0.5, "Texture"),
+        percentParam("coring_softness", "Coring Softness", 0.0, "Coring"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
+}
+
 QHash<QString, FilterNodeSpec> buildSchemas()
 {
     QHash<QString, FilterNodeSpec> schema;
-    const auto& catalog = filterCatalogEntries();
-    schema.reserve(catalog.size() + 32);
+    schema.reserve(40);
 
-    auto setParams = [&](const char* typeId, QVector<FilterParamSpec> params) {
-        FilterNodeSpec spec;
-        spec.typeId = QString::fromLatin1(typeId);
-        spec.params = std::move(params);
-        if (spec.params.size() > 4) {
-            spec.params.resize(4);
-        }
-        schema.insert(spec.typeId, spec);
-    };
-
-    auto setParamsById = [&](const QString& typeId, QVector<FilterParamSpec> params) {
+    auto insertSpec = [&](const QString& typeId, QVector<FilterParamSpec> params) {
         FilterNodeSpec spec;
         spec.typeId = typeId;
         spec.params = std::move(params);
-        if (spec.params.size() > 4) {
-            spec.params.resize(4);
-        }
         schema.insert(spec.typeId, spec);
     };
 
-    // Baseline schema for every catalog typeId (guarantees full coverage).
-    // Resolume docs describe video-effect "Opacity" as universal mix control.
-    // Keep key "amount" for compatibility with existing mappings/tests.
-    for (const FilterCatalogEntry& entry : catalog) {
-        setParamsById(entry.typeId, { percentParam("amount", "Opacity", 1.0) });
-    }
+    insertSpec(QStringLiteral("gaussian_blur"), gaussianBlurParams());
+    insertSpec(QStringLiteral("box_blur"), boxBlurParams());
+    insertSpec(QStringLiteral("directional_blur"), directionalBlurParams());
+    insertSpec(QStringLiteral("radial_blur"), radialBlurParams());
+    insertSpec(QStringLiteral("zoom_blur"), zoomBlurParams());
+    insertSpec(QStringLiteral("mosaic_blur"), mosaicBlurParams());
+    insertSpec(QStringLiteral("lens_blur"), lensBlurParams());
+    insertSpec(QStringLiteral("sharpen"), sharpenParams());
+    insertSpec(QStringLiteral("sharpen_edges"), sharpenEdgesParams());
+    insertSpec(QStringLiteral("soften_sharpen"), softenSharpenParams());
 
-    setParamsById(feedbackMarkerTypeId(), {});
+    insertSpec(QStringLiteral("invert"),
+        { boolParam("invert_red", "Invert Red", true, "Channels"),
+          boolParam("invert_green", "Invert Green", true, "Channels"),
+          boolParam("invert_blue", "Invert Blue", true, "Channels"),
+          boolParam("invert_alpha", "Invert Alpha", false, "Channels") });
 
-    // Blur family
-    for (const char* id : { "blur", "fast_blur", "gaussian_blur", "box_blur", "temporal_blur" }) {
-        setParams(id,
-            { percentParam("amount", "Amount", 0.75),
-                floatParam("radius", "Radius", 0.0, 128.0, 12.0) });
-    }
-    for (const char* id : { "radial_blur", "directional_blur", "motion_blur", "zoom_blur" }) {
-        setParams(id,
-            { percentParam("amount", "Amount", 0.75),
-                floatParam("radius", "Radius", 0.0, 128.0, 10.0),
-                angleParam("angle", "Angle", 0.0) });
-    }
-    setParams("sharpen", { percentParam("amount", "Amount", 0.4) });
-    setParams("denoise", { percentParam("amount", "Amount", 0.3) });
+    insertSpec(QStringLiteral("chromatic_adaptation"),
+        { enumParam("method", "Method",
+                    { "CAT02", "Bradford Linear", "Von Kries", "Sharp", "CMCCAT2000" }, 0, "Controls"),
+          floatParam("source_temp", "Source Temperature", 1000.0, 20000.0, 6500.0, "Source"),
+          floatParam("source_tint", "Source Tint", -1.0, 1.0, 0.0, "Source"),
+          floatParam("target_temp", "Target Temperature", 1000.0, 20000.0, 6500.0, "Target"),
+          floatParam("target_tint", "Target Tint", -1.0, 1.0, 0.0, "Target"),
+          percentParam("blend", "Blend", 1.0, "Global") });
 
-    // Color family
-    for (const char* id :
-        { "color", "color_correction", "hsl", "curves", "levels", "selective_color", "channel_mixer", "color_lookup" }) {
-        setParams(id,
-            { percentParam("amount", "Amount", 1.0),
-                floatParam("brightness", "Brightness", -1.0, 1.0, 0.0),
-                floatParam("contrast", "Contrast", 0.0, 2.0, 1.0),
-                floatParam("saturation", "Saturation", 0.0, 2.0, 1.0) });
-    }
-    setParams("color_intensity", { floatParam("intensity", "Intensity", 0.0, 2.0, 1.0) });
-    setParams("color_balance",
-        { colorParam("red", "Red", 1.0), colorParam("green", "Green", 1.0), colorParam("blue", "Blue", 1.0) });
-    setParams("brightness", { floatParam("value", "Brightness", -1.0, 1.0, 0.0) });
-    setParams("contrast", { floatParam("value", "Contrast", 0.0, 2.0, 1.0) });
-    setParams("gamma", { floatParam("value", "Gamma", 0.1, 4.0, 1.0) });
-    setParams("exposure", { floatParam("value", "Exposure", -4.0, 4.0, 0.0) });
-    setParams("saturation", { floatParam("value", "Saturation", 0.0, 2.0, 1.0) });
-    setParams("hue", { angleParam("angle", "Hue", 0.0) });
-    setParams("hue_rotate", { angleParam("angle", "Hue Rotate", 0.0) });
-    setParams("invert", { boolParam("enabled", "Enabled", true) });
-    setParams("solarize", { floatParam("threshold", "Threshold", 0.0, 1.0, 0.5) });
-    setParams("tint", { angleParam("hue", "Hue", 0.0), floatParam("strength", "Strength", 0.0, 1.0, 0.5) });
-    setParams("black_white", { floatParam("mix", "Mix", 0.0, 1.0, 1.0) });
-    setParams("posterize", { floatParam("levels", "Levels", 2.0, 64.0, 8.0) });
-    setParams("threshold", { floatParam("value", "Threshold", 0.0, 1.0, 0.5) });
-    // Manual examples describe Colorize with hue/brightness style controls.
-    setParams("colorize",
-        { angleParam("hue", "Hue", 0.0),
-          floatParam("brightness", "Brightness", -1.0, 1.0, 0.0),
-          floatParam("saturation", "Saturation", 0.0, 1.0, 1.0) });
-    setParams("chromatic_aberration",
-        { floatParam("distance", "Distance", 0.0, 100.0, 2.0), angleParam("angle", "Angle", 0.0) });
+    insertSpec(QStringLiteral("color_compressor"),
+        { angleParam("target_hue", "Target Hue", 0.0, "Compressor"),
+          percentParam("compress_hue", "Compress Hue", 0.5, "Compressor"),
+          percentParam("compress_saturation", "Compress Saturation", 0.5, "Compressor"),
+          percentParam("compress_luminance", "Compress Luminance", 0.5, "Compressor"),
+          percentParam("blend", "Blend", 1.0, "Global") });
 
-    // Distort / transform family
-    setParams("transform",
-        { floatParam("scale", "Scale", 0.0, 4.0, 1.0), angleParam("rotation", "Rotation", 0.0),
-            floatParam("offset_x", "Offset X", -1.0, 1.0, 0.0), floatParam("offset_y", "Offset Y", -1.0, 1.0, 0.0) });
-    setParams("scale", { floatParam("value", "Scale", 0.0, 4.0, 1.0) });
-    setParams("rotate", { angleParam("angle", "Angle", 0.0) });
-    setParams("flip", { enumParam("mode", "Mode", { "Horizontal", "Vertical", "Both" }, 0) });
-    setParams("flip_horizontal", { boolParam("enabled", "Enabled", true) });
-    setParams("flip_vertical", { boolParam("enabled", "Enabled", true) });
-    // Resolume docs/tutorials refer to this control as "Divisions" (Bendoscope/Kaleido style).
-    for (const char* id : { "mirror", "mirror_quad", "mirror_stripes", "multi_mirror", "kaleido", "kaleidoscope" }) {
-        setParams(id,
-            { floatParam("divisions", "Divisions", 1.0, 32.0, 4.0), angleParam("angle", "Angle", 0.0),
-                percentParam("mix", "Mix", 1.0) });
-    }
-    for (const char* id : { "tile", "motion_tile" }) {
-        setParams(id,
-            { floatParam("repeat_x", "Repeat X", 1.0, 32.0, 2.0), floatParam("repeat_y", "Repeat Y", 1.0, 32.0, 2.0),
-                percentParam("mirror", "Mirror", 0.0) });
-    }
-    for (const char* id : { "ripple", "wave", "twirl", "bulge", "fisheye", "bend", "warp", "spherize", "cylinder", "cube", "liquify", "mesh_warp" }) {
-        setParams(id,
-            { percentParam("amount", "Amount", 0.5), floatParam("frequency", "Frequency", 0.0, 32.0, 4.0),
-                floatParam("speed", "Speed", -10.0, 10.0, 0.0) });
-    }
-    // Resolume Distortion naming in older manuals: Distort + Radius.
-    setParams("distortion",
-        { percentParam("distort", "Distort", 0.5),
-          floatParam("radius", "Radius", 0.0, 1.0, 0.5) });
-    setParams("zoom", { floatParam("amount", "Amount", 0.0, 4.0, 1.0) });
-    setParams("polar", { percentParam("amount", "Amount", 1.0) });
-    setParams("polarizer", { angleParam("angle", "Angle", 0.0), percentParam("amount", "Amount", 1.0) });
-    // Resolume-style naming: horizontal/vertical displacement factors.
-    setParams("displacement",
-        { floatParam("horizontal", "Horizontal", -1.0, 1.0, 0.0),
-          floatParam("vertical", "Vertical", -1.0, 1.0, 0.0),
-          percentParam("amount", "Amount", 0.5) });
-    setParams("pixelate", { floatParam("size", "Size", 1.0, 256.0, 8.0) });
-    setParams("smooth_transform", { percentParam("smoothness", "Smoothness", 0.5) });
-    setParams("screen_shake",
-        { percentParam("amount", "Amount", 0.3), floatParam("frequency", "Frequency", 0.1, 30.0, 8.0) });
-    setParams("space_warper",
-        { percentParam("amount", "Amount", 0.6), floatParam("frequency", "Frequency", 0.0, 16.0, 2.0) });
-    setParams("shifty", { percentParam("amount", "Amount", 0.5), angleParam("direction", "Direction", 0.0) });
+    insertSpec(QStringLiteral("color_stabilizer"),
+        { enumParam("match", "Match", { "Luminance", "Color", "Both" }, 2, "Controls"),
+          percentParam("strength", "Strength", 0.5, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global") });
 
-    // Generate / blend
-    for (const char* id : { "glow", "bloom", "god_rays" }) {
-        setParams(id,
-            { percentParam("amount", "Amount", 0.6), floatParam("threshold", "Threshold", 0.0, 1.0, 0.5),
-                floatParam("radius", "Radius", 0.0, 128.0, 16.0) });
-    }
-    setParams("strobe", { floatParam("rate", "Rate", 0.0, 20.0, 8.0), percentParam("duty", "Duty", 0.5) });
-    setParams("trails", { percentParam("strength", "Strength", 0.75), percentParam("decay", "Decay", 0.2) });
-    setParams("light_leak", { percentParam("amount", "Amount", 0.6), angleParam("angle", "Angle", 0.0) });
-    for (const char* id : { "noise", "rgb_noise", "video_noise", "film_grain" }) {
-        setParams(id, { percentParam("amount", "Amount", 0.2), floatParam("speed", "Speed", 0.0, 10.0, 1.0) });
-    }
-    setParams("halftone", { floatParam("size", "Size", 1.0, 128.0, 8.0), angleParam("angle", "Angle", 0.0) });
-    setParams("vignette", { percentParam("amount", "Amount", 0.5), percentParam("softness", "Softness", 0.5) });
-    setParams("spotlight",
-        { percentParam("amount", "Amount", 0.6), floatParam("size", "Size", 0.0, 2.0, 0.5),
-            floatParam("falloff", "Falloff", 0.0, 1.0, 0.5) });
-    setParams("drop_shadow",
-        { percentParam("opacity", "Opacity", 0.5), floatParam("distance", "Distance", 0.0, 128.0, 8.0),
-            angleParam("angle", "Angle", 45.0) });
-    setParams("rainbow", { percentParam("amount", "Amount", 1.0), floatParam("speed", "Speed", -4.0, 4.0, 0.5) });
-    setParams("prismatic", { percentParam("amount", "Amount", 0.5), floatParam("samples", "Samples", 1.0, 16.0, 4.0) });
-    setParams("replicate", { floatParam("count", "Count", 1.0, 32.0, 4.0), percentParam("spread", "Spread", 0.25) });
-    setParams("echo", { percentParam("amount", "Amount", 0.5), floatParam("delay", "Delay", 0.0, 2.0, 0.2) });
-    setParams("slit_scanner", { floatParam("speed", "Speed", -4.0, 4.0, 0.5), enumParam("axis", "Axis", { "Horizontal", "Vertical" }, 0) });
-    // Stylize / film
-    for (const char* id : { "edges", "emboss", "find_edges", "glow_edges", "cartoon", "watercolor", "oil_paint" }) {
-        setParams(id, { percentParam("amount", "Amount", 0.6), floatParam("detail", "Detail", 0.0, 4.0, 1.0) });
-    }
-    for (const char* id : { "crt", "vhs", "vhsifyer", "scanlines", "broadcast", "reducto", "night_vision", "thermal", "x_ray", "duotone", "tritone", "gradient_map", "stroke", "erode", "dilate", "total_visual_annihilation" }) {
-        setParams(id, { percentParam("amount", "Amount", 0.7) });
-    }
+    insertSpec(QStringLiteral("contrast_pop"),
+        { floatParam("detail_amount", "Detail Amount", -1.0, 1.0, 0.0, "Controls"),
+          percentParam("detail_size", "Detail Size", 0.5, "Controls"),
+          percentParam("low_threshold", "Low Threshold", 0.0, "Controls"),
+          percentParam("high_threshold", "High Threshold", 1.0, "Controls"),
+          percentParam("softness", "Softness", 0.5, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global") });
 
-    // Key and masks (GPU: effect_key.frag; cell keyChannelR/G/B weights in UBO rotation.xyz)
-    setParams("chroma_key",
+    insertSpec(QStringLiteral("dehaze"),
+        { floatParam("dehaze_strength", "Dehaze Strength", -1.0, 1.0, 0.5, "Controls"),
+          angleParam("haze_hue", "Haze Color", 0.0, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global") });
+
+    // Resolve 21 Film Emulation (Film Look Creator sections)
+    insertSpec(QStringLiteral("film_look"),
+        { enumParam("film_look", "Film Look",
+                    { "Default 65mm", "Default 35mm", "Cinematic", "Nostalgic", "Bleach Bypass",
+                      "Rochester", "Akasaka", "Elated", "Vintage", "Aurora" },
+                    0, "Film Look"),
+          percentParam("blend", "Film Look Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_color"),
+        { floatParam("exposure", "Exposure", -1.0, 1.0, 0.0, "Color Settings"),
+          floatParam("contrast", "Contrast", -1.0, 1.0, 0.0, "Color Settings"),
+          percentParam("highlights_fade", "Highlights Fade", 0.0, "Color Settings"),
+          percentParam("fade_rolloff", "Fade Rolloff", 0.5, "Color Settings"),
+          floatParam("temperature", "White Balance", 1000.0, 20000.0, 6500.0, "Color Settings"),
+          floatParam("tint", "Tint", -1.0, 1.0, 0.0, "Color Settings"),
+          percentParam("subtractive_saturation", "Subtractive Sat", 0.0, "Color Settings"),
+          floatParam("saturation", "Saturation", -1.0, 1.0, 0.0, "Color Settings"),
+          percentParam("richness", "Richness", 0.0, "Color Settings"),
+          percentParam("blend", "Color Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_split_tone"),
+        { percentParam("amount", "Amount", 0.0, "Split Tone"),
+          angleParam("hue_angle", "Hue Angle", 23.0, "Split Tone"),
+          percentParam("balance", "Balance", 0.5, "Split Tone"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_vignette"),
+        { percentParam("amount", "Amount", 0.5, "Vignette"),
+          percentParam("size", "Size", 0.5, "Vignette"),
+          percentParam("softness", "Softness", 0.5, "Vignette"),
+          percentParam("roundness", "Roundness", 0.5, "Vignette"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_halation"),
+        { percentParam("amount", "Amount", 0.5, "Halation"),
+          percentParam("threshold", "Threshold", 0.5, "Halation"),
+          percentParam("size", "Size", 0.5, "Halation"),
+          angleParam("hue", "Hue", 0.0, "Halation"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_bloom"),
+        { percentParam("amount", "Amount", 0.5, "Bloom"),
+          percentParam("threshold", "Threshold", 0.5, "Bloom"),
+          percentParam("size", "Size", 0.5, "Bloom"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_grain"),
+        { percentParam("size", "Size", 0.5, "Grain"),
+          percentParam("strength", "Strength", 0.35, "Grain"),
+          boolParam("monochrome", "Monochrome", true, "Grain"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_flicker"),
+        { percentParam("amount", "Amount", 0.3, "Flicker"),
+          percentParam("speed", "Speed", 0.5, "Flicker"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_gate_weave"),
+        { percentParam("amount_h", "Amount H", 0.3, "Gate Weave"),
+          percentParam("amount_v", "Amount V", 0.3, "Gate Weave"),
+          percentParam("speed", "Speed", 0.5, "Gate Weave"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("film_gate"),
+        { enumParam("ratio", "Ratio",
+                    { "4:3", "16:10", "16:9", "1.85", "2.39", "Super 16", "Super 8" }, 2,
+                    "Film Gate"),
+          percentParam("padding", "Padding", 0.0, "Film Gate"),
+          percentParam("softness", "Softness", 0.5, "Film Gate"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    // ResolveFX Light (Resolve 21 manual parameters)
+    insertSpec(QStringLiteral("aperture_diffraction"),
+        { enumParam("quality", "Quality", { "Full", "Half", "Quarter" }, 0, "Quality"),
+          percentParam("source_threshold", "Source Threshold", 0.65, "Controls"),
+          enumParam("iris_shape", "Iris Shape",
+                    { "Triangle", "Square", "Pentagon", "Hexagon", "Heptagon", "Octagon" }, 3,
+                    "Aperture"),
+          percentParam("aperture_size", "Aperture Size", 0.5, "Aperture"),
+          percentParam("blade_curvature", "Blade Curvature", 0.35, "Aperture"),
+          angleParam("rotation", "Rotation", 0.0, "Aperture"),
+          percentParam("hv_ratio", "H/V Ratio", 0.0, "Aperture"),
+          angleParam("angle", "Angle", 0.0, "Aperture"),
+          percentParam("chroma_shift", "Chroma Shift", 0.25, "Aperture"),
+          percentParam("result_gamma", "Result Gamma", 0.5, "Diffraction"),
+          percentParam("result_scale", "Result Scale", 0.5, "Diffraction"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("glow"),
+        { enumParam("source_of_glow", "Source of Glow", { "Bright Regions", "Alpha" }, 0,
+                    "Controls"),
+          percentParam("glow_size", "Glow Size", 0.5, "Controls"),
+          percentParam("spread", "Spread", 0.5, "Controls"),
+          percentParam("brightness", "Brightness", 0.5, "Controls"),
+          percentParam("threshold", "Threshold", 0.65, "Controls"),
+          colorParam("glow_color", "Glow Color", 0xFFFFFF, "Color Scale"),
+          enumParam("composite_type", "Composite Type",
+                    { "Add", "Screen", "Overlay", "Luminosity" }, 0, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("halation"),
+        { enumParam("processing_color_space", "Processing Color Space",
+                    { "Default", "Sony S-Gamut3", "Rec.709", "P3 D65", "Film" }, 0, "Processing"),
+          colorParam("halation_color", "Halation Color", 0xFF6633, "Secondary Glow"),
+          percentParam("strength", "Strength", 0.66, "Secondary Glow"),
+          percentParam("gamma", "Gamma", 0.5, "Secondary Glow"),
+          percentParam("spread", "Spread", 0.45, "Secondary Glow"),
+          percentParam("threshold", "Threshold", 0.65, "Isolation"),
+          percentParam("film_saturation_level", "Film Saturation Level", 0.5, "Isolation"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("lens_flare"),
+        { percentParam("global_scaling", "Global Scaling", 0.5, "Global Corrections"),
+          percentParam("anamorphism", "Anamorphism", 0.0, "Global Corrections"),
+          percentParam("lens_center_x", "Lens Center X", 0.5, "Global Corrections"),
+          percentParam("lens_center_y", "Lens Center Y", 0.5, "Global Corrections"),
+          percentParam("global_defocus", "Global Defocus", 0.0, "Global Corrections"),
+          percentParam("global_brightness", "Global Brightness", 0.5, "Global Corrections"),
+          percentParam("global_saturation", "Global Saturation", 0.5, "Global Corrections"),
+          percentParam("colorise_result", "Colorise Result", 0.0, "Global Corrections"),
+          colorParam("colorization_color", "Colorization Color", 0xFFFFFF, "Global Corrections"),
+          percentParam("position_x", "Position X", 0.65, "Position"),
+          percentParam("position_y", "Position Y", 0.35, "Position"),
+          floatParam("aperture_blades", "Aperture Blades", 3.0, 16.0, 6.0, "Aperture"),
+          angleParam("aperture_angle", "Angle", 0.0, "Aperture"),
+          percentParam("glare_brightness", "Glare Brightness", 0.5, "Full-Screen Glare"),
+          colorParam("glare_color", "Glare Color", 0xFFDD88, "Full-Screen Glare"),
+          percentParam("flare_size", "Flare Size", 0.35, "Flare Spot"),
+          percentParam("flare_irregularity", "Flare Irregularity", 0.2, "Flare Spot"),
+          percentParam("flare_softness", "Flare Softness", 0.4, "Flare Spot"),
+          colorParam("flare_color", "Flare Color", 0xFFFFFF, "Flare Spot"),
+          percentParam("starburst_size", "Starburst Size", 0.5, "Starburst"),
+          percentParam("starburst_softness", "Starburst Softness", 0.4, "Starburst"),
+          angleParam("starburst_split_angle", "Starburst Split Angle", 15.0, "Starburst"),
+          percentParam("starburst_split_balance", "Starburst Split Balance", 0.5, "Starburst"),
+          colorParam("starburst_color", "Starburst Color", 0xFFFFFF, "Starburst"),
+          enumParam("ghost1_shape", "Ghost 1 Shape",
+                    { "None", "Aperture", "Anamorphic Streak", "Disc", "Bubble", "Corona" }, 2,
+                    "Ghost 1"),
+          colorParam("ghost1_color", "Ghost 1 Color", 0x88AAFF, "Ghost 1"),
+          percentParam("ghost1_position", "Ghost 1 Position", 0.3, "Ghost 1"),
+          percentParam("ghost1_size", "Ghost 1 Size", 0.25, "Ghost 1"),
+          percentParam("ghost1_center_brightness", "Ghost 1 Center Brightness", 0.5, "Ghost 1"),
+          percentParam("ghost1_edge_brightness", "Ghost 1 Edge Brightness", 0.7, "Ghost 1"),
+          percentParam("ghost1_softness", "Ghost 1 Softness", 0.4, "Ghost 1"),
+          percentParam("ghost1_ringing", "Ghost 1 Ringing", 0.3, "Ghost 1"),
+          percentParam("ghost1_chromatic_shift", "Ghost 1 Chromatic Shift", 0.1, "Ghost 1"),
+          enumParam("ghost2_shape", "Ghost 2 Shape",
+                    { "None", "Aperture", "Anamorphic Streak", "Disc", "Bubble", "Corona" }, 3,
+                    "Ghost 2"),
+          colorParam("ghost2_color", "Ghost 2 Color", 0xFFCC88, "Ghost 2"),
+          percentParam("ghost2_position", "Ghost 2 Position", 0.55, "Ghost 2"),
+          percentParam("ghost2_size", "Ghost 2 Size", 0.18, "Ghost 2"),
+          percentParam("ghost2_center_brightness", "Ghost 2 Center Brightness", 0.4, "Ghost 2"),
+          percentParam("ghost2_edge_brightness", "Ghost 2 Edge Brightness", 0.6, "Ghost 2"),
+          percentParam("ghost2_softness", "Ghost 2 Softness", 0.35, "Ghost 2"),
+          percentParam("ghost2_ringing", "Ghost 2 Ringing", 0.25, "Ghost 2"),
+          percentParam("ghost2_chromatic_shift", "Ghost 2 Chromatic Shift", 0.15, "Ghost 2"),
+          enumParam("ghost3_shape", "Ghost 3 Shape",
+                    { "None", "Aperture", "Anamorphic Streak", "Disc", "Bubble", "Corona" }, 0,
+                    "Ghost 3"),
+          colorParam("ghost3_color", "Ghost 3 Color", 0xFFFFFF, "Ghost 3"),
+          percentParam("ghost3_position", "Ghost 3 Position", 0.75, "Ghost 3"),
+          percentParam("ghost3_size", "Ghost 3 Size", 0.12, "Ghost 3"),
+          percentParam("ghost3_center_brightness", "Ghost 3 Center Brightness", 0.3, "Ghost 3"),
+          percentParam("ghost3_edge_brightness", "Ghost 3 Edge Brightness", 0.5, "Ghost 3"),
+          percentParam("ghost3_softness", "Ghost 3 Softness", 0.3, "Ghost 3"),
+          percentParam("ghost3_ringing", "Ghost 3 Ringing", 0.2, "Ghost 3"),
+          percentParam("ghost3_chromatic_shift", "Ghost 3 Chromatic Shift", 0.05, "Ghost 3"),
+          enumParam("ghost4_shape", "Ghost 4 Shape",
+                    { "None", "Aperture", "Anamorphic Streak", "Disc", "Bubble", "Corona" }, 4,
+                    "Ghost 4"),
+          colorParam("ghost4_color", "Ghost 4 Color", 0xAADDFF, "Ghost 4"),
+          percentParam("ghost4_position", "Ghost 4 Position", 0.9, "Ghost 4"),
+          percentParam("ghost4_size", "Ghost 4 Size", 0.1, "Ghost 4"),
+          percentParam("ghost4_center_brightness", "Ghost 4 Center Brightness", 0.25, "Ghost 4"),
+          percentParam("ghost4_edge_brightness", "Ghost 4 Edge Brightness", 0.45, "Ghost 4"),
+          percentParam("ghost4_softness", "Ghost 4 Softness", 0.35, "Ghost 4"),
+          percentParam("ghost4_ringing", "Ghost 4 Ringing", 0.15, "Ghost 4"),
+          percentParam("ghost4_chromatic_shift", "Ghost 4 Chromatic Shift", 0.08, "Ghost 4"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("lens_reflections"),
+        { percentParam("threshold", "Threshold", 0.7, "Isolation"),
+          percentParam("brightness", "Brightness", 0.5, "Global"),
+          percentParam("gamma", "Gamma", 0.5, "Global"),
+          colorParam("color", "Color", 0xFFEECC, "Global"),
+          percentParam("smooth", "Smooth", 1.0, "Global"),
+          percentParam("eclipse_position", "Eclipse Position", 0.0, "Eclipse"),
+          percentParam("eclipse_size", "Eclipse Size", 0.0, "Eclipse"),
+          percentParam("eclipse_softness", "Eclipse Softness", 0.5, "Eclipse"),
+          percentParam("eclipse_chromatic_shift", "Eclipse Chromatic Shift", 0.0, "Eclipse"),
+          percentParam("repeat", "Repeat", 0.0, "Repeat"),
+          percentParam("repeat_position_seed", "Repeat Position Seed", 0.5, "Repeat"),
+          percentParam("repeat_size_seed", "Repeat Size Seed", 0.5, "Repeat"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("light_rays"),
+        { enumParam("source_of_rays", "Source of Rays", { "Bright Regions", "Edges" }, 0,
+                    "Main"),
+          percentParam("source_threshold", "Source Threshold", 0.65, "Main"),
+          enumParam("ray_directions", "Ray Directions", { "From A Location", "At an Angle" }, 0,
+                    "Position"),
+          percentParam("ray_location_x", "Ray Location X", 0.5, "Position"),
+          percentParam("ray_location_y", "Ray Location Y", 0.5, "Position"),
+          angleParam("ray_angle", "Ray Angle", 0.0, "Position"),
+          percentParam("length", "Length", 0.5, "Appearance"),
+          percentParam("soften", "Soften", 0.35, "Appearance"),
+          percentParam("brightness", "Brightness", 0.5, "Appearance"),
+          percentParam("saturation", "Saturation", 0.5, "Appearance"),
+          enumParam("ccd_bloom", "CCD Bloom", { "Off", "Harsh", "Soft" }, 0, "Appearance"),
+          enumParam("composite_type", "Composite Type",
+                    { "Add", "Screen", "Overlay", "Luminosity" }, 0, "Appearance"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(feedbackMarkerTypeId(), {});
+
+    // Keying-only (not in catalog picker).
+    insertSpec(QStringLiteral("chroma_key"),
         { enumParam("mode", "Key mode",
-                { "Chroma (hue)", "Chroma (hue) inverted", "RGB distance", "RGB distance inverted",
-                  "RGB max delta", "RGB max delta inverted" },
-                0),
-            colorParam("hue", "Key hue", 0.33), percentParam("threshold", "Threshold", 0.2),
-            percentParam("softness", "Softness", 0.2) });
-    setParams("luma_key",
+                    { "Chroma (hue)", "Chroma (hue) inverted", "RGB distance", "RGB distance inverted",
+                      "RGB max delta", "RGB max delta inverted" },
+                    0),
+          percentParam("hue", "Key hue", 0.33),
+          percentParam("threshold", "Threshold", 0.2),
+          percentParam("softness", "Softness", 0.2) });
+    insertSpec(QStringLiteral("luma_key"),
         { enumParam("mode", "Key source",
-                { "Weighted RGB (inspector)", "Weighted RGB inverted", "Luma BT.709", "Luma BT.709 inverted",
-                  "Red channel", "Green channel", "Blue channel", "Max RGB", "Min RGB", "Max RGB inverted" },
-                0),
-            percentParam("brightness", "Level / center", 0.5), percentParam("threshold", "Tolerance", 0.25),
-            percentParam("softness", "Feather", 0.12) });
-    setParams("linear_mask", { angleParam("angle", "Angle", 0.0), percentParam("softness", "Softness", 0.2) });
-    setParams("mask",
-        { enumParam("mode", "Mask mode", { "None", "Rectangle", "Circle", "Soft edge", "Ellipse", "Custom" }, 0),
+                    { "Weighted RGB (inspector)", "Weighted RGB inverted", "Luma BT.709",
+                      "Luma BT.709 inverted", "Red channel", "Green channel", "Blue channel",
+                      "Max RGB", "Min RGB", "Max RGB inverted" },
+                    0),
+          percentParam("brightness", "Level / center", 0.5),
+          percentParam("threshold", "Tolerance", 0.25),
+          percentParam("softness", "Feather", 0.12) });
+    insertSpec(QStringLiteral("mask"),
+        { enumParam("mode", "Mask mode",
+                    { "None", "Rectangle", "Circle", "Soft edge", "Ellipse", "Custom" }, 0),
           percentParam("sizeX", "Size X", 1.0),
           percentParam("sizeY", "Size Y", 1.0),
           percentParam("feather", "Feather", 0.1) });
-    setParams("crop", { percentParam("left", "Left", 0.0), percentParam("top", "Top", 0.0), percentParam("right", "Right", 1.0), percentParam("bottom", "Bottom", 1.0) });
-    setParams("crop_rectangle", { percentParam("x", "X", 0.0), percentParam("y", "Y", 0.0), percentParam("width", "Width", 1.0), percentParam("height", "Height", 1.0) });
 
-    // Mix / utility / patterns / blend modes
-    setParams("add_subtract", { percentParam("mix", "Mix", 0.5), enumParam("mode", "Mode", { "Add", "Subtract" }, 0) });
-    for (const char* id : { "mix", "fade", "opacity" }) {
-        setParams(id, { percentParam("amount", "Amount", 1.0) });
-    }
-    setParams("rgb_shift", { floatParam("distance", "Distance", 0.0, 100.0, 2.0), angleParam("angle", "Angle", 0.0) });
-    setParams("shift", { floatParam("x", "X", -1.0, 1.0, 0.0), floatParam("y", "Y", -1.0, 1.0, 0.0) });
-    setParams("tilt_shift", { percentParam("amount", "Amount", 0.5), angleParam("angle", "Angle", 0.0) });
-
-    for (const char* id : { "radar", "polka_dot", "stripes", "checkerboard", "dots" }) {
-        setParams(id,
-            { percentParam("amount", "Amount", 1.0), floatParam("scale", "Scale", 0.01, 10.0, 1.0),
-                floatParam("speed", "Speed", -10.0, 10.0, 0.0) });
-    }
-
-    for (const char* id :
-        { "blend_normal", "blend_add", "blend_subtract", "blend_multiply", "blend_screen", "blend_overlay",
-            "blend_soft_light", "blend_hard_light", "blend_color_dodge", "blend_color_burn", "blend_darken",
-            "blend_lighten", "blend_difference", "blend_exclusion", "blend_mode" }) {
-        setParams(id,
-            { enumParam("mode", "Blend Mode",
-                        { "Normal", "Add", "Subtract", "Multiply", "Screen", "Overlay",
-                          "Soft Light", "Hard Light", "Difference", "Exclusion" }, 0),
-              percentParam("mix", "Opacity", 1.0) });
-    }
-    setParams("transform_3d",
-        { angleParam("rotate_x", "Rotate X", 0.0), angleParam("rotate_y", "Rotate Y", 0.0), angleParam("rotate_z", "Rotate Z", 0.0), floatParam("depth", "Depth", 0.0, 2.0, 0.5) });
-
-    // DaVinci Resolve — blend + 3 core params (V1 simplification)
-    setParams("mosaic_blur", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("lens_blur", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("sharpen_edges", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("soften_sharpen", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("aces_transform", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("chromatic_adaptation", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("color_compressor", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("color_space_transform", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("color_stabilizer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("contrast_pop", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("dehaze", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("false_color", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("flicker_addition", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("gamut_limiter", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("gamut_mapping", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("color_generator", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("color_palette", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("grid", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("key_3d", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("hsl_keyer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("alpha_matte_shrink_glow", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("aperture_diffraction", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("halation", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("lens_flare", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("lens_reflections", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("light_rays", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("beauty", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("automatic_dirt_removal", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("chromatic_aberration_removal", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("dead_pixel_fixer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("deband", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("deflicker", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("frame_replacer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("patch_replacer", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("noise_reduction", { percentParam("blend", "Blend", 1.0), enumParam("strength", "Strength", { "Weak", "Strong" }, 1), percentParam("amount", "Amount", 1.0) });
-    setParams("abstraction", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("blanking_fill", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("pencil_sketch", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("prism_blur", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("stylize", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("motion_trails", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("smear", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("stop_motion", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("analog_damage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("film_damage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("jpeg_damage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("texture_pop", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("camera_shake", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("video_collage", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("dent", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("lens_distortion", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("ripples", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("vortex", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("warper", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("waviness", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("binoculars", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("cctv", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("colored_border", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("digital_glitch", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("drone_overlay", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("dslr", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("dve", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("video_call", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("video_camera", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("background", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("fast_noise", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("plasma", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("mandelbrot", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("day_sky", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-    setParams("dctl", { percentParam("blend", "Blend", 1.0), percentParam("strength", "Strength", 0.5), floatParam("detail", "Detail", 0.0, 1.0, 0.5), floatParam("size", "Size", 0.0, 1.0, 0.5) });
-
-    // NVIDIA Maxine Video Effects SDK
-    setParams("nvidia_artifact_reduction",
-        { enumParam("strength", "Strength", { "Weak", "Strong" }, 0),
-          percentParam("amount", "Opacity", 1.0) });
-    setParams("nvidia_super_resolution",
-        { enumParam("strength", "Mode", { "Lossy", "Lossless" }, 0),
-          floatParam("scale", "Scale", 1.0, 2.0, 1.5) });
-    setParams("nvidia_upscale",
-        { floatParam("scale", "Scale", 1.0, 4.0, 2.0),
-          percentParam("amount", "Strength", 0.5) });
-    // Validate against catalog in debug builds.
 #ifndef NDEBUG
-    for (const FilterCatalogEntry& entry : catalog) {
+    for (const FilterCatalogEntry& entry : filterCatalogEntries()) {
         Q_ASSERT(schema.contains(entry.typeId));
-        Q_ASSERT(schema.value(entry.typeId).params.size() <= 4);
     }
 #endif
 
@@ -368,6 +563,22 @@ QHash<QString, FilterNodeSpec> buildSchemas()
 }
 
 } // namespace
+
+bool isColorTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("chromatic_adaptation"),
+        QStringLiteral("color_compressor"),
+        QStringLiteral("contrast_pop"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+bool filterAllowsExtendedParams(const QString& typeId)
+{
+    return isBlurTypeId(typeId) || isColorTypeId(typeId) || isFilmTypeId(typeId)
+        || isLightTypeId(typeId);
+}
 
 const QHash<QString, FilterNodeSpec>& filterParamSchemas()
 {

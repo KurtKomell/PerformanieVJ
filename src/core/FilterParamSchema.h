@@ -22,12 +22,16 @@ enum class FilterParamKind {
 struct FilterParamSpec {
     QString name;
     QString label;
+    QString section;
     FilterParamKind kind = FilterParamKind::Float;
     double minV = 0.0;
     double maxV = 1.0;
     double defaultV = 0.5;
     QStringList enumLabels;
 };
+
+/// Blur filters may exceed the legacy 4-parameter UBO slots (extras via namedParam in packer).
+bool filterAllowsExtendedParams(const QString& typeId);
 
 struct FilterNodeSpec {
     QString typeId;

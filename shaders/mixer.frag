@@ -15,16 +15,18 @@ layout(binding = 9) uniform sampler2D u_tex8;
 layout(binding = 10) uniform sampler2D u_tex9;
 layout(binding = 11) uniform sampler2D u_tex10;
 layout(binding = 12) uniform sampler2D u_tex11;
-layout(binding = 13) uniform sampler2D u_under;
-layout(binding = 14) uniform sampler2D u_aboveKey;
+layout(binding = 13) uniform sampler2D u_tex12;
+layout(binding = 14) uniform sampler2D u_under;
+layout(binding = 15) uniform sampler2D u_aboveKey;
+layout(binding = 16) uniform sampler2D u_feedbackHist;
 
 layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
-    vec4 layers[13];
+    vec4 layers[14];
     // Retained per-layer picture parameters (currently unused by the mixer
     // fragment path; kept in the UBO so the binding layout stays stable).
-    vec4 picUvA[13];
-    vec4 picColor[13];
+    vec4 picUvA[14];
+    vec4 picColor[14];
     vec4 mixerCfg; // x=maxLayerExclusive, y=feedbackLayer or minLayer, z=feedbackActive, w=feedbackKeyFromAbove
 } ubuf;
 
@@ -371,6 +373,7 @@ vec4 sampleLayerRaw(int texIndex, vec2 uv)
     case 9:  return texture(u_tex9, uv);
     case 10: return texture(u_tex10, uv);
     case 11: return texture(u_tex11, uv);
+    case 12: return texture(u_tex12, uv);
     default: return vec4(0.0);
     }
 }
@@ -399,12 +402,12 @@ void main()
     bool hasBase = false;
 
     int maxLayer = int(ubuf.mixerCfg.x + 0.5);
-    if (maxLayer <= 0) maxLayer = 13;
+    if (maxLayer <= 0) maxLayer = 14;
     int cfgLayer = int(ubuf.mixerCfg.y + 0.5);
     const bool feedbackActive = ubuf.mixerCfg.z > 0.5;
     const int feedbackLayer = feedbackActive ? cfgLayer : -1;
 
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 14; i++) {
         if (feedbackActive) {
             if (i >= maxLayer) continue;
         } else {
@@ -433,7 +436,7 @@ void main()
             // mixerCfg.w: 0 = no key mask, 1 = BelowOnly hole mask, 2 = unified (full trail)
             if (ubuf.mixerCfg.w > 0.5 && ubuf.mixerCfg.w < 1.5) {
                 float upperCov = 0.0;
-                for (int j = feedbackLayer + 1; j < 13; j++) {
+                for (int j = feedbackLayer + 1; j < 14; j++) {
                     vec4 aboveLp = ubuf.layers[j];
                     if (aboveLp.z < 0.5) {
                         continue;
@@ -446,11 +449,14 @@ void main()
                 }
                 vis *= (1.0 - upperCov);
             }
+            // Transparency crossfade: 0 = video only (under), 1 = warped history only (no live inject).
+            vec3 histOnly = texture(u_feedbackHist, v_uv).rgb;
             if (vis <= 1e-4) {
                 dst = under;
+            } else if (vis >= 1.0 - 1e-4) {
+                dst = histOnly;
             } else {
-                const float blendAlpha = clamp(c.a * vis, 0.0, 1.0);
-                dst = compositeLayer(mode, under, src, blendAlpha);
+                dst = mix(under, histOnly, vis);
             }
             hasBase = true;
             continue;

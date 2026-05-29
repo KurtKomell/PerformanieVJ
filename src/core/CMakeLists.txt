@@ -18,6 +18,14 @@ add_library(pvj_core STATIC
     Vj2Importer.cpp
     AvcImporter.h
     AvcImporter.cpp
+    CellOps.h
+    CellOps.cpp
+    BankOps.h
+    BankOps.cpp
+    MixerFilterOps.h
+    MixerFilterOps.cpp
+    InputMappingLabels.h
+    InputMappingLabels.cpp
 )
 
 target_link_libraries(pvj_core

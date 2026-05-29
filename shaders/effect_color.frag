@@ -173,7 +173,7 @@ vec3 applyColorEffect(vec3 rgb, int id)
     if (id == 7) return rgb * pow(2.0, b); // exposure
     if (id == 8) { float l = dot(rgb, PVJ_LUMA); return mix(vec3(l), rgb, s); } // saturation
     if (id == 9 || id == 21) { vec3 hsl = pvjRgb2hsl(rgb); hsl.x = fract(hsl.x + b / 6.2831853); return pvjHsl2rgb(hsl); }
-    if (id == 13) return 1.0 - rgb; // invert
+    if (id == 13) return rgb; // invert handled in main()
     if (id == 14) return mix(rgb, 1.0 - rgb, step(b, dot(rgb, PVJ_LUMA))); // solarize
     if (id == 15) { vec3 hsl = pvjRgb2hsl(rgb); hsl.x = fract(b / 6.2831853); return mix(rgb, pvjHsl2rgb(hsl), s); } // tint
     if (id == 16) { float l = dot(rgb, PVJ_LUMA); return mix(rgb, vec3(l), s); } // black_white
@@ -220,29 +220,113 @@ void main()
     int id = pvjEffectId();
     vec4 tex = pvjSampleRgba(u_tex, uv);
 
-    if (id >= 25) {
+    if (id == 13) {
+        float ir = ubuf.params.x;
+        float ig = ubuf.params.y;
+        float ib = ubuf.params.z;
+        float ia = ubuf.params.w;
+        vec3 rgb = tex.rgb;
+        rgb.r = mix(rgb.r, 1.0 - rgb.r, ir);
+        rgb.g = mix(rgb.g, 1.0 - rgb.g, ig);
+        rgb.b = mix(rgb.b, 1.0 - rgb.b, ib);
+        float a = mix(tex.a, 1.0 - tex.a, ia);
+        fragColor = vec4(clamp(rgb, 0.0, 1.0), clamp(a, 0.0, 1.0));
+        return;
+    }
+
+    if (id == 26 || id == 27 || id == 29 || id == 30 || id == 31) {
         float blend = ubuf.params.x;
-        float s = ubuf.params.y;
-        float d = ubuf.params.z;
-        float sz = ubuf.params.w;
         vec3 fx = tex.rgb;
-        if (id == 25) fx = pow(max(tex.rgb, vec3(0.0)), vec3(1.0 / max(0.55 + s * 0.35, 0.1)));
-        else if (id == 26) fx = tex.rgb * vec3(1.0 + s * 0.2, 1.0, 1.0 - s * 0.15);
-        else if (id == 27) fx = tex.rgb / max(vec3(0.2 + s * 0.8), 0.05);
-        else if (id == 28) fx = mix(tex.rgb, tex.rgb.bgr, s);
-        else if (id == 29) fx = mix(tex.rgb, pvjBlur9(u_tex, uv, vec2(1.0, 0.0), 0.003), s * 0.5);
-        else if (id == 30) fx = (tex.rgb - 0.5) * (1.0 + s * 2.0) + 0.5;
-        else if (id == 31) {
-            fx = mix(tex.rgb, pvjBlur9(u_tex, uv, vec2(1.0, 0.0), 0.008 + s * 0.02), s);
-            fx += (fx - tex.rgb) * d;
-        } else if (id == 32) {
-            float l = dot(tex.rgb, PVJ_LUMA);
-            fx = mix(tex.rgb, pvjHsl2rgb(vec3(l + d * 0.2, 1.0, 0.5)), s);
-        } else if (id == 33) {
-            float flick = 0.85 + 0.15 * sin(pvjTime() * mix(2.0, 20.0, s));
-            fx = tex.rgb * flick;
-        } else if (id == 34) fx = clamp(tex.rgb, 0.0, 0.85 + sz * 0.15);
-        else if (id == 35) fx = mix(tex.rgb, tex.rgb.grb, s);
+
+        if (id == 26) {
+            float srcK = mix(1000.0, 20000.0, ubuf.params.y);
+            float srcTint = ubuf.params.z;
+            float tgtK = mix(1000.0, 20000.0, ubuf.params.w);
+            float tgtTint = ubuf.rotation.y;
+            float method = ubuf.rotation.z;
+            float deltaK = (tgtK - srcK) / 19000.0;
+            float deltaTint = tgtTint - srcTint;
+            float tempGain = 0.5;
+            float tintGain = 0.4;
+            if (method < 0.5) {
+                tempGain = 0.5;
+                tintGain = 0.4;
+            } else if (method < 1.5) {
+                tempGain = 0.58;
+                tintGain = 0.32;
+            } else if (method < 2.5) {
+                tempGain = 0.42;
+                tintGain = 0.28;
+            } else if (method < 3.5) {
+                tempGain = 0.62;
+                tintGain = 0.52;
+            } else {
+                tempGain = 0.54;
+                tintGain = 0.38;
+            }
+            fx.r += deltaK * tempGain;
+            fx.b -= deltaK * tempGain;
+            fx.g += deltaTint * tintGain;
+            fx.r -= deltaTint * 0.14 * tintGain;
+            fx.b -= deltaTint * 0.14 * tintGain;
+            fx = clamp(fx, 0.0, 1.0);
+        } else if (id == 27) {
+            float targetHue = ubuf.params.y;
+            float ch = ubuf.params.z;
+            float cs = ubuf.params.w;
+            float cl = ubuf.params2.w;
+            vec3 hsl = pvjRgb2hsl(tex.rgb);
+            float dh = targetHue - hsl.x * 6.2831853;
+            dh = dh - 6.2831853 * floor(dh / 6.2831853 + 0.5);
+            hsl.x = fract(hsl.x + (dh / 6.2831853) * ch);
+            hsl.y = mix(hsl.y, 0.5, cs * 0.35);
+            fx = pvjHsl2rgb(hsl);
+            float luma = dot(fx, PVJ_LUMA);
+            float lTarget = mix(luma, 0.5, cl);
+            fx = mix(fx, fx * (lTarget / max(luma, 1e-4)), cl);
+            fx = clamp(fx, 0.0, 1.0);
+        } else if (id == 29) {
+            float strength = ubuf.params.y;
+            float matchMode = ubuf.params.z;
+            vec3 ref = vec3(0.5);
+            if (matchMode < 0.5) {
+                float l = dot(tex.rgb, PVJ_LUMA);
+                fx = mix(tex.rgb, vec3(l), strength * 0.45);
+            } else if (matchMode < 1.5) {
+                fx = mix(ref, tex.rgb, 1.0 - strength * 0.35);
+            } else {
+                fx = mix(ref, tex.rgb, 1.0 - strength * 0.5);
+                float l = dot(fx, PVJ_LUMA);
+                fx = mix(vec3(l), fx, 0.9);
+            }
+        } else if (id == 30) {
+            float amount = ubuf.params.y;
+            float size = ubuf.params.z;
+            float lo = ubuf.params.w;
+            float hi = ubuf.rotation.y;
+            float soft = max(ubuf.rotation.z, 0.02);
+            float luma = dot(tex.rgb, PVJ_LUMA);
+            vec3 blurred = pvjBlur9(u_tex, uv, vec2(1.0, 0.0), 0.003 + size * 0.03);
+            float blurL = dot(blurred, PVJ_LUMA);
+            float detail = luma - blurL;
+            float mask = smoothstep(lo, lo + soft * 0.25, luma)
+                       * (1.0 - smoothstep(hi - soft * 0.25, hi, luma));
+            float l2 = clamp(luma + detail * amount * mask * 2.5, 0.0, 1.0);
+            fx = clamp(tex.rgb + vec3(l2 - luma), 0.0, 1.0);
+        } else if (id == 31) {
+            float strength = ubuf.params.y;
+            float hazeHue = ubuf.params.z;
+            vec3 hazeRgb = pvjHsl2rgb(vec3(fract(hazeHue / 6.2831853), 0.55, 0.5));
+            vec3 comp = clamp(1.0 - hazeRgb, 0.0, 1.0);
+            fx = mix(tex.rgb, pvjBlur9(u_tex, uv, vec2(1.0, 0.0), 0.008 + abs(strength) * 0.025),
+                     abs(strength) * 0.45);
+            fx = (fx - 0.5) * (1.0 + strength * 0.55) + 0.5;
+            fx = mix(fx, fx * comp, strength * 0.2);
+            float l = dot(fx, PVJ_LUMA);
+            fx = mix(vec3(l), fx, 1.0 + strength * 0.25);
+            fx = clamp(fx, 0.0, 1.0);
+        }
+
         fragColor = vec4(clamp(mix(tex.rgb, fx, blend), 0.0, 1.0), tex.a);
         return;
     }

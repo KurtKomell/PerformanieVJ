@@ -204,9 +204,10 @@ KeyingMode keyingModeFromString(const QString& s, KeyingMode fallback)
 QString toString(VisualType v)
 {
     switch (v) {
-    case VisualType::Empty:     return QStringLiteral("empty");
-    case VisualType::Media:     return QStringLiteral("media");
-    case VisualType::Generator: return QStringLiteral("generator");
+    case VisualType::Empty:       return QStringLiteral("empty");
+    case VisualType::Media:       return QStringLiteral("media");
+    case VisualType::Generator:   return QStringLiteral("generator");
+    case VisualType::MixerFilter: return QStringLiteral("mixerFilter");
     }
     return QStringLiteral("empty");
 }
@@ -214,9 +215,10 @@ QString toString(VisualType v)
 VisualType visualTypeFromString(const QString& s, VisualType fallback)
 {
     const QString k = s.toLower();
-    if (k == QLatin1String("empty"))     return VisualType::Empty;
-    if (k == QLatin1String("media"))     return VisualType::Media;
-    if (k == QLatin1String("generator")) return VisualType::Generator;
+    if (k == QLatin1String("empty"))       return VisualType::Empty;
+    if (k == QLatin1String("media"))       return VisualType::Media;
+    if (k == QLatin1String("generator"))   return VisualType::Generator;
+    if (k == QLatin1String("mixerfilter")) return VisualType::MixerFilter;
     return fallback;
 }
 
@@ -342,16 +344,9 @@ QString toString(FeedbackInputMode m)
 
 FeedbackInputMode feedbackInputModeFromString(const QString& s, FeedbackInputMode fallback)
 {
-    bool ok = false;
-    const int asInt = s.toInt(&ok);
-    if (ok && asInt >= 0 && asInt <= 2) {
-        return static_cast<FeedbackInputMode>(asInt);
-    }
-    const QString k = s.toLower();
-    if (k == QLatin1String("belowonly"))       return FeedbackInputMode::BelowOnly;
-    if (k == QLatin1String("stackcomposite"))  return FeedbackInputMode::StackComposite;
-    if (k == QLatin1String("sceneloopback"))    return FeedbackInputMode::SceneLoopback;
-    return fallback;
+    Q_UNUSED(s);
+    Q_UNUSED(fallback);
+    return FeedbackInputMode::SceneLoopback;
 }
 
 QString toString(WrapMode m)

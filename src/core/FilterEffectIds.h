@@ -23,6 +23,7 @@ enum class FilterEffectFamily {
     Light,
     Revival,
     Temporal,
+    Film,
     Maxine,
 };
 
@@ -41,6 +42,9 @@ struct FilterEffectMeta {
     int blendModeOverride = -1;
     FilterExecutionBackend backend = FilterExecutionBackend::Shader;
 };
+
+/// True when the typeId has GPU effect metadata (catalog or keying-only).
+bool filterEffectIsRegistered(const QString& typeId);
 
 /// Lookup metadata for a catalog typeId (case-insensitive).
 FilterEffectMeta filterEffectMeta(const QString& typeId);
@@ -73,5 +77,8 @@ bool isOutputAllowedFilter(const QString& typeId);
 
 /// Keeps only output-allowed nodes; drops invalid entries.
 void sanitizeOutputFilterChain(QList<CellFilterNode>& chain);
+
+/// Drops nodes with unknown typeIds; merges params with current schema defaults.
+void sanitizeCellFilterChain(QList<CellFilterNode>& chain);
 
 } // namespace pvj::core

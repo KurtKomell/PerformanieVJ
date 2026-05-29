@@ -13,15 +13,7 @@ namespace {
 
 bool isKnownTypeId(const QString& lower)
 {
-    static const QSet<QString> kKnown = [] {
-        QSet<QString> s;
-        s.reserve(pvj::core::filterEffectCatalogCount() + 8);
-        for (const auto& e : pvj::core::filterCatalogEntries()) {
-            s.insert(e.typeId.toLower());
-        }
-        return s;
-    }();
-    return kKnown.contains(lower);
+    return pvj::core::filterEffectIsRegistered(lower);
 }
 
 } // namespace
@@ -54,7 +46,8 @@ QString effectFragmentShaderForType(const QString& typeId)
 bool effectUsesTwoTextures(const QString& typeId)
 {
     const pvj::core::FilterEffectMeta meta = pvj::core::filterEffectMeta(typeId);
-    return meta.family == pvj::core::FilterEffectFamily::Blend;
+    return meta.family == pvj::core::FilterEffectFamily::Blend
+        || meta.family == pvj::core::FilterEffectFamily::Light;
 }
 
 QString transitionVertexShaderResource()

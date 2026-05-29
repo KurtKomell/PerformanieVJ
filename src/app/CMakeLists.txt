@@ -1,19 +1,29 @@
 qt_add_executable(performanievj
     main.cpp
+    SplitterHelpers.cpp
+    SplitterHelpers.h
+    AppUserPaths.cpp
+    AppUserPaths.h
     MainWindow.cpp
     MainWindow.h
     BankGridWidget.cpp
     BankGridWidget.h
     FilterNodeEditorWindow.cpp
     FilterNodeEditorWindow.h
+    FilterPickerDialog.cpp
+    FilterPickerDialog.h
     NodeGraphWidget.cpp
     NodeGraphWidget.h
     MidiLearnMenu.cpp
     MidiLearnMenu.h
+    MidiMapOverlay.cpp
+    MidiMapOverlay.h
     MediaLibraryDock.cpp
     MediaLibraryDock.h
     ParameterInspector.cpp
     ParameterInspector.h
+    OutputProcessingDialog.cpp
+    OutputProcessingDialog.h
     PreferencesDialog.cpp
     PreferencesDialog.h
     PreviewWidget.cpp

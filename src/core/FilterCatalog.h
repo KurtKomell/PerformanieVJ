@@ -21,4 +21,9 @@ QString filterCatalogEnglishName(const QString& typeId);
 /// Catalog category string for a typeId (empty if unknown).
 QString filterCatalogCategory(const QString& typeId);
 
+/// True when `query` is empty or matches display name, English name, typeId, or category (case-insensitive).
+bool filterCatalogMatchesSearch(const QString& query, const QString& displayName,
+                                const QString& englishName, const QString& typeId,
+                                const QString& category);
+
 } // namespace pvj::core

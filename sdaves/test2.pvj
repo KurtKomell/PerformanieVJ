@@ -7,21 +7,31 @@
     <Output/>
   </Settings>
   <MediaLibrary>
-    <Item id="a93e3e88-ebc8-4152-9791-5daa3514c907" path="D:/komell/vpool720/vpool/b7.mp4" name="b7.mp4"/>
+    <Item id="3abfcf28-ce24-4dc9-876d-b891be669d94" path="D:/vpool1080dvx/autobrueckenachts.mov" name="autobrueckenachts.mov"/>
   </MediaLibrary>
   <BankSet type="A">
     <Bank index="0" name="Bank 1">
       <Cell index="0">
-        <Visual type="media" mediaId="a93e3e88-ebc8-4152-9791-5daa3514c907"/>
-        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Visual type="media" mediaId="3abfcf28-ce24-4dc9-876d-b891be669d94"/>
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="0" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
         </Props>
       </Cell>
-      <Cell index="1">
+      <Cell index="36">
         <Visual type="generator" generator="internalFeedback"/>
-        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="6" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
+          <Feedback loopRetention="0.874" liveInject="0.328" saturation="1" brightness="0" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0" wrapMode="mirrorOnce"/>
         </Props>
+        <FilterChain>
+          <FilterNode id="6bf406fe-ed5e-4d94-9b50-1678c8ac1920" type="pencil_sketch">
+            <Param name="blend" value="1"/>
+            <Param name="strength" value="0.5"/>
+            <Param name="detail" value="0.5"/>
+            <Param name="size" value="0.5"/>
+          </FilterNode>
+          <FilterNode id="353741cb-67ff-47bb-b08a-3eafa9382a9a" type="feedback_marker"/>
+        </FilterChain>
       </Cell>
     </Bank>
     <Bank index="1" name="Bank 2"/>

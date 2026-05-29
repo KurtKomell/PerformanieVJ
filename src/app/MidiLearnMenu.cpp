@@ -1,11 +1,17 @@
 #include "MidiLearnMenu.h"
 
+#include "core/InputMappingLabels.h"
 #include "core/PropertyRegistry.h"
 
 #include <QMenu>
 #include <QWidget>
 
 namespace pvj::app {
+
+QString MidiLearnMenu::formatLabel(const pvj::core::PropertyMapping& mapping)
+{
+    return pvj::core::formatPropertyMappingLabel(mapping);
+}
 
 void MidiLearnMenu::tagMidiWidget(QWidget* widget, const QString& propertyId, const QVariant& noteValue)
 {

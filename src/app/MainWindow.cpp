@@ -2,12 +2,17 @@
 
 #include "BankGridWidget.h"
 #include "FilterNodeEditorWindow.h"
+#include "OutputProcessingDialog.h"
 #include "MediaLibraryDock.h"
 #include "ParameterInspector.h"
 #include "PreferencesDialog.h"
 #include "SplitterHelpers.h"
 
 #include "core/AvcImporter.h"
+#include "core/BankOps.h"
+#include "core/CellOps.h"
+#include "core/FilterEffectIds.h"
+#include "core/MixerFilterOps.h"
 #include "core/Model.h"
 #include "core/Project.h"
 #include "core/PropertyRegistry.h"
@@ -25,13 +30,15 @@
 #include "input/MidiInput.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QByteArray>
 #include <QCloseEvent>
 #include <QDebug>
+#include <QLabel>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFrame>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -42,9 +49,15 @@
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMenuBar>
+#include <QProgressBar>
+#include <QProgressDialog>
 #include <QMessageBox>
+#include <QFont>
+#include <QSignalBlocker>
+#include <QPushButton>
 #include <QSettings>
 #include <QScreen>
+#include <QSet>
 #include <QStatusBar>
 #include <QTimer>
 #include <QUuid>
@@ -63,21 +76,74 @@ using pvj::core::MediaItem;
 using pvj::core::Project;
 using pvj::core::PvjSerializer;
 using pvj::core::Vj2Importer;
+using pvj::core::Bank;
 using pvj::core::Cell;
 using pvj::core::PlayMode;
 using pvj::core::VisualType;
 using pvj::core::GeneratorKind;
+using pvj::core::cellIsMixerFilter;
+using pvj::core::isFeedbackMarkerNode;
 
 namespace {
+
+bool movieSpeedIsRealtime(double speed)
+{
+    return qAbs(speed - 1.0) <= 1e-3;
+}
+
+float effectiveLayerAudioGain(const Cell* c)
+{
+    if (!c || !movieSpeedIsRealtime(c->props.movieSpeed)) {
+        return 0.f;
+    }
+    return float(c->props.audioGain);
+}
+
+int mediaPreloadPercent(int completed, int total)
+{
+    if (total <= 0) {
+        return 0;
+    }
+    const int clampedCompleted = qBound(0, completed, total);
+    if (clampedCompleted == 0) {
+        return 0;
+    }
+    if (clampedCompleted >= total) {
+        return 100;
+    }
+    return qBound(1, static_cast<int>((qint64(clampedCompleted) * 100 + total - 1) / total), 99);
+}
+
+bool cellAllowsRename(const Cell& cell)
+{
+    if (cell.visual.type == VisualType::Generator
+        && cell.visual.generator == GeneratorKind::InternalFeedback) {
+        return true;
+    }
+    if (cell.visual.type == VisualType::MixerFilter) {
+        return true;
+    }
+    if (cell.visual.type == VisualType::Empty) {
+        return std::any_of(cell.filterChain.cbegin(), cell.filterChain.cend(),
+                         [](const pvj::core::CellFilterNode& n) {
+                             return !isFeedbackMarkerNode(n.typeId);
+                         });
+    }
+    return false;
+}
+
+
 constexpr const char* kPvjFilter = "PerformanieVJ Project (*.pvj)";
 constexpr const char* kVj2Filter = "GrandVJ Project (*.vj2)";
 constexpr const char* kAvcFilter = "Resolume Composition (*.avc)";
 constexpr const char* kUiMainSplitterState = "ui/mainSplitterState";
 constexpr const char* kOutputStageWidth    = "output/stageWidth";
 constexpr const char* kOutputStageHeight   = "output/stageHeight";
+constexpr const char* kOutputScreenIndex   = "output/screenIndex";
 constexpr int kDefaultStageWidth  = 1920;
 constexpr int kDefaultStageHeight = 1080;
 constexpr const char* kRecentProjectPaths = "recent/projectPaths";
+constexpr const char* kLastProjectPath    = "session/lastProjectPath";
 constexpr int         kRecentProjectMax   = 5;
 
 QStringList loadRecentProjectPathsSetting()
@@ -123,6 +189,23 @@ void pushRecentProjectPath(const QString& path)
     saveRecentProjectPathsSetting(list);
 }
 
+void saveLastProjectPathSetting(const QString& path)
+{
+    QSettings settings;
+    if (path.isEmpty()) {
+        settings.remove(QString::fromLatin1(kLastProjectPath));
+        return;
+    }
+    settings.setValue(QString::fromLatin1(kLastProjectPath),
+                      QFileInfo(path).absoluteFilePath());
+}
+
+QString loadLastProjectPathSetting()
+{
+    QSettings settings;
+    return settings.value(QString::fromLatin1(kLastProjectPath)).toString();
+}
+
 QSize loadStagePixelSize()
 {
     QSettings settings;
@@ -160,6 +243,9 @@ bool focusAllowsGlobalShortcuts()
     if (cn.contains(QLatin1String("Dial"))) {
         return false;
     }
+    if (cn.contains(QLatin1String("KeySequenceEdit"))) {
+        return false;
+    }
     return true;
 }
 
@@ -177,7 +263,7 @@ bool playModeUsesLoop(PlayMode m)
 
 bool applyMappedProperty(pvj::core::Cell& c, const QString& raw, double v)
 {
-    const QString p = raw.toLower();
+    const QString p = pvj::core::PropertyRegistry::resolvePropertyId(raw);
     namespace PReg = pvj::core::PropertyRegistry;
     if (PReg::isFilterParamProperty(p)) {
         if (PReg::kindOf(p) == PReg::Kind::Enum) {
@@ -191,48 +277,12 @@ bool applyMappedProperty(pvj::core::Cell& c, const QString& raw, double v)
     return PReg::applyValue(c, p, v);
 }
 
-/// Mix-slot direct keys (no Ctrl/Alt/Meta): 1–9, 0, minus, equal → slots 1–12 (0-based indices 0–11).
-int mixSlotFromQtKey(int key)
-{
-    // Qualify with ::Qt — Qt 6.7+ qtextdocument.h introduces a nested `namespace Qt`
-    // for mightBeRichText helpers; unqualified `Qt::Key_*` can bind there and fail to compile.
-    // Keypad digits use the same Key_1…Key_9 / Key_0 codes as the main keyboard.
-    switch (key) {
-    case ::Qt::Key_1:
-        return 0;
-    case ::Qt::Key_2:
-        return 1;
-    case ::Qt::Key_3:
-        return 2;
-    case ::Qt::Key_4:
-        return 3;
-    case ::Qt::Key_5:
-        return 4;
-    case ::Qt::Key_6:
-        return 5;
-    case ::Qt::Key_7:
-        return 6;
-    case ::Qt::Key_8:
-        return 7;
-    case ::Qt::Key_9:
-        return 8;
-    case ::Qt::Key_0:
-        return 9;
-    case ::Qt::Key_Minus:
-        return 10;
-    case ::Qt::Key_Equal:
-        return 11;
-    default:
-        return -1;
-    }
-}
-
 int preferredLayerFromCell(const Cell* c)
 {
     if (!c) {
         return 4;
     }
-    return qBound(0, c->props.preferredLayer, 11);
+    return qBound(0, c->props.preferredLayer, 12);
 }
 
 } // namespace
@@ -467,18 +517,41 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_filterEditor = std::make_unique<FilterNodeEditorWindow>(this);
     connect(m_filterEditor.get(), &FilterNodeEditorWindow::chainEdited, this,
-            [this](int /*bankSetIndex*/, int /*bankIndex*/, int /*cellIndex*/) {
+            [this](int bankSetIndex, int bankIndex, int cellIndex) {
                 if (m_bankGrid) {
                     m_bankGrid->refresh();
                 }
                 if (m_inspector) {
                     m_inspector->refreshFromModel();
                 }
-                updateMixerFromPlayingCells();
+                const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+                const Cell* cell = layer >= 0 ? cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]) : nullptr;
+                const bool feedbackPlaying = cell && cell->visual.type == VisualType::Generator
+                    && cell->visual.generator == GeneratorKind::InternalFeedback;
+                if (feedbackPlaying) {
+                    syncPlayingFeedbackCellToMixer(bankSetIndex, bankIndex, cellIndex);
+                } else {
+                    updateMixerFromPlayingCells();
+                }
+                if (isMixerFilterCellActive(bankSetIndex, bankIndex, cellIndex)) {
+                    syncOutputFilterChainToMixers();
+                }
+                syncMixerFilterHighlightsToBankGrid();
             });
     connect(m_filterEditor.get(), &FilterNodeEditorWindow::filterParamsEdited, this,
             [this](int bankSetIndex, int bankIndex, int cellIndex) {
-                syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
+                const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+                const Cell* cell = layer >= 0 ? cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]) : nullptr;
+                const bool feedbackPlaying = cell && cell->visual.type == VisualType::Generator
+                    && cell->visual.generator == GeneratorKind::InternalFeedback;
+                if (feedbackPlaying) {
+                    syncPlayingFeedbackCellToMixer(bankSetIndex, bankIndex, cellIndex);
+                } else {
+                    syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
+                }
+                if (isMixerFilterCellActive(bankSetIndex, bankIndex, cellIndex)) {
+                    syncOutputFilterChainToMixers();
+                }
             });
     connect(m_filterEditor.get(), &FilterNodeEditorWindow::midiLearnCcRequested, this,
             [this](int bankSetIndex, int bankIndex, int cellIndex, const QString& propertyId) {
@@ -508,6 +581,9 @@ MainWindow::MainWindow(QWidget* parent)
                 }
                 m_inputRouter->clearPropertyMappingForCell(bankSetIndex, bankIndex, cellIndex, propertyId);
                 statusBar()->showMessage(tr("Cleared MIDI mapping for %1").arg(propertyId), 4000);
+                if (m_filterEditor) {
+                    m_filterEditor->refreshMidiMapOverlays();
+                }
             });
 
     m_layerFadeTimer = new QTimer(this);
@@ -528,14 +604,43 @@ MainWindow::MainWindow(QWidget* parent)
     m_mixerUpdateDebounceTimer = new QTimer(this);
     m_mixerUpdateDebounceTimer->setSingleShot(true);
     m_mixerUpdateDebounceTimer->setInterval(16);
+    // Leading-edge throttle with trailing edge: apply the latest pending update
+    // (e.g. final transparency value at the end of a drag) and restart the cooldown
+    // so further updates inside the next window are coalesced again.
     connect(m_mixerUpdateDebounceTimer, &QTimer::timeout, this, [this]() {
+        if (!m_mixerUpdatePending) {
+            return;
+        }
+        m_mixerUpdatePending = false;
         updateMixerFromPlayingCells();
         syncMixerToFullscreen();
+        m_mixerUpdateDebounceTimer->start();
     });
+
+    m_feedbackMixerSyncTimer = new QTimer(this);
+    m_feedbackMixerSyncTimer->setSingleShot(true);
+    m_feedbackMixerSyncTimer->setInterval(33);
+    connect(m_feedbackMixerSyncTimer, &QTimer::timeout, this, [this]() {
+        if (m_pendingFeedbackSyncBankSet < 0) {
+            return;
+        }
+        const int bs = m_pendingFeedbackSyncBankSet;
+        const int b = m_pendingFeedbackSyncBank;
+        const int c = m_pendingFeedbackSyncCell;
+        m_pendingFeedbackSyncBankSet = -1;
+        syncPlayingFeedbackCellToMixer(bs, b, c);
+    });
+
+    m_outputScreenIndex =
+        QSettings().value(QLatin1String(kOutputScreenIndex), 0).toInt();
+
+    m_outputProcessingDialog = std::make_unique<OutputProcessingDialog>(this);
+    connect(m_outputProcessingDialog.get(), &OutputProcessingDialog::filterChainChanged,
+            this, &MainWindow::syncOutputFilterChainToMixers);
 
     setupMenus();
     setupInputMapping();
-    rebindUiToProject();
+    rebindUiToProject(/*preloadMedia=*/false);
 
     for (int i = 0; i < kMixLayers; ++i) {
         connect(m_decoders[i].get(), &pvj::video::VideoDecoder::frameReady,
@@ -564,10 +669,14 @@ MainWindow::MainWindow(QWidget* parent)
         m_decoders[i]->setLooping(true);
     }
 
-    connect(m_inspector, &ParameterInspector::fullscreenOutputToggled,
-            this, &MainWindow::onFullscreenOutputToggled);
-    connect(m_inspector, &ParameterInspector::outputFilterChainChanged,
-            this, &MainWindow::syncOutputFilterChainToMixers);
+    connect(m_previewB, &pvj::render::RhiMixerWidget::feedbackRepaintTick, this, [this]() {
+        if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
+            if (pvj::render::RhiMixerWidget* dst = m_fullscreenOut->mixerWidget()) {
+                dst->update();
+            }
+        }
+    });
+
     connect(m_inspector, &ParameterInspector::visualSeekStepRequested,
             this, &MainWindow::onInspectorVisualSeekStep);
     connect(m_inspector, &ParameterInspector::scratchApplyRequested,
@@ -583,6 +692,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     statusBar()->showMessage(tr("Ready"));
     updateWindowTitle();
+
+    QTimer::singleShot(0, this, &MainWindow::promptOpenLastProjectIfNeeded);
 }
 
 MainWindow::~MainWindow()
@@ -607,6 +718,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_filterEditor && m_filterEditor->isVisible()) {
         m_filterEditor->close();
     }
+    closeMediaPreloadHint();
     QMainWindow::closeEvent(event);
 }
 
@@ -687,6 +799,18 @@ void MainWindow::setupCentralLayout()
             this, [this](int bankSetIndex, int bankIndex, int cellIndex) {
         onCellSelected(bankSetIndex, bankIndex, cellIndex);
     });
+    connect(m_bankGrid, &BankGridWidget::cellPreviewCacheUpdated,
+            this, [this](const QUuid& mediaId) {
+        if (!m_inspector || !m_project) {
+            return;
+        }
+        const Cell* c = cellAtDeck({m_inspector->selectedBankSetIndex(),
+                                    m_inspector->selectedBankIndex(),
+                                    m_inspector->selectedCellIndex()});
+        if (c && c->visual.mediaId == mediaId) {
+            refreshPreviewForSelectedCell();
+        }
+    });
     connect(m_bankGrid, &BankGridWidget::mediaDroppedOnCell,
             this, &MainWindow::onMediaDroppedOnCell);
     connect(m_bankGrid, &BankGridWidget::bankSelected,
@@ -696,15 +820,24 @@ void MainWindow::setupCentralLayout()
             refreshPreviewForSelectedCell();
         }
     });
-    connect(m_bankGrid, &BankGridWidget::cellTriggered,
-            this, &MainWindow::onCellTriggered);
+    connect(m_bankGrid, &BankGridWidget::cellTriggered, this,
+            [this](int bankSetIndex, int bankIndex, int cellIndex) {
+                onCellTriggered(bankSetIndex, bankIndex, cellIndex, true);
+            });
     connect(m_bankGrid, &BankGridWidget::cellEditRequested,
             this, &MainWindow::onCellEditRequested);
     connect(m_bankGrid, &BankGridWidget::cellPeekPreviewRequested,
             this, &MainWindow::onCellPeekPreviewRequested);
+    connect(m_bankGrid, &BankGridWidget::cellContextMenuRequested,
+            this, &MainWindow::onCellContextMenu);
+    connect(m_bankGrid, &BankGridWidget::bankContextMenuRequested,
+            this, &MainWindow::onBankContextMenu);
     connect(m_bankGrid, &BankGridWidget::midiLearnCellTriggerRequested,
             this, &MainWindow::onMidiLearnCellTriggerFromGrid);
-
+    connect(m_bankGrid, &BankGridWidget::mediaPreloadProgress,
+            this, &MainWindow::onMediaPreloadProgress);
+    connect(m_bankGrid, &BankGridWidget::mediaPreloadFinished,
+            this, &MainWindow::onMediaPreloadFinished);
     setCentralWidget(central);
 }
 
@@ -740,6 +873,11 @@ void MainWindow::setupMenus()
     fileMenu->addAction(tr("E&xit"), this, &QMainWindow::close);
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    editMenu->addAction(tr("&Copy cell"), this, &MainWindow::copySelectedCell)
+        ->setShortcut(QKeySequence::Copy);
+    editMenu->addAction(tr("&Paste into cell"), this, &MainWindow::pasteIntoSelectedCell)
+        ->setShortcut(QKeySequence::Paste);
+    editMenu->addSeparator();
     auto* actPrefs = editMenu->addAction(tr("&Preferences..."), this, &MainWindow::onEditPreferences);
     actPrefs->setShortcut(QKeySequence::Preferences);
     actPrefs->setMenuRole(QAction::PreferencesRole);
@@ -748,14 +886,18 @@ void MainWindow::setupMenus()
     viewMenu->addAction(m_mediaDock->toggleViewAction());
     viewMenu->addAction(tr("Bank grid size..."), this, &MainWindow::onConfigureBankGrid);
 
+    m_outputMenu = menuBar()->addMenu(tr("&Output"));
+    connect(m_outputMenu, &QMenu::aboutToShow, this, &MainWindow::rebuildOutputScreenMenu);
+    connect(qGuiApp, &QGuiApplication::screenAdded, this, &MainWindow::rebuildOutputScreenMenu);
+    connect(qGuiApp, &QGuiApplication::screenRemoved, this, &MainWindow::rebuildOutputScreenMenu);
+
     auto* mapMenu = menuBar()->addMenu(tr("&Mapping"));
-    m_actMidiMappingEdit = mapMenu->addAction(tr("Edit MIDI &mapping mode"));
+    m_actMidiMappingEdit = mapMenu->addAction(tr("Edit &mapping mode"));
     m_actMidiMappingEdit->setCheckable(true);
     m_actMidiMappingEdit->setShortcut(QKeySequence(QStringLiteral("Ctrl+M")));
     m_actMidiMappingEdit->setShortcutContext(Qt::ApplicationShortcut);
     m_actMidiMappingEdit->setToolTip(
-        tr("Highlights the bank grid in green. Click a cell, then press a MIDI note or key to assign a clip trigger. "
-           "Use “Learn MIDI CC → property…” for faders on the selected cell."));
+        tr("Ctrl+M: green bank grid. Click a cell, then press a keyboard key or MIDI note to assign a clip trigger."));
     connect(m_actMidiMappingEdit, &QAction::toggled, this, &MainWindow::onMidiMappingEditToggled);
     mapMenu->addSeparator();
     mapMenu->addAction(tr("Learn cell trigger…"), this, &MainWindow::onLearnCellTrigger);
@@ -767,6 +909,16 @@ void MainWindow::setupMenus()
     bankLearn->addAction(tr("Bank &next…"), this, &MainWindow::onLearnBankNext);
     bankLearn->addAction(tr("Bank &previous…"), this, &MainWindow::onLearnBankPrev);
     bankLearn->addAction(tr("&Select bank…"), this, &MainWindow::onLearnBankSelect);
+    m_midiPortMenu = mapMenu->addMenu(tr("MIDI input port"));
+    mapMenu->addSeparator();
+    m_actApplyMappingAllBanks = mapMenu->addAction(tr("Apply mapping to all banks"));
+    m_actApplyMappingAllBanks->setCheckable(true);
+    m_actApplyMappingAllBanks->setToolTip(
+        tr("Copy the selected cell's MIDI mappings, layer settings (preferred mix "
+           "layer, keying, mixing, matte role), and playback settings (not the video) "
+           "to the same cell on every bank."));
+    connect(m_actApplyMappingAllBanks, &QAction::toggled,
+            this, &MainWindow::onApplyMappingToAllBanksToggled);
     mapMenu->addSeparator();
     mapMenu->addAction(tr("Cancel learn"), this, &MainWindow::onCancelLearn);
     mapMenu->addSeparator();
@@ -774,26 +926,28 @@ void MainWindow::setupMenus()
         QMessageBox::information(
             this,
             tr("Mix slot shortcuts"),
-            tr("<p><b>Keyboard:</b> <b>1</b>–<b>9</b>, <b>0</b>, <b>-</b>, <b>=</b> "
-               "(without Ctrl, Alt, or Meta) → mix slots 1–12; same keys on the keypad.</p>"
-               "<p><b>MIDI:</b> <b>Channel 16</b>, notes <b>60–71</b> (C4–B4) → mix slots 1–12. "
-               "These are handled before project trigger mappings.</p>"
+            tr("<p><b>Cell triggers (Ctrl+M):</b> enable mapping mode, click a cell, then press a "
+               "keyboard key or MIDI note. The key appears on the cell (top right).</p>"
+               "<p><b>Mix slots (MIDI):</b> channel 16, notes <b>60–72</b> (C4–C5) → slots 1–13.</p>"
                "<p><b>Grid:</b> <span style=\"color:#3a9cff\">blue</span> = clip on a mix layer; "
                "<span style=\"color:#ff913a\">orange</span> = large clip preview (right-click peek).</p>"
-               "<p><b>Right-click</b> a <b>playing</b> cell: preview + Inspector for that cell; "
-               "right-click again to clear peek.</p>"));
+               "<p><b>Right-click</b> a cell: context menu (peek preview, copy, paste). "
+               "<b>Ctrl+C</b> / <b>Ctrl+V</b> copy and paste the selected cell content.</p>"));
     });
 
     menuBar()->addMenu(tr("&Help"));
 }
 
-void MainWindow::rebindUiToProject()
+void MainWindow::rebindUiToProject(bool preloadMedia)
 {
     Project* p = m_project.get();
     p->ensureSingleBankSet();
     p->resizeBanksForGrid(p->settings.matrix.gridRows, p->settings.matrix.gridCols);
-    m_bankGrid ->setProject(p);
+    m_bankGrid->setProject(p);
     m_inspector->setProject(p);
+    if (m_outputProcessingDialog) {
+        m_outputProcessingDialog->setProject(p);
+    }
     m_mediaDock->setProject(p);
     if (m_inputRouter) {
         m_inputRouter->setProject(p);
@@ -805,6 +959,300 @@ void MainWindow::rebindUiToProject()
     refreshPreviewForSelectedCell();
     syncMixSlotHighlightsToBankGrid();
     syncOutputFilterChainToMixers();
+    if (preloadMedia) {
+        showMediaPreloadHint();
+        if (m_bankGrid) {
+            m_bankGrid->preloadProjectMediaThumbnails();
+            onMediaPreloadProgress(m_bankGrid->mediaPreloadCompleted(),
+                                   m_bankGrid->mediaPreloadTotal());
+        }
+    }
+}
+
+void MainWindow::showMediaPreloadHint()
+{
+    if (!m_mediaPreloadDialog) {
+        m_mediaPreloadDialog = new QProgressDialog(this);
+        m_mediaPreloadDialog->setWindowTitle(tr("Loading videos"));
+        m_mediaPreloadDialog->setWindowModality(Qt::ApplicationModal);
+        m_mediaPreloadDialog->setMinimumDuration(0);
+        m_mediaPreloadDialog->setAutoClose(false);
+        m_mediaPreloadDialog->setAutoReset(false);
+        m_mediaPreloadDialog->setCancelButton(nullptr);
+        m_mediaPreloadDialog->setAttribute(Qt::WA_QuitOnClose, false);
+        Qt::WindowFlags flags = Qt::Dialog | Qt::WindowTitleHint | Qt::CustomizeWindowHint;
+        flags &= ~Qt::WindowCloseButtonHint;
+        flags &= ~Qt::WindowMaximizeButtonHint;
+        flags &= ~Qt::WindowMinimizeButtonHint;
+        flags &= ~Qt::WindowSystemMenuHint;
+        m_mediaPreloadDialog->setWindowFlags(flags);
+        m_mediaPreloadDialog->setRange(0, 100);
+        m_mediaPreloadDialog->setValue(0);
+        m_mediaPreloadDialog->setLabelText(tr("Loading video previews…"));
+    }
+    m_mediaPreloadDialog->setRange(0, 100);
+    m_mediaPreloadDialog->setValue(0);
+    m_mediaPreloadDialog->setLabelText(tr("Loading video previews… %1%").arg(0));
+    if (!m_mediaPreloadDialog->isVisible()) {
+        m_mediaPreloadDialog->show();
+    }
+    // Force an immediate paint so the dialog does not stay blank/white until the
+    // first thumbnail finishes (setValue(0) on an already-zero value is a no-op
+    // and would not trigger a repaint on its own).
+    m_mediaPreloadDialog->repaint();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
+void MainWindow::onMediaPreloadProgress(int completed, int total)
+{
+    const int percent = mediaPreloadPercent(completed, total);
+    if (!m_mediaPreloadDialog) {
+        return;
+    }
+    m_mediaPreloadDialog->setRange(0, 100);
+    m_mediaPreloadDialog->setValue(percent);
+    m_mediaPreloadDialog->setLabelText(
+        tr("Loading video previews… %1%").arg(percent));
+    if (!m_mediaPreloadDialog->isVisible()) {
+        m_mediaPreloadDialog->show();
+    }
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
+void MainWindow::closeMediaPreloadHint()
+{
+    if (!m_mediaPreloadDialog || !m_mediaPreloadDialog->isVisible()) {
+        return;
+    }
+    m_mediaPreloadDialog->close();
+}
+
+void MainWindow::onMediaPreloadFinished()
+{
+    closeMediaPreloadHint();
+    QTimer::singleShot(0, this, [this] {
+        resolveMissingProjectMedia();
+    });
+}
+
+void MainWindow::promptOpenLastProjectIfNeeded()
+{
+    if (m_startupProjectPromptDone) {
+        return;
+    }
+    m_startupProjectPromptDone = true;
+
+    const QString path = loadLastProjectPathSetting();
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        return;
+    }
+
+    const auto answer = QMessageBox::question(
+        this,
+        tr("Open project"),
+        tr("Load the last opened project?\n\n%1").arg(path),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+    if (answer == QMessageBox::Yes) {
+        openProjectFromPath(path);
+    }
+}
+
+namespace {
+
+bool mediaFileExists(const QString& path)
+{
+    return !path.isEmpty() && QFileInfo::exists(path);
+}
+
+} // namespace
+
+void MainWindow::clearCellsUsingMedia(const QUuid& mediaId)
+{
+    if (!m_project || mediaId.isNull()) {
+        return;
+    }
+    using pvj::core::Cell;
+    using pvj::core::GeneratorKind;
+    using pvj::core::VisualType;
+
+    for (int si = 0; si < m_project->bankSets.size(); ++si) {
+        auto& set = m_project->bankSets[si];
+        for (int bi = 0; bi < set.banks.size(); ++bi) {
+            auto& bank = set.banks[bi];
+            for (int ci = 0; ci < bank.cells.size(); ++ci) {
+                Cell& c = bank.cells[ci];
+                if (c.visual.type == VisualType::Media && c.visual.mediaId == mediaId) {
+                    c.visual.type      = VisualType::Empty;
+                    c.visual.mediaId   = {};
+                    c.visual.generator = GeneratorKind::None;
+                }
+            }
+        }
+    }
+}
+
+MainWindow::MissingMediaAction MainWindow::promptMissingMediaFile(const QString& path)
+{
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("Media file not found"));
+    box.setText(tr("The media file could not be found:"));
+    box.setInformativeText(path);
+    auto* locateBtn  = box.addButton(tr("Locate…"), QMessageBox::ActionRole);
+    box.addButton(tr("Skip"), QMessageBox::RejectRole);
+    auto* skipAllBtn = box.addButton(tr("Skip all"), QMessageBox::DestructiveRole);
+    box.setDefaultButton(locateBtn);
+    box.exec();
+
+    if (box.clickedButton() == locateBtn) {
+        return MissingMediaAction::Locate;
+    }
+    if (box.clickedButton() == skipAllBtn) {
+        return MissingMediaAction::SkipAll;
+    }
+    return MissingMediaAction::Skip;
+}
+
+bool MainWindow::tryLocateMissingMedia(const QUuid& mediaId, const QString& oldPath)
+{
+    if (!m_project || mediaId.isNull()) {
+        return false;
+    }
+    pvj::core::MediaItem* item = m_project->findMedia(mediaId);
+    if (!item) {
+        return false;
+    }
+
+    const QString startDir = QFileInfo(oldPath).absolutePath();
+    const QString filter =
+        tr("Video files (*.mp4 *.mov *.avi *.mkv *.webm *.m4v *.mpg *.mpeg);;All files (*.*)");
+    const QString chosen = QFileDialog::getOpenFileName(
+        this,
+        tr("Locate media file"),
+        startDir.isEmpty() ? QDir::homePath() : startDir,
+        filter);
+    if (chosen.isEmpty() || !QFileInfo(chosen).isFile()) {
+        return false;
+    }
+
+    item->path        = chosen;
+    item->displayName = QFileInfo(chosen).fileName();
+    if (m_mediaDock) {
+        m_mediaDock->refreshProjectMedia();
+    }
+    if (m_bankGrid) {
+        m_bankGrid->requestThumbnailForMedia(mediaId);
+    }
+    return true;
+}
+
+bool MainWindow::ensureMediaFileAvailable(const QUuid& mediaId, const QString& path)
+{
+    if (mediaFileExists(path)) {
+        return true;
+    }
+    if (!m_project || mediaId.isNull()) {
+        return false;
+    }
+
+    if (m_skipAllMissingMedia) {
+        clearCellsUsingMedia(mediaId);
+        return false;
+    }
+
+    const MissingMediaAction act = promptMissingMediaFile(path);
+    if (act == MissingMediaAction::Locate) {
+        if (tryLocateMissingMedia(mediaId, path)) {
+            return true;
+        }
+        clearCellsUsingMedia(mediaId);
+        return false;
+    }
+    if (act == MissingMediaAction::SkipAll) {
+        m_skipAllMissingMedia = true;
+    }
+    clearCellsUsingMedia(mediaId);
+    if (m_bankGrid) {
+        m_bankGrid->refresh();
+    }
+    updateMixerFromPlayingCells();
+    refreshPreviewForSelectedCell();
+    return false;
+}
+
+void MainWindow::resolveMissingProjectMedia()
+{
+    if (!m_project) {
+        return;
+    }
+
+    m_skipAllMissingMedia = false;
+
+    QSet<QUuid> missingIds;
+    for (const pvj::core::MediaItem& item : m_project->mediaLibrary) {
+        if (!item.id.isNull() && !mediaFileExists(item.path)) {
+            missingIds.insert(item.id);
+        }
+    }
+
+    using pvj::core::VisualType;
+    for (const auto& set : m_project->bankSets) {
+        for (const auto& bank : set.banks) {
+            for (const auto& cell : bank.cells) {
+                if (cell.visual.type != VisualType::Media || cell.visual.mediaId.isNull()) {
+                    continue;
+                }
+                const pvj::core::MediaItem* m = m_project->findMedia(cell.visual.mediaId);
+                if (!m || !mediaFileExists(m->path)) {
+                    missingIds.insert(cell.visual.mediaId);
+                }
+            }
+        }
+    }
+
+    bool cellsCleared = false;
+    bool mediaUpdated = false;
+    for (const QUuid& id : missingIds) {
+        const pvj::core::MediaItem* item = m_project->findMedia(id);
+        const QString path = item ? item->path : QStringLiteral("(unknown)");
+
+        if (item && mediaFileExists(item->path)) {
+            continue;
+        }
+
+        if (m_skipAllMissingMedia) {
+            clearCellsUsingMedia(id);
+            cellsCleared = true;
+            continue;
+        }
+
+        const MissingMediaAction act = promptMissingMediaFile(path);
+        if (act == MissingMediaAction::Locate) {
+            if (tryLocateMissingMedia(id, path)) {
+                mediaUpdated = true;
+                continue;
+            }
+            clearCellsUsingMedia(id);
+            cellsCleared = true;
+        } else {
+            if (act == MissingMediaAction::SkipAll) {
+                m_skipAllMissingMedia = true;
+            }
+            clearCellsUsingMedia(id);
+            cellsCleared = true;
+        }
+    }
+
+    if (cellsCleared || mediaUpdated) {
+        if (m_bankGrid) {
+            m_bankGrid->refresh();
+        }
+        if (cellsCleared) {
+            updateMixerFromPlayingCells();
+            refreshPreviewForSelectedCell();
+        }
+    }
 }
 
 void MainWindow::applyBankGridDimensions(int rows, int cols)
@@ -850,7 +1298,70 @@ void MainWindow::onEditPreferences()
                 tr("Stage resolution: %1×%2 px").arg(px.width()).arg(px.height()), 3000);
         }
     });
+    syncMidiPreferencesDialog(dlg);
+    connect(&dlg, &PreferencesDialog::midiDevicesRefreshRequested, this, [this, &dlg]() {
+        syncMidiPreferencesDialog(dlg);
+    });
+    connect(&dlg, &PreferencesDialog::midiInputPortsChanged, this, [this, &dlg](const QStringList& names) {
+        applyMidiInputPorts(names);
+        syncMidiPreferencesDialog(dlg);
+    });
+
+    QMetaObject::Connection midiActivityConn;
+    if (m_midiInput) {
+        midiActivityConn = connect(
+            m_midiInput.get(), &pvj::input::MidiInput::messageReceived, &dlg,
+            [&dlg](const QByteArray& bytes) { dlg.reportMidiInputActivity(bytes); },
+            Qt::QueuedConnection);
+    }
+
     dlg.exec();
+
+    if (midiActivityConn) {
+        disconnect(midiActivityConn);
+    }
+}
+
+bool MainWindow::applyMidiInputPorts(const QStringList& portNames)
+{
+    if (!m_midiInput) {
+        return false;
+    }
+    if (portNames.isEmpty()) {
+        m_midiInput->closeAllPorts();
+        pvj::input::MidiInput::clearPreferredPorts();
+        populateMidiPortMenu();
+        showMidiInputStatus();
+        return true;
+    }
+    if (m_midiInput->openPortsByNames(portNames)) {
+        populateMidiPortMenu();
+        showMidiInputStatus();
+        return true;
+    }
+    populateMidiPortMenu();
+    if (statusBar()) {
+        statusBar()->showMessage(
+            tr("Could not open MIDI port(s): %1").arg(portNames.join(QStringLiteral(", "))),
+            8000);
+    }
+    showMidiInputStatus();
+    return false;
+}
+
+void MainWindow::syncMidiPreferencesDialog(PreferencesDialog& dlg)
+{
+    if (!m_midiInput) {
+        dlg.setMidiInputPorts({}, {}, {});
+        return;
+    }
+    const QStringList ports    = m_midiInput->portNames();
+    const QStringList open     = m_midiInput->openPortNames();
+    QStringList       selected = pvj::input::MidiInput::savedPortNames();
+    if (selected.isEmpty() && !open.isEmpty()) {
+        selected = open;
+    }
+    dlg.setMidiInputPorts(ports, selected, open);
 }
 
 void MainWindow::updateWindowTitle()
@@ -865,7 +1376,7 @@ void MainWindow::updateWindowTitle()
         title += QStringLiteral(" [imported from ") + m_project->sourceFormat.toUpper() + QLatin1Char(']');
     }
     if (m_actMidiMappingEdit && m_actMidiMappingEdit->isChecked()) {
-        title += tr(" — MIDI map");
+        title += tr(" — Map");
     }
     setWindowTitle(title);
 }
@@ -894,8 +1405,11 @@ void MainWindow::stopAllPlaybackAndClear()
     }
     m_inspectorEditLayer = -1;
     m_mixerSlotHadMedia.fill(false);
+    m_activeMixerFilterCells.clear();
     m_previewA->clearFrame();
     updateMixerFromPlayingCells();
+    syncOutputFilterChainToMixers();
+    syncMixerFilterHighlightsToBankGrid();
 }
 
 // File operations -------------------------------------------------------------
@@ -906,7 +1420,7 @@ void MainWindow::onFileNew()
 
     m_project = std::make_unique<Project>();
     m_project->initializeDefault();
-    rebindUiToProject();
+    rebindUiToProject(/*preloadMedia=*/false);
     updateWindowTitle();
     statusBar()->showMessage(tr("New project"), 3000);
 }
@@ -946,6 +1460,7 @@ void MainWindow::openProjectFromPath(const QString& path)
     updateWindowTitle();
     statusBar()->showMessage(tr("Opened %1").arg(path), 5000);
     rememberRecentProject(path);
+    saveLastProjectPathSetting(path);
 }
 
 void MainWindow::rememberRecentProject(const QString& path)
@@ -1188,7 +1703,7 @@ void MainWindow::onCellEditRequested(int bankSetIndex, int bankIndex, int cellIn
                                 &bank.cells[cellIndex], m_project.get());
 }
 
-void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
+void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex, bool toggleIfPlaying)
 {
     if (bankSetIndex < 0 || bankIndex < 0 || cellIndex < 0) return;
     if (bankSetIndex >= m_project->bankSets.size()) return;
@@ -1199,6 +1714,12 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
 
     const auto& cell = bank.cells[cellIndex];
 
+    if (cellIsMixerFilterType(cell)) {
+        toggleMixerFilterCell(bankSetIndex, bankIndex, cellIndex);
+        refreshPreviewForSelectedCell();
+        return;
+    }
+
     if (!cellIsPlayable(cell)) {
         const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
         if (layer < 0) {
@@ -1206,22 +1727,24 @@ void MainWindow::onCellTriggered(int bankSetIndex, int bankIndex, int cellIndex)
             return;
         }
         stopMixLayer(layer);
-        updateMixerFromPlayingCells();
+        syncMixLayerFromCell(layer);
         syncMixerToFullscreen();
         syncMixSlotHighlightsToBankGrid();
         refreshPreviewForSelectedCell();
         return;
     }
 
-    // Left-click toggle: same cell already on the mixer → stop.
-    const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
-    if (playingLayer >= 0) {
-        stopMixLayer(playingLayer);
-        updateMixerFromPlayingCells();
-        syncMixerToFullscreen();
-        syncMixSlotHighlightsToBankGrid();
-        refreshPreviewForSelectedCell();
-        return;
+    // Left-click / keyboard toggle: same cell already on the mixer → stop.
+    if (toggleIfPlaying) {
+        const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+        if (playingLayer >= 0) {
+            stopMixLayer(playingLayer);
+            syncMixLayerFromCell(playingLayer);
+            syncMixerToFullscreen();
+            syncMixSlotHighlightsToBankGrid();
+            refreshPreviewForSelectedCell();
+            return;
+        }
     }
 
     const int layer = pickMixSlotForTrigger(bankSetIndex, bankIndex, cellIndex);
@@ -1265,6 +1788,87 @@ bool MainWindow::cellIsPlayable(const Cell& cell)
     return isFeedbackCell || isPlayableMedia;
 }
 
+bool MainWindow::cellIsMixerFilterType(const Cell& cell)
+{
+    return cell.visual.type == VisualType::MixerFilter;
+}
+
+bool MainWindow::isMixerFilterCellActive(int bankSetIndex, int bankIndex, int cellIndex) const
+{
+    for (const DeckSlot& slot : m_activeMixerFilterCells) {
+        if (slot.bankSet == bankSetIndex && slot.bank == bankIndex && slot.cell == cellIndex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MainWindow::pruneActiveMixerFilterCells()
+{
+    bool changed = false;
+    for (int i = m_activeMixerFilterCells.size() - 1; i >= 0; --i) {
+        const Cell* c = cellAtDeck(m_activeMixerFilterCells[i]);
+        if (!c || !cellIsMixerFilter(*c)) {
+            m_activeMixerFilterCells.removeAt(i);
+            changed = true;
+        }
+    }
+    if (changed) {
+        syncOutputFilterChainToMixers();
+        syncMixerToFullscreen();
+        syncMixerFilterHighlightsToBankGrid();
+    }
+}
+
+void MainWindow::toggleMixerFilterCell(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    const Cell* cell = cellAtDeck({bankSetIndex, bankIndex, cellIndex});
+    if (!cell || !cellIsMixerFilterType(*cell)) {
+        return;
+    }
+
+    for (int i = 0; i < m_activeMixerFilterCells.size(); ++i) {
+        const DeckSlot& slot = m_activeMixerFilterCells[i];
+        if (slot.bankSet == bankSetIndex && slot.bank == bankIndex && slot.cell == cellIndex) {
+            m_activeMixerFilterCells.removeAt(i);
+            syncOutputFilterChainToMixers();
+            syncMixerToFullscreen();
+            syncMixerFilterHighlightsToBankGrid();
+            statusBar()->showMessage(tr("Mixer filter off (cell %1)").arg(cellIndex + 1), 2500);
+            return;
+        }
+    }
+
+    if (!cellIsMixerFilter(*cell)) {
+        statusBar()->showMessage(tr("Choose a filter for this mixer-filter cell first (double-click to edit)"),
+                                4000);
+        return;
+    }
+
+    m_activeMixerFilterCells.append({bankSetIndex, bankIndex, cellIndex});
+    syncOutputFilterChainToMixers();
+    syncMixerToFullscreen();
+    syncMixerFilterHighlightsToBankGrid();
+    statusBar()->showMessage(tr("Mixer filter on (cell %1)").arg(cellIndex + 1), 2500);
+}
+
+QList<pvj::core::CellFilterNode> MainWindow::buildMergedOutputFilterChain() const
+{
+    if (!m_project) {
+        return {};
+    }
+    QList<QList<pvj::core::CellFilterNode>> activeChains;
+    activeChains.reserve(m_activeMixerFilterCells.size());
+    for (const DeckSlot& slot : m_activeMixerFilterCells) {
+        const Cell* c = cellAtDeck(slot);
+        if (c && !c->filterChain.isEmpty()) {
+            activeChains.append(c->filterChain);
+        }
+    }
+    return pvj::core::buildEffectiveOutputFilterChain(m_project->settings.output.filterChain,
+                                                      activeChains);
+}
+
 bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex, int cellIndex)
 {
     if (layer < kUserLayerMin || layer >= kMixLayers || !m_project) {
@@ -1295,11 +1899,8 @@ bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex,
         if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
             m_fullscreenOut->mixerWidget()->clearFrame(layer);
         }
-        if (cell->props.fade > 1e-6) {
-            startLayerFadeIn(layer, float(cell->props.transparency), float(cell->props.fade));
-        } else {
-            updateMixerFromPlayingCells();
-        }
+        m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
+        syncMixLayerFromCell(layer);
         return true;
     }
 
@@ -1312,11 +1913,8 @@ bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex,
         m_inspectorEditLayer = layer;
         syncInspectorLayerKeyingOverride();
         playMediaOnLayer(layer, m.path);
-        if (cell->props.fade > 1e-6) {
-            startLayerFadeIn(layer, float(cell->props.transparency), float(cell->props.fade));
-        } else {
-            updateMixerFromPlayingCells();
-        }
+        m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
+        syncMixLayerFromCell(layer);
         return true;
     }
     return false;
@@ -1358,18 +1956,30 @@ void MainWindow::playMediaOnLayer(int layer, const QString& path)
     if (layer < kUserLayerMin || layer >= kMixLayers) return;
     if (path.isEmpty()) return;
 
+    const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]);
+    QString mediaPath = path;
+    if (!mediaFileExists(mediaPath) && c && !c->visual.mediaId.isNull()) {
+        if (!ensureMediaFileAvailable(c->visual.mediaId, mediaPath)) {
+            return;
+        }
+        if (const pvj::core::MediaItem* m = m_project->findMedia(c->visual.mediaId)) {
+            mediaPath = m->path;
+        }
+    }
+    if (!mediaFileExists(mediaPath)) {
+        return;
+    }
+
     m_audioDecoders[layer]->close();
     if (m_audioEngine) {
         m_audioEngine->setLayerActive(layer, false);
     }
 
-    if (!m_decoders[layer]->open(path)) {
-        statusBar()->showMessage(tr("Cannot open %1").arg(path), 5000);
+    if (!m_decoders[layer]->open(mediaPath)) {
+        statusBar()->showMessage(tr("Cannot open %1").arg(mediaPath), 5000);
         return;
     }
-
-    const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]);
-    const double speed = c ? c->props.movieSpeed : 1.0;
+    const double speed = qBound(0.0, c ? c->props.movieSpeed : 1.0, 4.0);
     const bool loop    = c ? playModeUsesLoop(c->props.playMode) : true;
 
     m_decoders[layer]->setLooping(loop);
@@ -1408,7 +2018,7 @@ void MainWindow::playMediaOnLayer(int layer, const QString& path)
             m_audioDecoders[layer]->play();
         }
         if (m_audioEngine) {
-            m_audioEngine->setLayerGain(layer, c ? float(c->props.audioGain) : 1.f);
+            m_audioEngine->setLayerGain(layer, effectiveLayerAudioGain(c));
             m_audioEngine->setLayerActive(layer, true);
         }
     } else if (m_audioEngine) {
@@ -1420,13 +2030,13 @@ void MainWindow::playMediaOnLayer(int layer, const QString& path)
     }
 }
 
-const Cell* MainWindow::cellAtDeck(const DeckSlot& slot)
+const Cell* MainWindow::cellAtDeck(const DeckSlot& slot) const
 {
     if (!m_project) return nullptr;
     if (slot.bankSet < 0 || slot.bankSet >= m_project->bankSets.size()) return nullptr;
     const auto& set = m_project->bankSets[slot.bankSet];
     if (slot.bank < 0 || slot.bank >= set.banks.size()) return nullptr;
-    auto& bank = set.banks[slot.bank];
+    const auto& bank = set.banks[slot.bank];
     if (slot.cell < 0 || slot.cell >= bank.cells.size()) return nullptr;
     return &bank.cells[slot.cell];
 }
@@ -1462,6 +2072,32 @@ void MainWindow::snapshotLayerKeyingFromCell(int layer, const Cell* cell)
     s.maskEllipseY = cell->props.maskEllipseY;
 }
 
+void MainWindow::applyLayerKeyingStateToCell(Cell& cell, const LayerKeyingState& state)
+{
+    if (!state.valid) {
+        return;
+    }
+    pvj::core::CellProps& p = cell.props;
+    p.keyingEnabled  = state.keyingEnabled;
+    p.keyingMode     = state.keyingMode;
+    p.keyThreshold   = state.keyThreshold;
+    p.keySoftness    = state.keySoftness;
+    p.keyLumaCenter  = state.keyLumaCenter;
+    p.keyLumaInvert  = state.keyLumaInvert;
+    p.keyChromaHue   = state.keyChromaHue;
+    p.keyChromaInvert = state.keyChromaInvert;
+    p.keyChannelR    = state.keyChannelR;
+    p.keyChannelG    = state.keyChannelG;
+    p.keyChannelB    = state.keyChannelB;
+    p.maskType       = state.maskType;
+    p.maskFeather    = state.maskFeather;
+    p.maskRectWidth  = state.maskRectWidth;
+    p.maskRectHeight = state.maskRectHeight;
+    p.maskRadius     = state.maskRadius;
+    p.maskEllipseX   = state.maskEllipseX;
+    p.maskEllipseY   = state.maskEllipseY;
+}
+
 void MainWindow::syncInspectorLayerKeyingOverride()
 {
     if (!m_inspector) {
@@ -1484,6 +2120,44 @@ void MainWindow::syncInspectorLayerKeyingOverride()
     m_inspector->setLayerKeyingOverride(overridePtr);
 }
 
+void MainWindow::syncLiveMixerOpacityForCell(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (!m_previewB) {
+        return;
+    }
+    const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    if (layer < kUserLayerMin || layer >= kMixLayers) {
+        return;
+    }
+    const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]);
+    if (!c) {
+        return;
+    }
+    const bool isFeedbackCell = c->visual.type == VisualType::Generator
+        && c->visual.generator == GeneratorKind::InternalFeedback;
+
+    if (!m_layerFadeAnimating[static_cast<size_t>(layer)]) {
+        const float opacity = float(c->props.transparency);
+        m_previewB->setLayerOpacity(layer, opacity, false);
+        if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
+            if (pvj::render::RhiMixerWidget* dst = m_fullscreenOut->mixerWidget()) {
+                dst->setLayerOpacity(layer, opacity, false);
+            }
+        }
+    }
+
+    // Feedback loops advance only when the mixer repaints; video layers get that from
+    // frameReady, but feedback does not. Repaint once (ring steps every render frame).
+    if (isFeedbackCell && m_previewB->layerFeedbackEnabled(layer)) {
+        m_previewB->update();
+        if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
+            if (pvj::render::RhiMixerWidget* dst = m_fullscreenOut->mixerWidget()) {
+                dst->update();
+            }
+        }
+    }
+}
+
 void MainWindow::scheduleMixerUpdateFromCells()
 {
     if (!m_mixerUpdateDebounceTimer) {
@@ -1491,6 +2165,23 @@ void MainWindow::scheduleMixerUpdateFromCells()
         syncMixerToFullscreen();
         return;
     }
+    // Leading-edge throttle: previously this used QTimer::start() on every call, which
+    // restarts the singleshot countdown. With slider events or MIDI faders arriving
+    // faster than the 16 ms interval (common on Windows where mouse moves can be ≥125 Hz),
+    // the timer never fired during a drag and the mixer only updated once the user
+    // released the slider — making transparency and other parameter sliders feel jerky,
+    // especially with filters applied where each frame is heavier.
+    //
+    // Now: the first call applies the update immediately and starts the cooldown.
+    // Subsequent calls during the cooldown only set the pending flag and the timer's
+    // timeout slot applies the most recent model state when the window closes.
+    if (m_mixerUpdateDebounceTimer->isActive()) {
+        m_mixerUpdatePending = true;
+        return;
+    }
+    m_mixerUpdatePending = false;
+    updateMixerFromPlayingCells();
+    syncMixerToFullscreen();
     m_mixerUpdateDebounceTimer->start();
 }
 
@@ -1516,6 +2207,82 @@ void MainWindow::syncFilterParamsToMixer(int bankSetIndex, int bankIndex, int ce
     }
 }
 
+void MainWindow::schedulePlayingFeedbackCellMixerSync(int bankSetIndex, int bankIndex,
+                                                      int cellIndex)
+{
+    m_pendingFeedbackSyncBankSet = bankSetIndex;
+    m_pendingFeedbackSyncBank = bankIndex;
+    m_pendingFeedbackSyncCell = cellIndex;
+    if (m_feedbackMixerSyncTimer) {
+        m_feedbackMixerSyncTimer->start();
+    }
+}
+
+void MainWindow::syncPlayingFeedbackCellAfterPropertyChange(int bankSetIndex, int bankIndex,
+                                                            int cellIndex,
+                                                            const QString& propertyName)
+{
+    const QString resolved = pvj::core::PropertyRegistry::resolvePropertyId(propertyName);
+    if (resolved.compare(QStringLiteral("transparency"), Qt::CaseInsensitive) == 0) {
+        syncLiveMixerOpacityForCell(bankSetIndex, bankIndex, cellIndex);
+        return;
+    }
+    if (pvj::core::PropertyRegistry::isFilterParamProperty(resolved)) {
+        syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
+    }
+    syncPlayingFeedbackCellToMixer(bankSetIndex, bankIndex, cellIndex);
+}
+
+void MainWindow::syncPlayingFeedbackCellToMixer(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    if (layer < kUserLayerMin || layer >= kMixLayers || !m_previewB) {
+        return;
+    }
+    const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]);
+    if (!c || c->visual.type != VisualType::Generator
+        || c->visual.generator != GeneratorKind::InternalFeedback) {
+        return;
+    }
+    const LayerKeyingState& layerKeying = m_layerKeying[static_cast<size_t>(layer)];
+    const LayerKeyingState* keyingPtr = layerKeying.valid ? &layerKeying : nullptr;
+    const QList<pvj::core::CellFilterNode> chain = effectiveFilterChainForMixer(c, keyingPtr);
+    const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
+    const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
+    const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
+    const float opacity = float(c->props.transparency);
+    const bool fadeAnimating = m_layerFadeAnimating[static_cast<size_t>(layer)];
+
+    const auto apply = [&](pvj::render::RhiMixerWidget* mix) {
+        if (!mix) {
+            return;
+        }
+        mix->setLayerActive(layer, true);
+        mix->setLayerCopyMode(layer, c->props.copyMode);
+        mix->setLayerMatteRole(layer, c->props.matteRole);
+        mix->setLayerPicture(layer, c->props.picture);
+        mix->setLayerFilterChain(layer, chain);
+        mix->setLayerKeyChannels(layer, float(kr), float(kg), float(kb));
+        if (!fadeAnimating) {
+            mix->setLayerOpacity(layer, opacity, false);
+        }
+        mix->setLayerFeedback(layer, true, c->props.feedback);
+    };
+
+    apply(m_previewB);
+    if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
+        apply(m_fullscreenOut->mixerWidget());
+    }
+    if (m_previewB) {
+        m_previewB->update();
+    }
+    if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
+        if (pvj::render::RhiMixerWidget* dst = m_fullscreenOut->mixerWidget()) {
+            dst->update();
+        }
+    }
+}
+
 void MainWindow::syncInspectorEditLayerForCell(int bankSetIndex, int bankIndex, int cellIndex)
 {
     if (m_inspectorEditLayer >= kUserLayerMin && m_inspectorEditLayer < kMixLayers) {
@@ -1527,98 +2294,110 @@ void MainWindow::syncInspectorEditLayerForCell(int bankSetIndex, int bankIndex, 
     m_inspectorEditLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
 }
 
-void MainWindow::updateMixerFromPlayingCells()
+void MainWindow::syncMixLayerFromCell(int layer, bool requestRepaint)
 {
-    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
-        const Cell* c = cellAtDeck(m_layerSlots[i]);
-        const LayerKeyingState& layerKeying = m_layerKeying[static_cast<size_t>(i)];
-        const LayerKeyingState* keyingPtr = layerKeying.valid ? &layerKeying : nullptr;
-        const bool isFeedbackCell = c
-            && c->visual.type == VisualType::Generator
-            && c->visual.generator == GeneratorKind::InternalFeedback;
-        const bool mediaSource = c
-            && c->visual.type == VisualType::Media
-            && !c->visual.mediaId.isNull();
-        if (isFeedbackCell) {
-            m_previewB->setLayerActive(i, true);
-            m_previewB->setLayerCopyMode(i, c->props.copyMode);
-            m_previewB->setLayerMatteRole(i, c->props.matteRole);
-            m_previewB->setLayerPicture(i, c->props.picture);
-            const QList<pvj::core::CellFilterNode> effectiveChain = effectiveFilterChainForMixer(c, keyingPtr);
-            m_previewB->setLayerFilterChain(i, effectiveChain);
-            const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
-            const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
-            const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
-            m_previewB->setLayerKeyChannels(i, float(kr), float(kg), float(kb));
-            if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
-                m_previewB->setLayerOpacity(i, float(c->props.transparency));
-            }
-            m_previewB->setLayerFeedback(i, true, c->props.feedback);
-            if (m_audioEngine) {
-                m_audioEngine->setLayerActive(i, false);
-            }
-            continue;
-        }
-        m_previewB->setLayerFeedback(i, false, {});
-        if (!c || !mediaSource) {
-            if (m_mixerSlotHadMedia[static_cast<size_t>(i)]) {
-                m_decoders[i]->stop();
-                m_audioDecoders[i]->close();
-            }
-            m_mixerSlotHadMedia[static_cast<size_t>(i)] = false;
-            m_layerFadeAnimating[static_cast<size_t>(i)] = false;
-            m_previewB->setLayerActive(i, false);
-            m_previewB->setLayerOpacity(i, 1.0f);
-            m_previewB->setLayerMatteRole(i, pvj::core::LayerMatteRole::None);
-            m_previewB->setLayerFilterChain(i, {});
-            m_previewB->setLayerKeyChannels(i, 1.f, 1.f, 1.f);
-            if (m_audioEngine) {
-                m_audioEngine->setLayerActive(i, false);
-            }
-            continue;
-        }
-        m_previewB->setLayerActive(i, true);
-        m_previewB->setLayerCopyMode(i, c->props.copyMode);
-        m_previewB->setLayerMatteRole(i, c->props.matteRole);
-        m_previewB->setLayerPicture(i, c->props.picture);
-        const QList<pvj::core::CellFilterNode> effectiveChain = effectiveFilterChainForMixer(c, keyingPtr);
-        m_previewB->setLayerFilterChain(i, effectiveChain);
+    if (layer < kUserLayerMin || layer >= kMixLayers || !m_previewB) {
+        return;
+    }
+    const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]);
+    const LayerKeyingState& layerKeying = m_layerKeying[static_cast<size_t>(layer)];
+    const LayerKeyingState* keyingPtr = layerKeying.valid ? &layerKeying : nullptr;
+    const bool isFeedbackCell = c && c->visual.type == VisualType::Generator
+        && c->visual.generator == GeneratorKind::InternalFeedback;
+    const bool mediaSource =
+        c && c->visual.type == VisualType::Media && !c->visual.mediaId.isNull();
+
+    if (isFeedbackCell) {
+        m_previewB->setLayerActive(layer, true);
+        m_previewB->setLayerCopyMode(layer, c->props.copyMode);
+        m_previewB->setLayerMatteRole(layer, c->props.matteRole);
+        m_previewB->setLayerPicture(layer, c->props.picture);
+        m_previewB->setLayerFilterChain(layer, effectiveFilterChainForMixer(c, keyingPtr));
         const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
         const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
         const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
-        m_previewB->setLayerKeyChannels(i, float(kr), float(kg), float(kb));
-        if (!m_layerFadeAnimating[static_cast<size_t>(i)]) {
-            m_previewB->setLayerOpacity(i, float(c->props.transparency));
+        m_previewB->setLayerKeyChannels(layer, float(kr), float(kg), float(kb));
+        if (!m_layerFadeAnimating[static_cast<size_t>(layer)]) {
+            m_previewB->setLayerOpacity(layer, float(c->props.transparency), false);
         }
-
-        if (mediaSource) {
-            m_mixerSlotHadMedia[static_cast<size_t>(i)] = true;
-            m_decoders[i]->setLooping(playModeUsesLoop(c->props.playMode));
-            if (m_audioDecoders[i]->isOpen()) {
-                m_audioDecoders[i]->setLooping(playModeUsesLoop(c->props.playMode));
-            }
-
-            m_decoders[i]->setPlaybackSpeed(c->props.movieSpeed);
-            if (m_audioDecoders[i]->isOpen()) {
-                m_audioDecoders[i]->setPlaybackSpeed(c->props.movieSpeed);
-            }
-        } else if (m_mixerSlotHadMedia[static_cast<size_t>(i)]) {
-            m_decoders[i]->stop();
-            m_audioDecoders[i]->close();
-            m_mixerSlotHadMedia[static_cast<size_t>(i)] = false;
-        }
-
+        m_previewB->setLayerFeedback(layer, true, c->props.feedback);
         if (m_audioEngine) {
-            if (mediaSource && !m_layerFadeAnimating[static_cast<size_t>(i)]) {
-                m_audioEngine->setLayerGain(i, float(c->props.audioGain));
-            }
-            m_audioEngine->setLayerActive(i, mediaSource && m_audioDecoders[i]->isOpen());
+            m_audioEngine->setLayerActive(layer, false);
         }
+        if (requestRepaint) {
+            m_previewB->update();
+        }
+        return;
+    }
+
+    m_previewB->setLayerFeedback(layer, false, {});
+    if (!c || !mediaSource) {
+        if (m_mixerSlotHadMedia[static_cast<size_t>(layer)]) {
+            m_decoders[layer]->stop();
+            m_audioDecoders[layer]->close();
+        }
+        m_mixerSlotHadMedia[static_cast<size_t>(layer)] = false;
+        m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
+        m_previewB->setLayerActive(layer, false);
+        m_previewB->setLayerOpacity(layer, 1.0f, false);
+        m_previewB->setLayerMatteRole(layer, pvj::core::LayerMatteRole::None);
+        m_previewB->setLayerFilterChain(layer, {});
+        m_previewB->setLayerKeyChannels(layer, 1.f, 1.f, 1.f);
+        if (m_audioEngine) {
+            m_audioEngine->setLayerActive(layer, false);
+        }
+        if (requestRepaint) {
+            m_previewB->update();
+        }
+        return;
+    }
+
+    m_previewB->setLayerActive(layer, true);
+    m_previewB->setLayerCopyMode(layer, c->props.copyMode);
+    m_previewB->setLayerMatteRole(layer, c->props.matteRole);
+    m_previewB->setLayerPicture(layer, c->props.picture);
+    m_previewB->setLayerFilterChain(layer, effectiveFilterChainForMixer(c, keyingPtr));
+    const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
+    const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
+    const double kb = keyingPtr ? keyingPtr->keyChannelB : c->props.keyChannelB;
+    m_previewB->setLayerKeyChannels(layer, float(kr), float(kg), float(kb));
+    if (!m_layerFadeAnimating[static_cast<size_t>(layer)]) {
+        m_previewB->setLayerOpacity(layer, float(c->props.transparency), false);
+    }
+
+    m_mixerSlotHadMedia[static_cast<size_t>(layer)] = true;
+    m_decoders[layer]->setLooping(playModeUsesLoop(c->props.playMode));
+    if (m_audioDecoders[layer]->isOpen()) {
+        m_audioDecoders[layer]->setLooping(playModeUsesLoop(c->props.playMode));
+    }
+    const double speed = qBound(0.0, c->props.movieSpeed, 4.0);
+    m_decoders[layer]->setPlaybackSpeed(speed);
+    if (m_audioDecoders[layer]->isOpen()) {
+        m_audioDecoders[layer]->setPlaybackSpeed(speed);
+    }
+
+    if (m_audioEngine) {
+        if (!m_layerFadeAnimating[static_cast<size_t>(layer)]) {
+            m_audioEngine->setLayerGain(layer, effectiveLayerAudioGain(c));
+        }
+        m_audioEngine->setLayerActive(layer, m_audioDecoders[layer]->isOpen());
+    }
+    if (requestRepaint) {
+        m_previewB->update();
+    }
+}
+
+void MainWindow::updateMixerFromPlayingCells()
+{
+    for (int i = kUserLayerMin; i < kMixLayers; ++i) {
+        syncMixLayerFromCell(i, false);
     }
     updateDeckAPreviewRotation();
     syncMixerToFullscreen();
     syncMixSlotHighlightsToBankGrid();
-
+    if (m_previewB) {
+        m_previewB->update();
+    }
 }
 
 void MainWindow::syncMixSlotHighlightsToBankGrid()
@@ -1635,7 +2414,23 @@ void MainWindow::syncMixSlotHighlightsToBankGrid()
         arr[static_cast<size_t>(i)] = MixSlotCellRef{d.bankSet, d.bank, d.cell};
     }
     m_bankGrid->setMixSlotPlayback(arr);
+    syncMixerFilterHighlightsToBankGrid();
     syncPeekHighlightToBankGrid();
+}
+
+void MainWindow::syncMixerFilterHighlightsToBankGrid()
+{
+    if (!m_bankGrid) {
+        return;
+    }
+    QList<MixSlotCellRef> refs;
+    refs.reserve(m_activeMixerFilterCells.size());
+    for (const DeckSlot& slot : m_activeMixerFilterCells) {
+        if (slot.bankSet >= 0) {
+            refs.append(MixSlotCellRef{slot.bankSet, slot.bank, slot.cell});
+        }
+    }
+    m_bankGrid->setActiveMixerFilterCells(refs);
 }
 
 void MainWindow::syncPeekHighlightToBankGrid()
@@ -1657,7 +2452,7 @@ void MainWindow::syncPeekHighlightToBankGrid()
 
 void MainWindow::onMixLayerDirect(int userSlotIndex)
 {
-    static constexpr int kUserLayerDirectCount = 12;
+    static constexpr int kUserLayerDirectCount = 13;
     if (userSlotIndex < 0 || userSlotIndex >= kUserLayerDirectCount || !m_bankGrid) {
         return;
     }
@@ -1687,7 +2482,7 @@ void MainWindow::startLayerFadeIn(int layer, float targetTransparency, float fad
     m_layerFadeTarget[static_cast<size_t>(layer)]     = targetTransparency;
     float audioTarget = targetTransparency;
     if (const Cell* c = cellAtDeck(m_layerSlots[static_cast<size_t>(layer)])) {
-        audioTarget = float(c->props.transparency * c->props.audioGain);
+        audioTarget = float(c->props.transparency * effectiveLayerAudioGain(c));
     }
     m_layerFadeTargetAudio[static_cast<size_t>(layer)] = audioTarget;
     m_layerFadeElapsedMs[static_cast<size_t>(layer)]  = 0;
@@ -1762,7 +2557,7 @@ void MainWindow::syncOutputFilterChainToMixers()
     if (!m_project || !m_previewB) {
         return;
     }
-    const auto& chain = m_project->settings.output.filterChain;
+    const QList<pvj::core::CellFilterNode> chain = buildMergedOutputFilterChain();
     m_previewB->setOutputFilterChain(chain);
     if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
         m_fullscreenOut->mixerWidget()->setOutputFilterChain(chain);
@@ -1824,6 +2619,39 @@ int MainWindow::findLayerPlayingCell(int bankSet, int bank, int cell) const
     return -1;
 }
 
+int MainWindow::resolveCellTriggerBankIndex(int mappingBankIndex) const
+{
+    if (mappingBankIndex == pvj::core::kBankIndexAllBanks) {
+        return m_bankGrid ? m_bankGrid->activeBankIndex() : 0;
+    }
+    return mappingBankIndex;
+}
+
+int MainWindow::applyCellLayerSettingsToAllBanks(int bankSetIndex, int sourceBankIndex,
+                                                 int cellIndex, const Cell& src)
+{
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return 0;
+    }
+    auto& set = m_project->bankSets[bankSetIndex];
+    int copied = 0;
+    for (int i = 0; i < set.banks.size(); ++i) {
+        if (i == sourceBankIndex) {
+            continue;
+        }
+        Bank& bank = set.banks[i];
+        if (cellIndex < 0 || cellIndex >= bank.cells.size()) {
+            continue;
+        }
+        pvj::core::copyCellLayerSettings(bank.cells[cellIndex], src);
+        ++copied;
+        if (findLayerPlayingCell(bankSetIndex, i, cellIndex) >= 0) {
+            reapplyPlayingCell(bankSetIndex, i, cellIndex);
+        }
+    }
+    return copied;
+}
+
 int MainWindow::pickMixSlotForTrigger(int bankSet, int bank, int cell)
 {
     const int existing = findLayerPlayingCell(bankSet, bank, cell);
@@ -1839,16 +2667,27 @@ void MainWindow::refreshPreviewForSelectedCell()
     if (!m_inspector) {
         return;
     }
-    m_inspector->clearVisualThumbnail();
+
+    QImage thumb;
     for (int i = 0; i < kMixLayers; ++i) {
         if (!selectionMatchesSlot(m_layerSlots[static_cast<size_t>(i)])) {
             continue;
         }
         const QImage& fr = m_lastFrames[static_cast<size_t>(i)];
         if (!fr.isNull()) {
-            m_inspector->setVisualThumbnail(fr);
+            thumb = fr;
         }
         break;
+    }
+    if (thumb.isNull() && m_bankGrid) {
+        thumb = m_bankGrid->cachedCellPreview(m_inspector->selectedBankSetIndex(),
+                                              m_inspector->selectedBankIndex(),
+                                              m_inspector->selectedCellIndex());
+    }
+    if (!thumb.isNull()) {
+        m_inspector->setVisualThumbnail(thumb);
+    } else {
+        m_inspector->clearVisualThumbnail();
     }
 
     applyClipPreviewPane();
@@ -1939,8 +2778,82 @@ void MainWindow::onCellPeekPreviewRequested(int bankSetIndex, int bankIndex, int
         tr("Clip preview (orange). Same cell: right-click again to hide. Inspector follows this clip."), 4000);
 }
 
-void MainWindow::onFullscreenOutputToggled()
+int MainWindow::activeFullscreenScreenIndex() const
 {
+    if (!m_fullscreenOut || !m_fullscreenOut->isVisible()) {
+        return -1;
+    }
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    if (QScreen* target = m_fullscreenOut->targetScreen()) {
+        const int idx = screens.indexOf(target);
+        if (idx >= 0) {
+            return idx;
+        }
+    }
+    return m_outputScreenIndex;
+}
+
+void MainWindow::rebuildOutputScreenMenu()
+{
+    if (!m_outputMenu) {
+        return;
+    }
+    m_outputMenu->clear();
+    if (m_outputScreenGroup) {
+        m_outputScreenGroup->deleteLater();
+        m_outputScreenGroup = nullptr;
+    }
+    m_outputScreenGroup = new QActionGroup(this);
+    m_outputScreenGroup->setExclusive(true);
+    m_actCloseFullscreenOutput = nullptr;
+
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    const int activeIdx = activeFullscreenScreenIndex();
+
+    if (screens.isEmpty()) {
+        QAction* none = m_outputMenu->addAction(tr("(no displays detected)"));
+        none->setEnabled(false);
+    } else {
+        for (int i = 0; i < screens.size(); ++i) {
+            const QScreen* s = screens[i];
+            const QString name = s->name();
+            const QRect g = s->geometry();
+            const QString label = tr("Screen %1: %2 (%3×%4)")
+                                      .arg(i + 1)
+                                      .arg(name.isEmpty() ? tr("Display") : name)
+                                      .arg(g.width())
+                                      .arg(g.height());
+            QAction* act = m_outputMenu->addAction(label);
+            act->setCheckable(true);
+            act->setChecked(i == activeIdx);
+            m_outputScreenGroup->addAction(act);
+            connect(act, &QAction::triggered, this, [this, i]() {
+                openFullscreenOutputOnScreen(i);
+            });
+        }
+    }
+
+    m_outputMenu->addSeparator();
+    m_actCloseFullscreenOutput =
+        m_outputMenu->addAction(tr("Close fullscreen output"), this, &MainWindow::closeFullscreenOutput);
+    m_actCloseFullscreenOutput->setEnabled(activeIdx >= 0);
+
+    m_outputMenu->addSeparator();
+    m_outputMenu->addAction(tr("Post-processing filters…"), this,
+                            &MainWindow::onOutputProcessingFilters);
+}
+
+void MainWindow::openFullscreenOutputOnScreen(int screenIndex)
+{
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    if (screens.isEmpty()) {
+        return;
+    }
+
+    const int idx = qBound(0, screenIndex, screens.size() - 1);
+    m_outputScreenIndex = idx;
+    QSettings().setValue(QLatin1String(kOutputScreenIndex), idx);
+
     if (!m_fullscreenOut) {
         m_fullscreenOut = std::make_unique<pvj::render::FullscreenOutputWindow>();
         if (m_stagePixelSize.isValid() && !m_stagePixelSize.isEmpty()
@@ -1949,23 +2862,38 @@ void MainWindow::onFullscreenOutputToggled()
         }
     }
 
-    if (m_fullscreenOut->isVisible()) {
-        m_fullscreenOut->hide();
-        statusBar()->showMessage(tr("Fullscreen output closed"), 2000);
-        return;
-    }
-
-    const QList<QScreen*> screens = QGuiApplication::screens();
-    if (screens.isEmpty()) {
-        return;
-    }
-    const int idx = m_inspector->outputScreenIndex();
-    QScreen* s = screens.at(qBound(0, idx, screens.size() - 1));
-
+    QScreen* s = screens.at(idx);
     m_fullscreenOut->setTargetScreen(s);
     m_fullscreenOut->enterFullscreen();
     syncMixerToFullscreen();
     statusBar()->showMessage(tr("Fullscreen output on %1").arg(s->name()), 3000);
+}
+
+void MainWindow::closeFullscreenOutput()
+{
+    if (!m_fullscreenOut || !m_fullscreenOut->isVisible()) {
+        return;
+    }
+    m_fullscreenOut->hide();
+    statusBar()->showMessage(tr("Fullscreen output closed"), 2000);
+    if (m_outputScreenGroup) {
+        for (QAction* a : m_outputScreenGroup->actions()) {
+            if (a) {
+                a->setChecked(false);
+            }
+        }
+    }
+}
+
+void MainWindow::onOutputProcessingFilters()
+{
+    if (!m_outputProcessingDialog) {
+        return;
+    }
+    m_outputProcessingDialog->setProject(m_project.get());
+    m_outputProcessingDialog->show();
+    m_outputProcessingDialog->raise();
+    m_outputProcessingDialog->activateWindow();
 }
 
 void MainWindow::assignMediaToCell(int bankSetIndex, int bankIndex, int cellIndex, const QString& absolutePath)
@@ -2042,6 +2970,271 @@ void MainWindow::onMediaDroppedOnCell(int bankSetIndex, int bankIndex, int cellI
     assignMediaToCell(bankSetIndex, bankIndex, cellIndex, absolutePath);
 }
 
+void MainWindow::copySelectedCell()
+{
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    const int cellIndex = m_bankGrid->selectedCellIndex();
+    if (cellIndex < 0) {
+        statusBar()->showMessage(tr("Select a cell to copy"), 3000);
+        return;
+    }
+    const Cell* src = cellAtDeck({m_bankGrid->activeBankSetIndex(),
+                                  m_bankGrid->activeBankIndex(),
+                                  cellIndex});
+    if (!src) {
+        return;
+    }
+    m_cellClipboard = *src;
+    m_cellClipboardValid = true;
+    statusBar()->showMessage(tr("Copied cell %1").arg(cellIndex + 1), 3000);
+}
+
+void MainWindow::pasteIntoSelectedCell()
+{
+    if (!m_cellClipboardValid) {
+        statusBar()->showMessage(tr("Copy a cell first (Ctrl+C)"), 3000);
+        return;
+    }
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    const int bankSetIndex = m_bankGrid->activeBankSetIndex();
+    const int bankIndex    = m_bankGrid->activeBankIndex();
+    const int cellIndex    = m_bankGrid->selectedCellIndex();
+    if (cellIndex < 0) {
+        statusBar()->showMessage(tr("Select a cell to paste into"), 3000);
+        return;
+    }
+    Cell* dst = const_cast<Cell*>(cellAtDeck({bankSetIndex, bankIndex, cellIndex}));
+    if (!dst) {
+        return;
+    }
+    pvj::core::copyCellContent(*dst, m_cellClipboard);
+    const int layerBanks =
+        applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, cellIndex, m_cellClipboard);
+    m_bankGrid->refresh();
+    if (m_inspector) {
+        m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
+    }
+    refreshPreviewForSelectedCell();
+    reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    onCellEdited(bankSetIndex, bankIndex, cellIndex);
+    if (layerBanks > 0) {
+        statusBar()->showMessage(
+            tr("Pasted into cell %1; layer settings applied to %2 other banks")
+                .arg(cellIndex + 1)
+                .arg(layerBanks),
+            3000);
+    } else {
+        statusBar()->showMessage(tr("Pasted into cell %1").arg(cellIndex + 1), 3000);
+    }
+}
+
+void MainWindow::onCellContextMenu(int bankSetIndex, int bankIndex, int cellIndex, QPoint globalPos)
+{
+    QMenu menu(this);
+    if (m_project && bankSetIndex >= 0 && bankSetIndex < m_project->bankSets.size()) {
+        const auto& set = m_project->bankSets[bankSetIndex];
+        if (bankIndex >= 0 && bankIndex < set.banks.size()
+            && cellIndex >= 0 && cellIndex < set.banks[bankIndex].cells.size()) {
+            const Cell& cell = set.banks[bankIndex].cells[cellIndex];
+            if (cell.visual.type != VisualType::MixerFilter) {
+                menu.addAction(tr("Use as mixer filter cell"), this,
+                               [this, bankSetIndex, bankIndex, cellIndex]() {
+                                   if (!m_project) {
+                                       return;
+                                   }
+                                   auto& setRef = m_project->bankSets[bankSetIndex];
+                                   Cell& c = setRef.banks[bankIndex].cells[cellIndex];
+                                   c.visual.type = VisualType::MixerFilter;
+                                   c.visual.generator = GeneratorKind::None;
+                                   c.visual.mediaId = {};
+                                   if (m_bankGrid) {
+                                       m_bankGrid->refresh();
+                                   }
+                                   if (m_inspector) {
+                                       m_inspector->refreshFromModel();
+                                   }
+                                   statusBar()->showMessage(
+                                       tr("Cell %1 is now a mixer filter cell — pick a filter (double-click)")
+                                           .arg(cellIndex + 1),
+                                       5000);
+                               });
+                menu.addSeparator();
+            }
+        }
+    }
+    menu.addAction(tr("Peek preview"), this, [this, bankSetIndex, bankIndex, cellIndex]() {
+        onCellPeekPreviewRequested(bankSetIndex, bankIndex, cellIndex);
+    });
+    menu.addSeparator();
+    menu.addAction(tr("Copy cell"), this, &MainWindow::copySelectedCell);
+    auto* pasteAct = menu.addAction(tr("Paste into cell"), this, &MainWindow::pasteIntoSelectedCell);
+    pasteAct->setEnabled(m_cellClipboardValid);
+    if (m_project && bankSetIndex >= 0 && bankSetIndex < m_project->bankSets.size()) {
+        const auto& set = m_project->bankSets[bankSetIndex];
+        if (bankIndex >= 0 && bankIndex < set.banks.size()
+            && cellIndex >= 0 && cellIndex < set.banks[bankIndex].cells.size()) {
+            const Cell& cell = set.banks[bankIndex].cells[cellIndex];
+            if (cellAllowsRename(cell)) {
+                menu.addSeparator();
+                menu.addAction(tr("Rename cell…"), this,
+                               [this, bankSetIndex, bankIndex, cellIndex]() {
+                                   renameCell(bankSetIndex, bankIndex, cellIndex);
+                               });
+            }
+        }
+    }
+    menu.exec(globalPos);
+}
+
+void MainWindow::onBankContextMenu(int bankSetIndex, int bankIndex, QPoint globalPos)
+{
+    QMenu menu(this);
+    menu.addAction(tr("Copy bank"), this, [this, bankSetIndex, bankIndex]() {
+        copyBank(bankSetIndex, bankIndex);
+    });
+    auto* pasteAct = menu.addAction(tr("Paste bank"), this, &MainWindow::pasteBankIntoActive);
+    pasteAct->setEnabled(m_bankClipboardValid);
+    menu.addSeparator();
+    menu.addAction(tr("Rename bank…"), this, [this, bankSetIndex, bankIndex]() {
+        renameBank(bankSetIndex, bankIndex);
+    });
+    menu.exec(globalPos);
+}
+
+void MainWindow::copyBank(int bankSetIndex, int bankIndex)
+{
+    if (!m_project) {
+        return;
+    }
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+    m_bankClipboard      = set.banks[bankIndex];
+    m_bankClipboardValid = true;
+    const QString label = set.banks[bankIndex].name.isEmpty()
+                              ? tr("Bank %1").arg(bankIndex + 1)
+                              : set.banks[bankIndex].name;
+    statusBar()->showMessage(tr("Copied bank “%1”").arg(label), 3000);
+}
+
+void MainWindow::pasteBankIntoActive()
+{
+    if (!m_bankClipboardValid || !m_project || !m_bankGrid) {
+        statusBar()->showMessage(tr("Copy a bank first (bank tab context menu)"), 3000);
+        return;
+    }
+    const int bankSetIndex = m_bankGrid->activeBankSetIndex();
+    const int bankIndex    = m_bankGrid->activeBankIndex();
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+    Bank& dst = set.banks[bankIndex];
+    pvj::core::copyBankContent(dst, m_bankClipboard);
+    int layerCells = 0;
+    for (int i = 0; i < dst.cells.size(); ++i) {
+        layerCells += applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, i, dst.cells[i]);
+    }
+    m_bankGrid->refresh();
+    for (int i = 0; i < dst.cells.size(); ++i) {
+        if (findLayerPlayingCell(bankSetIndex, bankIndex, i) >= 0) {
+            reapplyPlayingCell(bankSetIndex, bankIndex, i);
+        }
+    }
+    if (m_inspector) {
+        m_inspector->setSelection(bankSetIndex, bankIndex, m_bankGrid->selectedCellIndex());
+    }
+    refreshPreviewForSelectedCell();
+    const QString label = dst.name.isEmpty() ? tr("Bank %1").arg(bankIndex + 1) : dst.name;
+    if (layerCells > 0) {
+        statusBar()->showMessage(
+            tr("Pasted bank into “%1”; layer settings applied across banks (%2 cell updates)")
+                .arg(label)
+                .arg(layerCells),
+            3000);
+    } else {
+        statusBar()->showMessage(tr("Pasted bank into “%1”").arg(label), 3000);
+    }
+}
+
+void MainWindow::renameBank(int bankSetIndex, int bankIndex)
+{
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+    Bank& bank = set.banks[bankIndex];
+    const QString current =
+        bank.name.isEmpty() ? tr("Bank %1").arg(bankIndex + 1) : bank.name;
+    bool ok = false;
+    QString name = QInputDialog::getText(this, tr("Rename bank"), tr("Bank name:"),
+                                         QLineEdit::Normal, current, &ok);
+    if (!ok) {
+        return;
+    }
+    name = name.trimmed();
+    if (name.isEmpty()) {
+        name = QStringLiteral("Bank %1").arg(bankIndex + 1);
+    }
+    bank.name = name;
+    m_bankGrid->refresh();
+    statusBar()->showMessage(tr("Renamed bank to “%1”").arg(name), 3000);
+}
+
+void MainWindow::renameCell(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+    auto& bank = set.banks[bankIndex];
+    if (cellIndex < 0 || cellIndex >= bank.cells.size()) {
+        return;
+    }
+    Cell& cell = bank.cells[cellIndex];
+    if (!cellAllowsRename(cell)) {
+        return;
+    }
+    bool ok = false;
+    QString name = QInputDialog::getText(this, tr("Rename cell"), tr("Cell name:"),
+                                         QLineEdit::Normal, cell.name, &ok);
+    if (!ok) {
+        return;
+    }
+    cell.name = name.trimmed();
+    m_bankGrid->refresh();
+    if (m_inspector) {
+        m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
+    }
+    statusBar()->showMessage(cell.name.isEmpty()
+                                 ? tr("Cleared cell name")
+                                 : tr("Renamed cell to “%1”").arg(cell.name),
+                             3000);
+}
+
 void MainWindow::onCellEdited(int bankSetIndex, int bankIndex, int cellIndex)
 {
     // Do not call m_bankGrid->refresh() here: it clears/rebuilds all filmstrip thumbnails
@@ -2080,7 +3273,19 @@ void MainWindow::onCellEdited(int bankSetIndex, int bankIndex, int cellIndex)
             }
         }
     }
-    scheduleMixerUpdateFromCells();
+    pruneActiveMixerFilterCells();
+    const Cell* playingCell =
+        layer >= 0 ? cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]) : nullptr;
+    const bool feedbackPlaying = playingCell
+        && playingCell->visual.type == VisualType::Generator
+        && playingCell->visual.generator == GeneratorKind::InternalFeedback;
+    if (feedbackPlaying) {
+        syncLiveMixerOpacityForCell(bankSetIndex, bankIndex, cellIndex);
+        syncPlayingFeedbackCellToMixer(bankSetIndex, bankIndex, cellIndex);
+    } else {
+        syncLiveMixerOpacityForCell(bankSetIndex, bankIndex, cellIndex);
+        scheduleMixerUpdateFromCells();
+    }
 }
 
 void MainWindow::onInspectorVisualSeekStep(int seconds)
@@ -2147,17 +3352,21 @@ void MainWindow::setupInputMapping()
     m_midiInput   = std::make_unique<pvj::input::MidiInput>(this);
 
     connect(m_midiInput.get(), &pvj::input::MidiInput::messageReceived,
-            this, [this](const QByteArray& b) {
-        if (!m_inputRouter || !m_project) {
-            return;
-        }
-        m_inputRouter->handleMidiBytes(
-            reinterpret_cast<const unsigned char*>(b.constData()),
-            size_t(b.size()));
-    });
+            this,
+            [this](const QByteArray& b) {
+                if (!m_inputRouter) {
+                    return;
+                }
+                m_inputRouter->handleMidiBytes(
+                    reinterpret_cast<const unsigned char*>(b.constData()),
+                    size_t(b.size()));
+            },
+            Qt::QueuedConnection);
 
     connect(m_inputRouter.get(), &pvj::input::InputRouter::triggerCell,
             this, &MainWindow::onInputTriggerCell);
+    connect(m_inputRouter.get(), &pvj::input::InputRouter::releaseCell,
+            this, &MainWindow::onInputReleaseCell);
     connect(m_inputRouter.get(), &pvj::input::InputRouter::bankNext,
             this, &MainWindow::onInputBankNext);
     connect(m_inputRouter.get(), &pvj::input::InputRouter::bankPrev,
@@ -2180,14 +3389,111 @@ void MainWindow::setupInputMapping()
         if (m_bankGrid) {
             m_bankGrid->refresh();
         }
+        if (m_filterEditor) {
+            m_filterEditor->refreshMidiMapOverlays();
+        }
+    });
+    connect(m_inputRouter.get(), &pvj::input::InputRouter::triggerMappingsChanged,
+            this, [this]() {
+        if (m_inspector) {
+            m_inspector->refreshFromModel();
+        }
+        if (m_bankGrid) {
+            m_bankGrid->refresh();
+        }
+        if (m_filterEditor) {
+            m_filterEditor->refreshMidiMapOverlays();
+        }
+    });
+    connect(m_inputRouter.get(), &pvj::input::InputRouter::propertyMappingsChanged,
+            this, [this]() {
+        if (m_inspector) {
+            m_inspector->refreshFromModel();
+        }
+        if (m_bankGrid) {
+            m_bankGrid->refresh();
+        }
+        if (m_filterEditor) {
+            m_filterEditor->refreshMidiMapOverlays();
+        }
     });
     connect(m_inputRouter.get(), &pvj::input::InputRouter::learnCancelled,
             this, [this]() {
         statusBar()->showMessage(tr("Learn cancelled"), 3000);
     });
+    connect(m_inputRouter.get(), &pvj::input::InputRouter::learnHint,
+            this, [this](const QString& msg) {
+        statusBar()->showMessage(msg, 5000);
+    });
 
     qApp->installEventFilter(this);
     m_midiInput->start();
+    populateMidiPortMenu();
+    showMidiInputStatus();
+}
+
+void MainWindow::populateMidiPortMenu()
+{
+    if (!m_midiPortMenu || !m_midiInput) {
+        return;
+    }
+    m_midiPortMenu->clear();
+
+    const QStringList ports = m_midiInput->portNames();
+    const QStringList open  = m_midiInput->openPortNames();
+
+    if (ports.isEmpty()) {
+        QAction* none = m_midiPortMenu->addAction(tr("(no MIDI inputs detected)"));
+        none->setEnabled(false);
+    } else {
+        for (const QString& name : ports) {
+            QAction* act = m_midiPortMenu->addAction(name);
+            act->setCheckable(true);
+            act->setChecked(open.contains(name));
+            act->setData(name);
+            connect(act, &QAction::triggered, this, [this]() {
+                QStringList next;
+                for (QAction* a : m_midiPortMenu->actions()) {
+                    if (a && a->isCheckable() && a->isChecked()) {
+                        next.append(a->text());
+                    }
+                }
+                applyMidiInputPorts(next);
+            });
+        }
+    }
+
+    m_midiPortMenu->addSeparator();
+    QAction* refresh = m_midiPortMenu->addAction(tr("Refresh ports"));
+    connect(refresh, &QAction::triggered, this, [this]() {
+        m_midiInput->reopenPreferredPort();
+        populateMidiPortMenu();
+        showMidiInputStatus();
+    });
+    m_midiPortMenu->addAction(tr("Choose in Preferences…"), this, &MainWindow::onEditPreferences);
+}
+
+void MainWindow::showMidiInputStatus()
+{
+    if (!m_midiInput) {
+        return;
+    }
+    const QStringList open = m_midiInput->openPortNames();
+    if (!open.isEmpty()) {
+        statusBar()->showMessage(
+            tr("MIDI input (%1): %2").arg(open.size()).arg(open.join(QStringLiteral(", "))),
+            6000);
+        return;
+    }
+    if (m_midiInput->portNames().isEmpty()) {
+        statusBar()->showMessage(
+            tr("MIDI: no input devices found. Connect a controller or install a virtual MIDI cable."),
+            10000);
+    } else {
+        statusBar()->showMessage(
+            tr("MIDI: port could not be opened — choose Edit → Preferences or Mapping → MIDI input port."),
+            10000);
+    }
 }
 
 bool MainWindow::eventFilter(QObject* /*watched*/, QEvent* event)
@@ -2205,14 +3511,19 @@ bool MainWindow::eventFilter(QObject* /*watched*/, QEvent* event)
     if (!focusAllowsGlobalShortcuts()) {
         return false;
     }
-    if (!(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
-        const int slot = mixSlotFromQtKey(ke->key());
-        if (slot >= 0) {
-            onMixLayerDirect(slot);
+    const bool ctrlOnly = (ke->modifiers() & Qt::ControlModifier)
+        && !(ke->modifiers() & (Qt::AltModifier | Qt::MetaModifier | Qt::ShiftModifier));
+    if (ctrlOnly) {
+        if (ke->key() == Qt::Key_C) {
+            copySelectedCell();
+            return true;
+        }
+        if (ke->key() == Qt::Key_V) {
+            pasteIntoSelectedCell();
             return true;
         }
     }
-    if (m_inputRouter->handleKeyEvent(ke->key(), int(ke->modifiers()), true)) {
+    if (m_inputRouter->handleKeyEvent(ke->keyCombination(), true)) {
         return true;
     }
     return false;
@@ -2302,19 +3613,85 @@ void MainWindow::onMidiMappingEditToggled(bool on)
     if (m_inspector) {
         m_inspector->setMidiMappingEditMode(on);
     }
+    if (m_filterEditor) {
+        m_filterEditor->setMidiMappingEditMode(on);
+    }
     if (m_inputRouter && !on) {
         m_inputRouter->cancelLearn();
     }
     if (on) {
         statusBar()->showMessage(
-            tr("MIDI mapping mode: grid cells are green — click a cell, then press a MIDI note or key for that trigger. "
-               "Inspector: right-click a control (or left-click while in this mode) to learn CC / note. "
-               "CC faders: Mapping → “Learn MIDI CC → property…” on the selected cell."),
+            tr("Mapping mode (Ctrl+M): click a cell in the green grid, then press a keyboard key or MIDI note "
+               "to assign a clip trigger. Inspector: right-click a control to learn CC / note."),
             12000);
     } else {
-        statusBar()->showMessage(tr("MIDI mapping mode off."), 3000);
+        statusBar()->showMessage(tr("Mapping mode off."), 3000);
     }
     updateWindowTitle();
+}
+
+void MainWindow::onApplyMappingToAllBanksToggled(bool on)
+{
+    if (!on) {
+        return;
+    }
+
+    auto resetCheckbox = [this]() {
+        if (m_actApplyMappingAllBanks) {
+            QSignalBlocker blocker(m_actApplyMappingAllBanks);
+            m_actApplyMappingAllBanks->setChecked(false);
+        }
+    };
+
+    if (!m_project || !m_bankGrid) {
+        resetCheckbox();
+        return;
+    }
+
+    const int bankSetIndex = m_bankGrid->activeBankSetIndex();
+    const int bankIndex    = m_bankGrid->activeBankIndex();
+    const int cellIndex    = m_bankGrid->selectedCellIndex();
+    if (cellIndex < 0) {
+        statusBar()->showMessage(tr("Select a cell first"), 3000);
+        resetCheckbox();
+        return;
+    }
+
+    Cell* srcCell = const_cast<Cell*>(cellAtDeck({bankSetIndex, bankIndex, cellIndex}));
+    if (!srcCell) {
+        resetCheckbox();
+        return;
+    }
+
+    const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    if (playingLayer >= kUserLayerMin && playingLayer < kMixLayers) {
+        const LayerKeyingState& layerKeying =
+            m_layerKeying[static_cast<size_t>(playingLayer)];
+        if (layerKeying.valid) {
+            applyLayerKeyingStateToCell(*srcCell, layerKeying);
+        }
+    }
+
+    const Cell src = *srcCell;
+
+    const int copied = applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, cellIndex, src);
+
+    m_bankGrid->refresh();
+    if (playingLayer >= 0) {
+        reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    }
+    if (m_inspector) {
+        m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
+    }
+    refreshPreviewForSelectedCell();
+    onCellEdited(bankSetIndex, bankIndex, cellIndex);
+
+    statusBar()->showMessage(
+        tr("Applied cell %1 mappings, layer, and playback settings to %2 banks")
+            .arg(cellIndex + 1)
+            .arg(copied),
+        3000);
+    resetCheckbox();
 }
 
 void MainWindow::onInspectorMidiLearnCc(const QString& propertyName)
@@ -2376,6 +3753,9 @@ void MainWindow::onInspectorMidiClearMapping(const QString& propertyName)
     if (m_bankGrid) {
         m_bankGrid->refresh();
     }
+    if (m_filterEditor) {
+        m_filterEditor->refreshMidiMapOverlays();
+    }
 }
 
 void MainWindow::onLearnBankNext()
@@ -2430,12 +3810,57 @@ void MainWindow::onMidiLearnCellTriggerFromGrid(int bankSetIndex, int bankIndex,
         m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     }
     m_inputRouter->beginLearnCellTrigger(bankSetIndex, bankIndex, cellIndex);
-    statusBar()->showMessage(tr("MIDI map: press a MIDI note or keyboard key for this cell…"), 15000);
+    statusBar()->showMessage(tr("Mapping: press a keyboard key or MIDI note for this cell…"), 15000);
 }
 
-void MainWindow::onInputTriggerCell(int bankSetIndex, int bankIndex, int cellIndex)
+void MainWindow::onInputTriggerCell(int bankSetIndex, int bankIndex, int cellIndex, bool fromMidiNote)
 {
-    onCellTriggered(bankSetIndex, bankIndex, cellIndex);
+    if (bankSetIndex < 0 || cellIndex < 0) {
+        return;
+    }
+    const int bank = resolveCellTriggerBankIndex(bankIndex);
+    if (bank < 0) {
+        return;
+    }
+
+    if (m_bankGrid) {
+        m_bankGrid->revealAndSelectCell(bankSetIndex, bank, cellIndex);
+    } else if (m_inspector) {
+        m_inspector->setSelection(bankSetIndex, bank, cellIndex);
+    }
+
+    if (fromMidiNote) {
+        // Momentary MIDI: note-on starts; note-off stops (no toggle on repeat note-on).
+        if (findLayerPlayingCell(bankSetIndex, bank, cellIndex) >= 0) {
+            return;
+        }
+        onCellTriggered(bankSetIndex, bank, cellIndex, false);
+        return;
+    }
+
+    onCellTriggered(bankSetIndex, bank, cellIndex, true);
+}
+
+void MainWindow::onInputReleaseCell(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (bankSetIndex < 0 || cellIndex < 0) {
+        return;
+    }
+    const int bank = resolveCellTriggerBankIndex(bankIndex);
+    if (bank < 0) {
+        return;
+    }
+
+    const int playingLayer = findLayerPlayingCell(bankSetIndex, bank, cellIndex);
+    if (playingLayer < 0) {
+        return;
+    }
+
+    stopMixLayer(playingLayer);
+    syncMixLayerFromCell(playingLayer);
+    syncMixerToFullscreen();
+    syncMixSlotHighlightsToBankGrid();
+    refreshPreviewForSelectedCell();
 }
 
 void MainWindow::onInputBankNext(int bankSetIndex)
@@ -2513,7 +3938,24 @@ void MainWindow::onInputPropertyMapped(int bankSetIndex, int bankIndex, int cell
         m_midiInspectorDebounceTimer->start(33);
     }
 
-    scheduleMixerUpdateFromCells();
+    const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    const Cell* playingCell = playingLayer >= 0
+        ? cellAtDeck(m_layerSlots[static_cast<size_t>(playingLayer)]) : nullptr;
+    const bool feedbackPlaying = playingCell
+        && playingCell->visual.type == VisualType::Generator
+        && playingCell->visual.generator == GeneratorKind::InternalFeedback;
+    if (feedbackPlaying) {
+        syncPlayingFeedbackCellAfterPropertyChange(bankSetIndex, bankIndex, cellIndex,
+                                                   propertyName);
+    } else {
+        syncLiveMixerOpacityForCell(bankSetIndex, bankIndex, cellIndex);
+        const QString resolved = pvj::core::PropertyRegistry::resolvePropertyId(propertyName);
+        if (pvj::core::PropertyRegistry::isFilterParamProperty(resolved)) {
+            syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
+        } else {
+            scheduleMixerUpdateFromCells();
+        }
+    }
 }
 
 void MainWindow::onInputPropertyToggle(int bankSetIndex, int bankIndex, int cellIndex,
@@ -2547,7 +3989,24 @@ void MainWindow::onInputPropertyToggle(int bankSetIndex, int bankIndex, int cell
     }
     m_inspector->refreshFromModel();
     m_bankGrid->refresh();
-    updateMixerFromPlayingCells();
+    const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    const Cell* playingCell = playingLayer >= 0
+        ? cellAtDeck(m_layerSlots[static_cast<size_t>(playingLayer)]) : nullptr;
+    const bool feedbackPlaying = playingCell
+        && playingCell->visual.type == VisualType::Generator
+        && playingCell->visual.generator == GeneratorKind::InternalFeedback;
+    if (feedbackPlaying) {
+        syncPlayingFeedbackCellAfterPropertyChange(bankSetIndex, bankIndex, cellIndex,
+                                                   propertyName);
+    } else {
+        const QString resolved = pvj::core::PropertyRegistry::resolvePropertyId(propertyName);
+        if (pvj::core::PropertyRegistry::isFilterParamProperty(resolved)) {
+            syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
+            syncMixerToFullscreen();
+        } else {
+            updateMixerFromPlayingCells();
+        }
+    }
 }
 
 } // namespace pvj::app

@@ -1,8 +1,11 @@
 #include "MidiInput.h"
 
 #include <QDebug>
-#include <QTimer>
+#include <QMetaObject>
+#include <QSettings>
 #include <QtGlobal>
+
+#include <vector>
 
 #if defined(__has_include)
 #if __has_include(<RtMidi.h>)
@@ -31,88 +34,279 @@ void midiCallback(double /*stamp*/, std::vector<unsigned char>* message, void* u
     for (size_t i = 0; i < message->size(); ++i) {
         bytes[static_cast<int>(i)] = static_cast<char>((*message)[i]);
     }
-    QTimer::singleShot(0, self, [self, bytes]() {
-        emit self->messageReceived(bytes);
-    });
+    QMetaObject::invokeMethod(
+        self,
+        [self, bytes]() { emit self->messageReceived(bytes); },
+        Qt::QueuedConnection);
 }
 
 } // namespace
 
 struct MidiInput::Impl {
-    std::unique_ptr<RtMidiIn> in;
+    struct OpenPort {
+        std::unique_ptr<RtMidiIn> in;
+        QString                   name;
+        int                       index = -1;
+    };
+
+    std::unique_ptr<RtMidiIn>  enumerator;
+    std::vector<OpenPort>      open;
 };
 
 MidiInput::MidiInput(QObject* parent)
     : QObject(parent)
     , m_impl(std::make_unique<Impl>())
 {
-    m_impl->in = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, "PerformanieVJ");
-    m_impl->in->ignoreTypes(false, false, false);
-    m_impl->in->setCallback(&midiCallback, this);
+    m_impl->enumerator = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, "PerformanieVJ");
+    m_impl->enumerator->ignoreTypes(false, false, false);
 }
 
 MidiInput::~MidiInput()
 {
-    closePort();
+    closeAllPorts();
+}
+
+QStringList MidiInput::savedPortNames()
+{
+    QSettings settings;
+    QStringList names = settings.value(QLatin1String(kSettingsPortNamesKey)).toStringList();
+    if (!names.isEmpty()) {
+        return names;
+    }
+    const QString legacy = settings.value(QLatin1String(kSettingsPortNameKey)).toString();
+    if (!legacy.isEmpty()) {
+        return {legacy};
+    }
+    return {};
+}
+
+QString MidiInput::savedPortName()
+{
+    const QStringList names = savedPortNames();
+    return names.isEmpty() ? QString() : names.front();
+}
+
+int MidiInput::savedPortIndex()
+{
+    return QSettings().value(QLatin1String(kSettingsPortIndexKey), 0).toInt();
+}
+
+void MidiInput::savePreferredPorts(const QStringList& names)
+{
+    QSettings settings;
+    settings.setValue(QLatin1String(kSettingsPortNamesKey), names);
+    if (!names.isEmpty()) {
+        settings.setValue(QLatin1String(kSettingsPortNameKey), names.front());
+    } else {
+        settings.remove(QLatin1String(kSettingsPortNameKey));
+        settings.remove(QLatin1String(kSettingsPortIndexKey));
+    }
+}
+
+void MidiInput::savePreferredPort(const QString& name, int index)
+{
+    savePreferredPorts(name.isEmpty() ? QStringList{} : QStringList{name});
+    if (index >= 0) {
+        QSettings().setValue(QLatin1String(kSettingsPortIndexKey), index);
+    }
+}
+
+void MidiInput::clearPreferredPorts()
+{
+    QSettings settings;
+    settings.remove(QLatin1String(kSettingsPortNamesKey));
+    settings.remove(QLatin1String(kSettingsPortNameKey));
+    settings.remove(QLatin1String(kSettingsPortIndexKey));
+}
+
+void MidiInput::clearPreferredPort()
+{
+    clearPreferredPorts();
 }
 
 QStringList MidiInput::portNames() const
 {
     QStringList out;
-    if (!m_impl || !m_impl->in) {
-        return out;
-    }
-    const unsigned int n = m_impl->in->getPortCount();
-    for (unsigned int i = 0; i < n; ++i) {
-        out.append(QString::fromStdString(m_impl->in->getPortName(i)));
+    for (const MidiPortInfo& p : enumeratePorts()) {
+        out.append(p.name);
     }
     return out;
 }
 
+QList<MidiPortInfo> MidiInput::enumeratePorts() const
+{
+    QList<MidiPortInfo> out;
+    if (!m_impl || !m_impl->enumerator) {
+        return out;
+    }
+    try {
+        const unsigned int n = m_impl->enumerator->getPortCount();
+        out.reserve(int(n));
+        for (unsigned int i = 0; i < n; ++i) {
+            MidiPortInfo info;
+            info.name  = QString::fromStdString(m_impl->enumerator->getPortName(i));
+            info.index = int(i);
+            out.append(info);
+        }
+    } catch (...) {
+        qWarning() << "RtMidi getPortCount/getPortName failed.";
+    }
+    return out;
+}
+
+QStringList MidiInput::openPortNames() const
+{
+    QStringList out;
+    if (!m_impl) {
+        return out;
+    }
+    for (const Impl::OpenPort& p : m_impl->open) {
+        out.append(p.name);
+    }
+    return out;
+}
+
+QString MidiInput::openPortName() const
+{
+    const QStringList names = openPortNames();
+    return names.isEmpty() ? QString() : names.front();
+}
+
+bool MidiInput::isOpen() const
+{
+    return m_impl && !m_impl->open.empty();
+}
+
+void MidiInput::closeAllPorts()
+{
+    if (!m_impl) {
+        return;
+    }
+    for (Impl::OpenPort& p : m_impl->open) {
+        if (p.in) {
+            try {
+                p.in->closePort();
+            } catch (...) {
+                qWarning() << "RtMidi closePort failed for" << p.name;
+            }
+        }
+    }
+    m_impl->open.clear();
+}
+
+bool MidiInput::openPortAtIndex(int index, const QString& expectedName)
+{
+    if (!m_impl || index < 0) {
+        return false;
+    }
+    Impl::OpenPort entry;
+    entry.in = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, "PerformanieVJ");
+    entry.in->ignoreTypes(false, false, false);
+    entry.in->setCallback(&midiCallback, this);
+    try {
+        entry.in->openPort(static_cast<unsigned int>(index));
+        entry.name  = QString::fromStdString(entry.in->getPortName());
+        entry.index = index;
+    } catch (...) {
+        qWarning() << "RtMidi openPort failed for index" << index << expectedName;
+        return false;
+    }
+    if (!expectedName.isEmpty()) {
+        entry.name = expectedName;
+    }
+    m_impl->open.push_back(std::move(entry));
+    return true;
+}
+
+bool MidiInput::openPortsByNames(const QStringList& names)
+{
+    closeAllPorts();
+    if (names.isEmpty()) {
+        savePreferredPorts({});
+        return false;
+    }
+
+    const QList<MidiPortInfo> available = enumeratePorts();
+    QStringList               opened;
+    for (const QString& want : names) {
+        if (want.isEmpty()) {
+            continue;
+        }
+        bool found = false;
+        for (const MidiPortInfo& p : available) {
+            if (p.name != want) {
+                continue;
+            }
+            if (openPortAtIndex(p.index, p.name)) {
+                opened.append(p.name);
+            }
+            found = true;
+            break;
+        }
+        if (!found) {
+            qWarning() << "MIDI port not found:" << want;
+        }
+    }
+
+    savePreferredPorts(opened);
+    if (opened.isEmpty() && !names.isEmpty()) {
+        qWarning() << "MIDI: could not open any of the selected ports.";
+    }
+    return !opened.empty();
+}
+
 bool MidiInput::openPort(int index)
 {
-    if (!m_impl || !m_impl->in) {
-        return false;
+    const QList<MidiPortInfo> ports = enumeratePorts();
+    for (const MidiPortInfo& p : ports) {
+        if (p.index == index) {
+            return openPortsByNames({p.name});
+        }
     }
-    closePort();
-    if (m_impl->in->getPortCount() == 0U) {
-        return false;
-    }
-    const unsigned int i = static_cast<unsigned int>(qBound(0, index, int(m_impl->in->getPortCount()) - 1));
-    try {
-        m_impl->in->openPort(i);
-    } catch (...) {
-        qWarning() << "RtMidi openPort failed.";
-        return false;
-    }
-    m_open = true;
-    return true;
+    return false;
+}
+
+bool MidiInput::openPortByName(const QString& name)
+{
+    return openPortsByNames(name.isEmpty() ? QStringList{} : QStringList{name});
 }
 
 void MidiInput::closePort()
 {
-    if (!m_impl || !m_impl->in) {
-        return;
-    }
-    if (m_open) {
-        m_impl->in->closePort();
-        m_open = false;
-    }
+    closeAllPorts();
+    clearPreferredPorts();
 }
 
 void MidiInput::start()
 {
-    if (m_open) {
+    if (isOpen()) {
         return;
     }
-    if (!openPort(0)) {
-        qWarning() << "MIDI: no input ports available.";
+    const QStringList saved = savedPortNames();
+    if (!saved.isEmpty()) {
+        openPortsByNames(saved);
+        return;
+    }
+    const QList<MidiPortInfo> ports = enumeratePorts();
+    if (!ports.isEmpty()) {
+        openPortsByNames({ports.front().name});
     }
 }
 
 void MidiInput::stop()
 {
-    closePort();
+    closeAllPorts();
+}
+
+void MidiInput::reopenPreferredPort()
+{
+    const QStringList saved = savedPortNames();
+    closeAllPorts();
+    if (!saved.isEmpty()) {
+        openPortsByNames(saved);
+    } else {
+        start();
+    }
 }
 
 } // namespace pvj::input

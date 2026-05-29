@@ -19,6 +19,8 @@ enum class VisualType {
     Empty,
     Media,       // reference to MediaItem by uuid
     Generator,   // built-in source (test pattern, spout, ...)
+    /// Post-composite filter preset: trigger applies filterChain to the full mixer (no mix layer).
+    MixerFilter,
 };
 
 enum class GeneratorKind {
@@ -205,19 +207,31 @@ enum class FeedbackInputMode : int {
     SceneLoopback = 2,   // previous frame mixer output
 };
 
+inline constexpr int kFeedbackRingCapacity = 32;
+inline constexpr int kFeedbackMaxFrameDelay = kFeedbackRingCapacity - 2;
+inline constexpr double kFeedbackZoomMin = -0.2;
+inline constexpr double kFeedbackZoomMax = 0.2;
+
 struct FeedbackParams {
-    double loopRetention = 0.85; // 0..1 ping-pong: warped history weight
-    double liveInject    = 0.15; // 0..1 fresh source per frame
+    double loopRetention = 1.0;  // 0..1; lit history never decays (see layer_feedback.frag)
+    double liveInject    = 0.04; // 0..1 fresh source per frame
+    /// Pre-feedback source grade (applied to live inject input, not history ring).
+    double inSaturation  = 1.0;   // 0..2
+    double inBrightness  = 0.0;   // -1..1
+    double inContrast    = 1.0;   // 0..2
+    double inHueShift    = 0.0;   // -1..1
+    double inGamma       = 1.0;   // 0.1..4
+    /// History-ring grade (applied each frame to warped history texture).
     double saturation  = 1.0;   // 0..2 history saturation
     double brightness  = 0.0;   // -1..1 history brightness
     double contrast    = 1.0;   // 0..2 history contrast
     double hueShift    = 0.0;   // -1..1 hue rotate per frame
     double gamma       = 1.0;   // 0.1..4 history gamma
-    double rotationDeg = 0.0;   // 0..360 history rotation per frame
-    double zoom        = 0.0;   // -1..1 history zoom per frame
-    int frameDelay     = 0;     // 0..14 extra frames back for history read
+    double rotationDeg = 0.0;   // 0..360 history rotation (applied on read, live)
+    double zoom        = 0.0;   // kFeedbackZoomMin..kFeedbackZoomMax (+ = zoom out, live on read)
+    int frameDelay     = 0;     // 0..kFeedbackMaxFrameDelay frames back for history read
     FeedbackInputMode inputMode = FeedbackInputMode::StackComposite;
-    WrapMode wrapMode = WrapMode::Black;
+    WrapMode wrapMode = WrapMode::Black; // history UV border (applied on read, live)
 };
 
 struct CellProps {
@@ -246,7 +260,7 @@ struct CellProps {
     CopyMode copyMode     = CopyMode::Normal;
     /// Last Mixing preset row chosen in the inspector (0 = Custom).
     int     mixingPresetIndex = 0;
-    /// Preferred mixer layer slot (0..11 => UI layers 1..12; GPU layer = +1).
+    /// Preferred mixer layer slot (0..12 => UI layers 1..13; GPU layer = +1).
     int preferredLayer = 4;
     /// Key/matte RGB weights (0–1, UI often shows as %). Reserved for GPU keying; defaults 1 = full.
     double  keyChannelR   = 1.0;
@@ -313,6 +327,7 @@ struct TriggerMapping {
 
 struct Cell {
     int         index = 0;  // 0..N inside its bank (depends on grid size)
+    QString     name;       // optional user display name (feedback / filter-only cells)
     VisualRef   visual;
     CellProps   props;
     std::optional<Effect> effect;

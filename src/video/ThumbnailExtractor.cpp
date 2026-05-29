@@ -1,7 +1,5 @@
 #include "ThumbnailExtractor.h"
 
-#include "MediaProbe.h"
-
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -86,76 +84,107 @@ QImage frameToQImage(const AVFrame* src, QSize bounds)
     return img;
 }
 
-} // namespace
+struct VideoDecoderSession {
+    AVFormatContext* fmt     = nullptr;
+    AVCodecContext*  dec     = nullptr;
+    AVStream*        stream  = nullptr;
+    int              videoIdx = -1;
+};
 
-ThumbnailResult ThumbnailExtractor::extract(const QString& filePath,
-                                            QSize targetSize,
-                                            qint64 timestampMs)
+bool openVideoDecoderSession(const QString& filePath, VideoDecoderSession& session, QString* errorOut)
 {
-    ThumbnailResult out;
-
-    FormatGuard fmt;
     const QByteArray path = filePath.toUtf8();
-    if (avformat_open_input(&fmt.ctx, path.constData(), nullptr, nullptr) != 0) {
-        out.errorMessage = QStringLiteral("Cannot open %1").arg(filePath);
-        return out;
+    if (avformat_open_input(&session.fmt, path.constData(), nullptr, nullptr) != 0) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Cannot open %1").arg(filePath);
+        }
+        return false;
     }
-    if (avformat_find_stream_info(fmt.ctx, nullptr) < 0) {
-        out.errorMessage = QStringLiteral("No stream info");
-        return out;
+    if (avformat_find_stream_info(session.fmt, nullptr) < 0) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("No stream info");
+        }
+        return false;
     }
 
-    int videoIdx = -1;
-    for (unsigned int i = 0; i < fmt.ctx->nb_streams; ++i) {
-        if (fmt.ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            videoIdx = int(i);
+    for (unsigned int i = 0; i < session.fmt->nb_streams; ++i) {
+        if (session.fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            session.videoIdx = int(i);
             break;
         }
     }
-    if (videoIdx < 0) {
-        out.errorMessage = QStringLiteral("No video stream");
-        return out;
+    if (session.videoIdx < 0) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("No video stream");
+        }
+        return false;
     }
 
-    AVStream* stream = fmt.ctx->streams[videoIdx];
-    const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    session.stream = session.fmt->streams[session.videoIdx];
+    const AVCodec* codec = avcodec_find_decoder(session.stream->codecpar->codec_id);
     if (!codec) {
-        out.errorMessage = QStringLiteral("No decoder for codec id %1").arg(int(stream->codecpar->codec_id));
-        return out;
+        if (errorOut) {
+            *errorOut = QStringLiteral("No decoder for codec id %1")
+                            .arg(int(session.stream->codecpar->codec_id));
+        }
+        return false;
     }
 
-    CodecGuard dec;
-    dec.ctx = avcodec_alloc_context3(codec);
-    if (!dec.ctx) {
-        out.errorMessage = QStringLiteral("Cannot allocate codec context");
-        return out;
+    session.dec = avcodec_alloc_context3(codec);
+    if (!session.dec) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Cannot allocate codec context");
+        }
+        return false;
     }
-    if (avcodec_parameters_to_context(dec.ctx, stream->codecpar) < 0) {
-        out.errorMessage = QStringLiteral("Failed to copy codec parameters");
-        return out;
+    if (avcodec_parameters_to_context(session.dec, session.stream->codecpar) < 0) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Failed to copy codec parameters");
+        }
+        return false;
     }
     {
         const int ideal = QThread::idealThreadCount();
         const int cap   = (ideal > 0) ? std::min(4, ideal) : 2;
-        dec.ctx->thread_count = qMax(1, cap);
+        session.dec->thread_count = qMax(1, cap);
     }
+    if (avcodec_open2(session.dec, codec, nullptr) < 0) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Cannot open codec");
+        }
+        return false;
+    }
+    return true;
+}
 
-    if (avcodec_open2(dec.ctx, codec, nullptr) < 0) {
-        out.errorMessage = QStringLiteral("Cannot open codec");
+void closeVideoDecoderSession(VideoDecoderSession& session)
+{
+    if (session.dec) {
+        avcodec_free_context(&session.dec);
+        session.dec = nullptr;
+    }
+    if (session.fmt) {
+        avformat_close_input(&session.fmt);
+        session.fmt = nullptr;
+    }
+    session.stream  = nullptr;
+    session.videoIdx = -1;
+}
+
+ThumbnailResult decodeFrameAtMs(VideoDecoderSession& session,
+                              qint64 seekMs,
+                              QSize targetSize)
+{
+    ThumbnailResult out;
+    if (!session.fmt || !session.dec || !session.stream || session.videoIdx < 0) {
+        out.errorMessage = QStringLiteral("Decoder not open");
         return out;
     }
 
-    // Seek target: explicit ts, else 10% into the clip, else start.
-    qint64 seekMs = timestampMs;
-    if (seekMs < 0) {
-        const qint64 durMs = fmt.ctx->duration > 0
-            ? fmt.ctx->duration / (AV_TIME_BASE / 1000) : 0;
-        seekMs = (durMs > 2000) ? durMs / 10 : 0;
-    }
     if (seekMs > 0) {
-        const int64_t ts = av_rescale_q(seekMs, AVRational{1, 1000}, stream->time_base);
-        av_seek_frame(fmt.ctx, videoIdx, ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(dec.ctx);
+        const int64_t ts = av_rescale_q(seekMs, AVRational{1, 1000}, session.stream->time_base);
+        av_seek_frame(session.fmt, session.videoIdx, ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(session.dec);
     }
 
     PacketGuard pkt;
@@ -165,33 +194,38 @@ ThumbnailResult ThumbnailExtractor::extract(const QString& filePath,
     constexpr int kMaxAttempts = 256;
 
     while (attempts++ < kMaxAttempts) {
-        const int r = av_read_frame(fmt.ctx, pkt.packet);
+        const int r = av_read_frame(session.fmt, pkt.packet);
         if (r < 0) {
-            // Flush decoder.
-            avcodec_send_packet(dec.ctx, nullptr);
-            if (avcodec_receive_frame(dec.ctx, frame.frame) == 0) {
+            avcodec_send_packet(session.dec, nullptr);
+            if (avcodec_receive_frame(session.dec, frame.frame) == 0) {
                 out.image = frameToQImage(frame.frame, targetSize);
                 out.timestampMs = seekMs;
                 out.ok = !out.image.isNull();
             }
             break;
         }
-        if (pkt.packet->stream_index != videoIdx) {
+        if (pkt.packet->stream_index != session.videoIdx) {
             av_packet_unref(pkt.packet);
             continue;
         }
-        const int sr = avcodec_send_packet(dec.ctx, pkt.packet);
+        const int sr = avcodec_send_packet(session.dec, pkt.packet);
         av_packet_unref(pkt.packet);
-        if (sr < 0) continue;
+        if (sr < 0) {
+            continue;
+        }
 
         while (true) {
-            const int rr = avcodec_receive_frame(dec.ctx, frame.frame);
-            if (rr == AVERROR(EAGAIN) || rr == AVERROR_EOF) break;
-            if (rr < 0) break;
+            const int rr = avcodec_receive_frame(session.dec, frame.frame);
+            if (rr == AVERROR(EAGAIN) || rr == AVERROR_EOF) {
+                break;
+            }
+            if (rr < 0) {
+                break;
+            }
             out.image = frameToQImage(frame.frame, targetSize);
             if (frame.frame->best_effort_timestamp != AV_NOPTS_VALUE) {
                 out.timestampMs = av_rescale_q(frame.frame->best_effort_timestamp,
-                                               stream->time_base,
+                                               session.stream->time_base,
                                                AVRational{1, 1000});
             } else {
                 out.timestampMs = seekMs;
@@ -201,13 +235,40 @@ ThumbnailResult ThumbnailExtractor::extract(const QString& filePath,
                 break;
             }
         }
-        if (out.ok) break;
+        if (out.ok) {
+            break;
+        }
     }
 
     if (!out.ok && out.errorMessage.isEmpty()) {
         out.errorMessage = QStringLiteral("No decodable frame found within %1 packets")
-            .arg(kMaxAttempts);
+                               .arg(kMaxAttempts);
     }
+    return out;
+}
+
+} // namespace
+
+ThumbnailResult ThumbnailExtractor::extract(const QString& filePath,
+                                            QSize targetSize,
+                                            qint64 timestampMs)
+{
+    ThumbnailResult out;
+    VideoDecoderSession session;
+    if (!openVideoDecoderSession(filePath, session, &out.errorMessage)) {
+        closeVideoDecoderSession(session);
+        return out;
+    }
+
+    qint64 seekMs = timestampMs;
+    if (seekMs < 0) {
+        const qint64 durMs = session.fmt->duration > 0
+            ? session.fmt->duration / (AV_TIME_BASE / 1000) : 0;
+        seekMs = (durMs > 2000) ? durMs / 10 : 0;
+    }
+
+    out = decodeFrameAtMs(session, seekMs, targetSize);
+    closeVideoDecoderSession(session);
     return out;
 }
 
@@ -219,18 +280,29 @@ QList<QImage> ThumbnailExtractor::extractPreviewKeyframes(const QString& filePat
     if (count <= 0 || filePath.isEmpty()) {
         return out;
     }
-    const MediaProbeResult pr = MediaProbe::probe(filePath);
-    if (!pr.ok || !pr.hasVideo) {
+
+    VideoDecoderSession session;
+    QString error;
+    if (!openVideoDecoderSession(filePath, session, &error)) {
+        closeVideoDecoderSession(session);
         return out;
     }
-    const qint64 durMs = pr.durationMs > 250 ? pr.durationMs : 2000;
+
+    qint64 durMs = session.fmt->duration > 0
+        ? session.fmt->duration / (AV_TIME_BASE / 1000) : 0;
+    if (durMs <= 250) {
+        durMs = 2000;
+    }
+
     for (int i = 0; i < count; ++i) {
         const qint64 seekMs = durMs * (i + 1) / (count + 1);
-        const ThumbnailResult tr = extract(filePath, targetSize, seekMs);
+        const ThumbnailResult tr = decodeFrameAtMs(session, seekMs, targetSize);
         if (tr.ok && !tr.image.isNull()) {
             out.append(tr.image);
         }
     }
+
+    closeVideoDecoderSession(session);
     return out;
 }
 

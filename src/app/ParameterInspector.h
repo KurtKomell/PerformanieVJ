@@ -52,8 +52,6 @@ public:
     /// When set, keying sliders read/write through this per-layer snapshot (see MainWindow).
     void setLayerKeyingOverride(const LayerKeyingState* state);
 
-    int outputScreenIndex() const;
-
     /// Current bank grid / inspector selection (for preview sync).
     int selectedBankSetIndex() const { return m_bankSetIndex; }
     int selectedBankIndex() const { return m_bankIndex; }
@@ -67,9 +65,6 @@ signals:
     void cellChanged(int bankSetIndex, int bankIndex, int cellIndex);
     /// Layer, visual source, or media assignment changed — re-apply live playback if active.
     void cellPlaybackChanged(int bankSetIndex, int bankIndex, int cellIndex);
-    void fullscreenOutputToggled();
-    /// Project-wide post-mixer NVIDIA filter chain changed (Output tab).
-    void outputFilterChainChanged();
     /// Step playback by whole seconds (±1 from arrow buttons).
     void visualSeekStepRequested(int seconds);
     /// Apply scratch head position to the playing decoder (see `scratchHeadU`).
@@ -124,6 +119,11 @@ private slots:
     void onVisualSourceChanged(int idx);
     void onFeedbackLoopRetentionChanged(int v);
     void onFeedbackLiveInjectChanged(int v);
+    void onFeedbackInSaturationChanged(int v);
+    void onFeedbackInBrightnessChanged(int v);
+    void onFeedbackInContrastChanged(int v);
+    void onFeedbackInHueShiftChanged(int v);
+    void onFeedbackInGammaChanged(int v);
     void onFeedbackSaturationChanged(int v);
     void onFeedbackBrightnessChanged(int v);
     void onFeedbackContrastChanged(int v);
@@ -132,31 +132,15 @@ private slots:
     void onFeedbackRotationChanged(int v);
     void onFeedbackZoomChanged(int v);
     void onFeedbackFrameDelayChanged(int v);
-    void onFeedbackInputModeChanged(int idx);
     void onFeedbackWrapModeChanged(int idx);
     void onPictureWrapModeChanged(int idx);
 
-    void onOutputFilterSelectionChanged();
-    void onOutputFilterAddTriggered();
-    void onOutputFilterMoveUp();
-    void onOutputFilterMoveDown();
-    void onOutputFilterRemove();
-
 private:
-    void rebuildScreenList();
-    void refreshOutputFilterUi();
-    void rebuildOutputParamEditors();
-    void clearOutputParamEditors();
-    void emitOutputFilterChanged();
-    QString outputFilterLabelFor(const QString& typeId) const;
-    void ensureOutputNodeParams(pvj::core::CellFilterNode& node) const;
-
     QWidget* buildVisualTab();
     QWidget* buildTransitionTab();
     QWidget* buildMixingTab();
     QWidget* buildFeedbackTab();
     QWidget* buildPositionTab();
-    QWidget* buildOutputTab();
 
     pvj::core::Cell* currentCell();
     void refreshFromCell();
@@ -180,6 +164,8 @@ private:
     void registerMidiWidgets();
     void tagMidiWidget(QWidget* w, const QString& propertyId, const QVariant& noteValue = QVariant());
     void showMidiContextMenu(QWidget* w, const QPoint& globalPos);
+    void applyMidiMapOverlays();
+    QString midiLabelForWidget(QWidget* w) const;
 
     pvj::core::Project* m_project = nullptr;
     int m_bankSetIndex = -1;
@@ -273,6 +259,16 @@ private:
     QLabel*         m_feedbackLoopRetentionValue = nullptr;
     QSlider*        m_feedbackLiveInjectSlider = nullptr;
     QLabel*         m_feedbackLiveInjectValue = nullptr;
+    QSlider*        m_feedbackInSaturationSlider = nullptr;
+    QLabel*         m_feedbackInSaturationValue = nullptr;
+    QSlider*        m_feedbackInBrightnessSlider = nullptr;
+    QLabel*         m_feedbackInBrightnessValue = nullptr;
+    QSlider*        m_feedbackInContrastSlider = nullptr;
+    QLabel*         m_feedbackInContrastValue = nullptr;
+    QSlider*        m_feedbackInHueShiftSlider = nullptr;
+    QLabel*         m_feedbackInHueShiftValue = nullptr;
+    QSlider*        m_feedbackInGammaSlider = nullptr;
+    QLabel*         m_feedbackInGammaValue = nullptr;
     QSlider*        m_feedbackSaturationSlider = nullptr;
     QLabel*         m_feedbackSaturationValue = nullptr;
     QSlider*        m_feedbackBrightnessSlider = nullptr;
@@ -289,22 +285,12 @@ private:
     QLabel*         m_feedbackZoomValue = nullptr;
     QSlider*        m_feedbackFrameDelaySlider = nullptr;
     QLabel*         m_feedbackFrameDelayValue = nullptr;
-    QComboBox*      m_feedbackInputModeCombo = nullptr;
+    QLabel*         m_feedbackInputLabel = nullptr;
     QLabel*         m_feedbackInputModeHint = nullptr;
     QComboBox*      m_feedbackWrapCombo = nullptr;
 
     QComboBox*      m_pictureWrapCombo = nullptr;
 
-    QComboBox*      m_outputScreen   = nullptr;
-    QPushButton*    m_fullscreenBtn  = nullptr;
-    QListWidget*    m_outputFilterList = nullptr;
-    QPushButton*    m_outputFilterUpBtn = nullptr;
-    QPushButton*    m_outputFilterDownBtn = nullptr;
-    QPushButton*    m_outputFilterRemoveBtn = nullptr;
-    QPushButton*    m_outputFilterAddBtn = nullptr;
-    QWidget*        m_outputParamHost = nullptr;
-    QVBoxLayout*    m_outputParamLayout = nullptr;
-    int             m_outputFilterSelectedIndex = -1;
     QGridLayout*    m_visualGrid     = nullptr;
     /// Top of Visual tab (thumbnail row + clip name); clip-only block is `m_visualClipSection`.
     QWidget*        m_visualStandardSection = nullptr;

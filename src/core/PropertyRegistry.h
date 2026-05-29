@@ -17,10 +17,13 @@ enum class Kind {
 
 QStringList allPropertyNames();
 QString       labelFor(const QString& name);
+/// Map GrandVJ / legacy tokens (e.g. TRSP, FADE) to canonical property ids (transparency, fade).
+QString       resolvePropertyId(const QString& raw);
 Kind          kindOf(const QString& name);
 int           enumCountOf(const QString& name);
 void          learnMinMax(const QString& name, double* minV, double* maxV);
 bool          isFilterParamProperty(const QString& raw);
+bool          isFeedbackProperty(const QString& raw);
 bool          parseFilterParamProperty(const QString& raw, QUuid* node, QString* paramName);
 
 bool readValue(const Cell& c, const QString& raw, double* out);

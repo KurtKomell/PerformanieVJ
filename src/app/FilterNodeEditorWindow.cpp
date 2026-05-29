@@ -1,5 +1,6 @@
 #include "FilterNodeEditorWindow.h"
 
+#include "FilterPickerDialog.h"
 #include "NodeGraphWidget.h"
 
 #include "core/FilterCatalog.h"
@@ -9,6 +10,7 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QPushButton>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGroupBox>
@@ -61,8 +63,8 @@ FilterNodeEditorWindow::FilterNodeEditorWindow(QWidget* parent)
 
     auto* root = new QVBoxLayout(this);
 
-    auto* srcBox = new QGroupBox(tr("Video source"), this);
-    auto* srcLay = new QVBoxLayout(srcBox);
+    m_srcBox = new QGroupBox(tr("Video source"), this);
+    auto* srcLay = new QVBoxLayout(m_srcBox);
     m_sourceHint = new QLabel(this);
     m_sourceHint->setWordWrap(true);
     m_sourceHint->setStyleSheet(QStringLiteral("color: #9aa3b8;"));
@@ -73,9 +75,14 @@ FilterNodeEditorWindow::FilterNodeEditorWindow(QWidget* parent)
     m_sourceCombo->addItem(tr("Spout (Windows)"), kSourceSpout);
     m_sourceCombo->addItem(tr("NDI"), kSourceNdi);
     m_sourceCombo->addItem(tr("Feedback loop (internal)"), kSourceInternalFeedback);
+    m_pickSourceFilterBtn = new QPushButton(tr("Choose source filter…"), this);
+    m_pickSourceFilterBtn->hide();
+    connect(m_pickSourceFilterBtn, &QPushButton::clicked, this,
+            &FilterNodeEditorWindow::pickMixerSourceFilter);
     srcLay->addWidget(m_sourceHint);
     srcLay->addWidget(m_sourceCombo);
-    root->addWidget(srcBox);
+    srcLay->addWidget(m_pickSourceFilterBtn);
+    root->addWidget(m_srcBox);
 
     auto* graphBox = new QGroupBox(tr("Filter chain"), this);
     auto* graphLay = new QVBoxLayout(graphBox);
@@ -171,14 +178,18 @@ void FilterNodeEditorWindow::openForCell(int bankSetIndex, int bankIndex, int ce
             node.params = pvj::core::defaultParamsFor(node.typeId);
         }
     }
-    ensureFeedbackMarker(m_cell);
+    if (m_cell->visual.type != VisualType::MixerFilter) {
+        ensureFeedbackMarker(m_cell);
+    }
 
     setWindowTitle(tr("Filters & nodes — bank %1, cell %2")
                        .arg(m_bankIndex + 1)
                        .arg(m_cellIndex + 1));
 
+    syncSourceUiForCell();
     syncSourceComboFromCell();
     m_graph->setCell(m_cell, m_project);
+    m_graph->setDeckContext(m_bankSetIndex, m_bankIndex, m_cellIndex);
     m_graph->refresh();
     refreshSourceHint();
 
@@ -187,9 +198,70 @@ void FilterNodeEditorWindow::openForCell(int bankSetIndex, int bankIndex, int ce
     activateWindow();
 }
 
+void FilterNodeEditorWindow::syncSourceUiForCell()
+{
+    const bool mixerFx = m_cell && m_cell->visual.type == VisualType::MixerFilter;
+    if (m_srcBox) {
+        m_srcBox->setTitle(mixerFx ? tr("Mixer filter (source)")
+                                   : tr("Video source"));
+    }
+    if (m_sourceCombo) {
+        m_sourceCombo->setVisible(!mixerFx);
+    }
+    if (m_pickSourceFilterBtn) {
+        m_pickSourceFilterBtn->setVisible(mixerFx);
+    }
+}
+
+void FilterNodeEditorWindow::pickMixerSourceFilter()
+{
+    if (!m_cell) {
+        return;
+    }
+    FilterPickerOptions opts;
+    opts.title = tr("Mixer filter (source)");
+    opts.includeEntry = [](const pvj::core::FilterCatalogEntry& e) {
+        return !pvj::core::filterUsesMaxineBackend(e.typeId)
+            && !pvj::core::isFeedbackMarkerNode(e.typeId);
+    };
+    const auto typeId = FilterPickerDialog::pick(this, opts);
+    if (!typeId) {
+        return;
+    }
+    m_cell->visual.type = VisualType::MixerFilter;
+    m_cell->visual.generator = GeneratorKind::None;
+    m_cell->visual.mediaId = {};
+    pvj::core::CellFilterNode node;
+    node.typeId = *typeId;
+    node.params = pvj::core::defaultParamsFor(*typeId);
+    if (m_cell->filterChain.isEmpty()) {
+        m_cell->filterChain.append(node);
+    } else {
+        m_cell->filterChain[0] = node;
+    }
+    syncSourceUiForCell();
+    emitChainEdited();
+    refreshSourceHint();
+    if (m_graph) {
+        m_graph->refresh();
+    }
+}
+
 void FilterNodeEditorWindow::refreshSourceHint()
 {
     if (!m_cell) {
+        return;
+    }
+    if (m_cell->visual.type == VisualType::MixerFilter) {
+        QString hint = tr("Applied to the full mixer when this cell is triggered (no mix layer). "
+                          "NVIDIA / Maxine filters in the chain always run last.");
+        if (!m_cell->filterChain.isEmpty()) {
+            const QString& tid = m_cell->filterChain.front().typeId;
+            const QString en = pvj::core::filterCatalogEnglishName(tid);
+            hint += QLatin1Char('\n')
+                + tr("Source filter: %1").arg(en.isEmpty() ? tid : en);
+        }
+        m_sourceHint->setText(hint);
         return;
     }
     if (m_cell->visual.type == VisualType::Media && !m_cell->visual.mediaId.isNull()) {
@@ -214,6 +286,9 @@ void FilterNodeEditorWindow::refreshSourceHint()
 void FilterNodeEditorWindow::syncSourceComboFromCell()
 {
     if (!m_cell) {
+        return;
+    }
+    if (m_cell->visual.type == VisualType::MixerFilter) {
         return;
     }
 
@@ -248,7 +323,7 @@ void FilterNodeEditorWindow::syncSourceComboFromCell()
 
 void FilterNodeEditorWindow::applySourceToCell()
 {
-    if (!m_cell) {
+    if (!m_cell || m_cell->visual.type == VisualType::MixerFilter) {
         return;
     }
 
@@ -288,6 +363,20 @@ void FilterNodeEditorWindow::applySourceToCell()
         break;
     default:
         break;
+    }
+}
+
+void FilterNodeEditorWindow::setMidiMappingEditMode(bool on)
+{
+    if (m_graph) {
+        m_graph->setMidiMappingEditMode(on);
+    }
+}
+
+void FilterNodeEditorWindow::refreshMidiMapOverlays()
+{
+    if (m_graph) {
+        m_graph->syncMidiMapOverlays();
     }
 }
 

@@ -16,6 +16,110 @@ QString norm(const QString& raw)
     return raw.toLower();
 }
 
+QString normalizeAliasKey(QString s)
+{
+    s = s.toLower();
+    s.remove(QLatin1Char(' '));
+    s.remove(QLatin1Char('_'));
+    s.remove(QLatin1Char('-'));
+    return s;
+}
+
+const QHash<QString, QString>& grandVjPropertyAliasMap()
+{
+    static const QHash<QString, QString> kMap = [] {
+        QHash<QString, QString> m;
+        const auto add = [&](const char* token, const char* property) {
+            m.insert(normalizeAliasKey(QString::fromLatin1(token)),
+                     QString::fromLatin1(property));
+        };
+        add("TRSP", "transparency");
+        add("OPAC", "transparency");
+        add("OPACITY", "transparency");
+        add("TRANSPARENCY", "transparency");
+        add("FADE", "fade");
+        add("MSPD", "movieSpeed");
+        add("SPED", "movieSpeed");
+        add("MOVIESPEED", "movieSpeed");
+        add("VOLM", "audioGain");
+        add("VOL", "audioGain");
+        add("AGAIN", "audioGain");
+        add("AUDIOGAIN", "audioGain");
+        add("ROTZ", "rotationZ");
+        add("PRIO", "priority");
+        add("PRIORITY", "priority");
+        add("MSKW", "keyThreshold");
+        add("MASKW", "keyThreshold");
+        add("SIZX", "pictureZoom");
+        add("SIZY", "pictureZoom");
+        add("MSKH", "maskRectHeight");
+        add("MRAD", "maskRadius");
+        add("MELX", "maskEllipseX");
+        add("MELY", "maskEllipseY");
+        add("MFTH", "maskFeather");
+        add("MASKTYPE", "maskType");
+        add("MTYP", "maskType");
+        add("MSKT", "maskType");
+        add("CMOD", "copyMode");
+        add("CPMD", "copyMode");
+        add("COPYMODE", "copyMode");
+        add("BRGT", "pictureBrightness");
+        add("BRIGHT", "pictureBrightness");
+        add("BRIGHTNESS", "pictureBrightness");
+        add("CONT", "pictureContrast");
+        add("CTRT", "pictureContrast");
+        add("CONTRAST", "pictureContrast");
+        add("SATU", "pictureSaturation");
+        add("SATURATION", "pictureSaturation");
+        add("PZOM", "pictureZoom");
+        add("ZOOM", "pictureZoom");
+        add("PROT", "pictureRotationDeg");
+        add("PICTUREROTATION", "pictureRotationDeg");
+        add("CMOT", "pictureCircularMotion");
+        add("PWRP", "pictureWrapMode");
+        add("KEYR", "keyChannelR");
+        add("KEYG", "keyChannelG");
+        add("KEYB", "keyChannelB");
+        add("KEYC", "keyLumaCenter");
+        add("KEYT", "keyThreshold");
+        add("KEYS", "keySoftness");
+        add("KEYH", "keyChromaHue");
+        add("KEYE", "keyingEnabled");
+        add("KEYM", "keyingMode");
+        add("KLIN", "keyLumaInvert");
+        add("KCIN", "keyChromaInvert");
+        add("SEGI", "segmentInU");
+        add("SEGO", "segmentOutU");
+        add("SCRH", "scratchHeadU");
+        add("SCRATCH", "scratchHeadU");
+        add("PLBM", "playMode");
+        add("PLAYMODE", "playMode");
+        add("PAUS", "clipPaused");
+        add("PAUSED", "clipPaused");
+        add("FBLR", "feedbackLoopRetention");
+        add("FBLI", "feedbackLiveInject");
+        add("FBIS", "feedbackInSaturation");
+        add("FBIB", "feedbackInBrightness");
+        add("FBIC", "feedbackInContrast");
+        add("FBIH", "feedbackInHueShift");
+        add("FBIG", "feedbackInGamma");
+        add("FBSA", "feedbackSaturation");
+        add("FBBR", "feedbackBrightness");
+        add("FBCO", "feedbackContrast");
+        add("FBHU", "feedbackHueShift");
+        add("FBGA", "feedbackGamma");
+        add("FBRT", "feedbackRotationDeg");
+        add("FBZM", "feedbackZoom");
+        add("FBFD", "feedbackFrameDelay");
+        add("FBIM", "feedbackInputMode");
+        add("FBWP", "feedbackWrapMode");
+        add("MIXP", "mixingPresetIndex");
+        add("MATTE", "matteRole");
+        return m;
+    }();
+    return kMap;
+}
+
 bool parseFilterPropertyRaw(const QString& raw, QUuid* node, QString* paramName)
 {
     const QString normalized = raw.trimmed();
@@ -170,6 +274,23 @@ int indexFromNormalized(int enumCount, double n01)
 
 } // namespace
 
+QString resolvePropertyId(const QString& raw)
+{
+    QString t = raw.trimmed();
+    if (t.isEmpty()) {
+        return {};
+    }
+    if (t.startsWith(QLatin1Char('/'))) {
+        t = t.section(QLatin1Char('/'), -1);
+    }
+    const QString key = normalizeAliasKey(t);
+    const auto it     = grandVjPropertyAliasMap().constFind(key);
+    if (it != grandVjPropertyAliasMap().cend()) {
+        return *it;
+    }
+    return norm(t);
+}
+
 QStringList allPropertyNames()
 {
     return QStringList({
@@ -209,6 +330,11 @@ QStringList allPropertyNames()
         QStringLiteral("pictureWrapMode"),
         QStringLiteral("feedbackLoopRetention"),
         QStringLiteral("feedbackLiveInject"),
+        QStringLiteral("feedbackInSaturation"),
+        QStringLiteral("feedbackInBrightness"),
+        QStringLiteral("feedbackInContrast"),
+        QStringLiteral("feedbackInHueShift"),
+        QStringLiteral("feedbackInGamma"),
         QStringLiteral("feedbackSaturation"),
         QStringLiteral("feedbackBrightness"),
         QStringLiteral("feedbackContrast"),
@@ -217,7 +343,6 @@ QStringList allPropertyNames()
         QStringLiteral("feedbackRotationDeg"),
         QStringLiteral("feedbackZoom"),
         QStringLiteral("feedbackFrameDelay"),
-        QStringLiteral("feedbackInputMode"),
         QStringLiteral("feedbackWrapMode"),
         QStringLiteral("playMode"),
         QStringLiteral("clipPaused"),
@@ -392,7 +517,7 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
         return;
     }
     if (p == QLatin1String("moviespeed")) {
-        *minV = -4.0;
+        *minV = 0.0;
         *maxV = 4.0;
     } else if (p == QLatin1String("audiogain")) {
         *minV = 0.0;
@@ -418,16 +543,20 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("feedbackloopretention") || p == QLatin1String("feedbackliveinject")) {
         *minV = 0.0;
         *maxV = 1.0;
-    } else if (p == QLatin1String("feedbacksaturation") || p == QLatin1String("feedbackcontrast")) {
+    } else if (p == QLatin1String("feedbackinsaturation") || p == QLatin1String("feedbackincontrast")
+               || p == QLatin1String("feedbacksaturation") || p == QLatin1String("feedbackcontrast")) {
         *minV = 0.0;
         *maxV = 2.0;
-    } else if (p == QLatin1String("feedbackbrightness")) {
+    } else if (p == QLatin1String("feedbackinbrightness") || p == QLatin1String("feedbackbrightness")) {
         *minV = -1.0;
         *maxV = 1.0;
-    } else if (p == QLatin1String("feedbackhueshift") || p == QLatin1String("feedbackzoom")) {
+    } else if (p == QLatin1String("feedbackinhueshift") || p == QLatin1String("feedbackhueshift")) {
         *minV = -1.0;
         *maxV = 1.0;
-    } else if (p == QLatin1String("feedbackgamma")) {
+    } else if (p == QLatin1String("feedbackzoom")) {
+        *minV = kFeedbackZoomMin;
+        *maxV = kFeedbackZoomMax;
+    } else if (p == QLatin1String("feedbackingamma") || p == QLatin1String("feedbackgamma")) {
         *minV = 0.1;
         *maxV = 4.0;
     } else if (p == QLatin1String("feedbackrotationdeg")) {
@@ -435,7 +564,7 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
         *maxV = 360.0;
     } else if (p == QLatin1String("feedbackframedelay")) {
         *minV = 0.0;
-        *maxV = 14.0;
+        *maxV = double(kFeedbackMaxFrameDelay);
     } else if (p == QLatin1String("feedbackinputmode")) {
         *minV = 0.0;
         *maxV = 2.0;
@@ -598,6 +727,26 @@ bool readValue(const Cell& c, const QString& raw, double* out)
         *out = c.props.feedback.liveInject;
         return true;
     }
+    if (p == QLatin1String("feedbackinsaturation")) {
+        *out = c.props.feedback.inSaturation;
+        return true;
+    }
+    if (p == QLatin1String("feedbackinbrightness")) {
+        *out = c.props.feedback.inBrightness;
+        return true;
+    }
+    if (p == QLatin1String("feedbackincontrast")) {
+        *out = c.props.feedback.inContrast;
+        return true;
+    }
+    if (p == QLatin1String("feedbackinhueshift")) {
+        *out = c.props.feedback.inHueShift;
+        return true;
+    }
+    if (p == QLatin1String("feedbackingamma")) {
+        *out = c.props.feedback.inGamma;
+        return true;
+    }
     if (p == QLatin1String("feedbacksaturation")) {
         *out = c.props.feedback.saturation;
         return true;
@@ -747,7 +896,7 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("moviespeed")) {
-        c.props.movieSpeed = v;
+        c.props.movieSpeed = qBound(0.0, v, 4.0);
         return true;
     }
     if (p == QLatin1String("fade")) {
@@ -879,6 +1028,26 @@ bool applyValue(Cell& c, const QString& raw, double v)
         c.props.feedback.liveInject = qBound(0.0, v, 1.0);
         return true;
     }
+    if (p == QLatin1String("feedbackinsaturation")) {
+        c.props.feedback.inSaturation = qBound(0.0, v, 2.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackinbrightness")) {
+        c.props.feedback.inBrightness = qBound(-1.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackincontrast")) {
+        c.props.feedback.inContrast = qBound(0.0, v, 2.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackinhueshift")) {
+        c.props.feedback.inHueShift = qBound(-1.0, v, 1.0);
+        return true;
+    }
+    if (p == QLatin1String("feedbackingamma")) {
+        c.props.feedback.inGamma = qBound(0.1, v, 4.0);
+        return true;
+    }
     if (p == QLatin1String("feedbacksaturation")) {
         c.props.feedback.saturation = qBound(0.0, v, 2.0);
         return true;
@@ -904,16 +1073,15 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("feedbackzoom")) {
-        c.props.feedback.zoom = qBound(-1.0, v, 1.0);
+        c.props.feedback.zoom = qBound(kFeedbackZoomMin, v, kFeedbackZoomMax);
         return true;
     }
     if (p == QLatin1String("feedbackframedelay")) {
-        c.props.feedback.frameDelay = qBound(0, int(qRound(v)), 14);
+        c.props.feedback.frameDelay = qBound(0, int(qRound(v)), kFeedbackMaxFrameDelay);
         return true;
     }
     if (p == QLatin1String("feedbackinputmode")) {
-        const int mode = int(qRound(v));
-        c.props.feedback.inputMode = static_cast<FeedbackInputMode>(qBound(0, mode, 2));
+        c.props.feedback.inputMode = FeedbackInputMode::SceneLoopback;
         return true;
     }
     if (p == QLatin1String("feedbackwrapmode")) {
@@ -943,6 +1111,12 @@ bool applySetValue(Cell& c, const QString& raw, double v)
 bool isFilterParamProperty(const QString& raw)
 {
     return parseFilterPropertyRaw(raw, nullptr, nullptr);
+}
+
+bool isFeedbackProperty(const QString& raw)
+{
+    const QString p = norm(raw);
+    return p.startsWith(QLatin1String("feedback"));
 }
 
 bool parseFilterParamProperty(const QString& raw, QUuid* node, QString* paramName)

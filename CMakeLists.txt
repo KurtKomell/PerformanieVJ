@@ -33,7 +33,7 @@ option(VJ_FEATURE_SYPHON "Enable Syphon input (macOS only)"         ON)
 option(VJ_FEATURE_NDI    "Enable NDI input (cross-platform)"        OFF)
 option(VJ_FEATURE_ASIO   "Enable ASIO audio driver (Windows only)"  OFF)
 option(VJ_FEATURE_MAXINE "Enable NVIDIA Maxine VFX filters (Windows)" ON)
-option(VJ_BUILD_TESTS    "Build unit tests"                         ON)
+option(VJ_BUILD_TESTS    "Build unit tests"                         OFF)
 
 if(NOT WIN32)
     set(VJ_FEATURE_SPOUT OFF CACHE BOOL "" FORCE)

@@ -16,6 +16,13 @@ extern "C" {
 
 namespace pvj::video {
 
+namespace {
+
+constexpr qint64 kPacingWaitCapMs = 30;
+constexpr qint64 kAnchorUnset     = -1;
+
+} // namespace
+
 // -----------------------------------------------------------------------------
 // Internal decoder worker. Runs on its own QThread and communicates with the
 // outer VideoDecoder via atomic commands plus a mutex-protected seek target.
@@ -119,8 +126,12 @@ public:
         m_wait.wakeAll();
     }
 
-    void setPlaybackSpeed(double s) { m_speed.storeRelease(int(s * 1000.0)); }
-    double playbackSpeed() const    { return double(m_speed.loadAcquire()) / 1000.0; }
+    void setPlaybackSpeed(double s)
+    {
+        m_speed.storeRelease(int(qRound(qBound(0.0, s, 4.0) * 1000.0)));
+        m_wait.wakeAll();
+    }
+    double playbackSpeed() const { return double(m_speed.loadAcquire()) / 1000.0; }
 
 protected:
     void run() override
@@ -137,7 +148,9 @@ protected:
 
         QElapsedTimer clock;
         clock.invalidate();
-        qint64 firstPtsMs = -1;
+        qint64 anchorPtsMs  = kAnchorUnset;
+        qint64 anchorWallMs = 0;
+        double lastSpeed    = -1.0;
 
         while (!m_abort.loadAcquire()) {
             if (!m_playing.loadAcquire()) {
@@ -155,7 +168,15 @@ protected:
                 avcodec_flush_buffers(m_dec);
                 m_seekPending = false;
                 clock.invalidate();
-                firstPtsMs = -1;
+                anchorPtsMs  = kAnchorUnset;
+                lastSpeed    = -1.0;
+            }
+
+            const double holdSpeed = qBound(0.0, playbackSpeed(), 4.0);
+            if (holdSpeed <= 0.0 && anchorPtsMs >= 0) {
+                QMutexLocker lk(&m_mutex);
+                m_wait.wait(&m_mutex, static_cast<unsigned long>(kPacingWaitCapMs));
+                continue;
             }
 
             const int r = av_read_frame(m_fmt, pkt);
@@ -164,7 +185,8 @@ protected:
                     av_seek_frame(m_fmt, m_videoIdx, 0, AVSEEK_FLAG_BACKWARD);
                     avcodec_flush_buffers(m_dec);
                     clock.invalidate();
-                    firstPtsMs = -1;
+                    anchorPtsMs = kAnchorUnset;
+                    lastSpeed   = -1.0;
                     continue;
                 }
                 emit m_owner->endOfStream();
@@ -195,18 +217,57 @@ protected:
                 }
 
                 // Pace output to real-time (respecting playback speed).
-                if (firstPtsMs < 0) {
-                    firstPtsMs = ptsMs;
-                    clock.restart();
+                const double speed = qBound(0.0, playbackSpeed(), 4.0);
+                if (speed <= 0.0) {
+                    if (anchorPtsMs < 0 || speed != lastSpeed) {
+                        if (!clock.isValid()) {
+                            clock.start();
+                        }
+                        anchorPtsMs  = ptsMs;
+                        anchorWallMs = clock.elapsed();
+                        lastSpeed    = speed;
+                        QImage img = convertFrame(frame);
+                        if (!img.isNull()) {
+                            m_owner->m_lastPtsMs.storeRelease(ptsMs);
+                            emit m_owner->frameReady(img, ptsMs);
+                        }
+                    }
+                    break;
                 }
-                const double speed = qMax(0.01, playbackSpeed());
-                const qint64 targetMs = qint64((ptsMs - firstPtsMs) / speed);
-                const qint64 elapsed = clock.isValid() ? clock.elapsed() : 0;
-                if (targetMs > elapsed) {
-                    const qint64 waitMs = qMin<qint64>(targetMs - elapsed, 100);
+
+                if (anchorPtsMs < 0) {
+                    if (!clock.isValid()) {
+                        clock.start();
+                    }
+                    anchorPtsMs  = ptsMs;
+                    anchorWallMs = 0;
+                    lastSpeed    = speed;
+                } else if (speed != lastSpeed) {
+                    anchorPtsMs  = ptsMs;
+                    anchorWallMs = clock.elapsed();
+                    lastSpeed    = speed;
+                }
+
+                const qint64 targetMs = anchorWallMs
+                    + qint64(double(ptsMs - anchorPtsMs) / speed);
+                qint64 elapsed = clock.isValid() ? clock.elapsed() : 0;
+
+                const qint64 oneFrameMs = qint64(qMax(1.0, 1000.0 / m_fps));
+                if (speed > 1.0 + 1e-6 && elapsed > targetMs + oneFrameMs) {
+                    continue;
+                }
+
+                while (targetMs > elapsed) {
+                    const qint64 waitMs = qMin<qint64>(targetMs - elapsed, kPacingWaitCapMs);
                     QMutexLocker lk(&m_mutex);
                     m_wait.wait(&m_mutex, static_cast<unsigned long>(waitMs));
-                    if (m_seekPending || m_abort.loadAcquire()) break;
+                    if (m_seekPending || m_abort.loadAcquire()) {
+                        break;
+                    }
+                    elapsed = clock.elapsed();
+                }
+                if (m_seekPending || m_abort.loadAcquire()) {
+                    break;
                 }
 
                 QImage img = convertFrame(frame);

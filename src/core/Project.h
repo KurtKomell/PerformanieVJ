@@ -7,6 +7,9 @@
 
 namespace pvj::core {
 
+/// Cell triggers (keyboard / MIDI note) apply to the cell index on every bank.
+constexpr int kBankIndexAllBanks = -1;
+
 class Project
 {
 public:
@@ -41,6 +44,29 @@ public:
     MediaItem*       findMedia(const QUuid& id);
 
     int bankSetIndex(BankSetType type) const;  // -1 if not present
+
+    /// Portable QKeySequence string for the cell keyboard trigger, or empty if none.
+    QString keyboardTriggerForCell(int bankSetIndex, int bankIndex, int cellIndex) const;
+    /// Assigns at most one keyboard trigger per cell slot (all banks); steals the key from other cells.
+    void setKeyboardTriggerForCell(int bankSetIndex, int bankIndex, int cellIndex,
+                                  const QString& keyText, int qtKey = 0);
+    void clearKeyboardTriggerForCell(int bankSetIndex, int bankIndex, int cellIndex);
+
+    /// MIDI note bound to a cell slot (all banks), or channel < 0 if none.
+    void midiCellTriggerForCell(int bankSetIndex, int bankIndex, int cellIndex,
+                                int* channel, int* number) const;
+    void setMidiCellTriggerForCell(int bankSetIndex, int cellIndex, int channel, int number);
+    void clearMidiCellTriggerForCell(int bankSetIndex, int cellIndex);
+
+    /// Label for a property mapping on a cell, e.g. "CH1 CC7", or empty if unmapped.
+    QString propertyMappingLabel(int bankSetIndex, int bankIndex, int cellIndex,
+                                 const QString& propertyId) const;
+
+    /// Enforce at most one Key and one MidiNote per cell slot; migrate legacy per-bank entries.
+    void normalizeCellSlotTriggers();
+
+    /// @deprecated Use normalizeCellSlotTriggers().
+    void normalizeKeyboardCellTriggers() { normalizeCellSlotTriggers(); }
 };
 
 } // namespace pvj::core

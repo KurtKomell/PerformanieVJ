@@ -35,6 +35,8 @@ QString filterFamilyShaderResource(pvj::core::FilterEffectFamily family)
         return QStringLiteral(":/shaders/effect_revival.frag.qsb");
     case pvj::core::FilterEffectFamily::Temporal:
         return QStringLiteral(":/shaders/effect_temporal.frag.qsb");
+    case pvj::core::FilterEffectFamily::Film:
+        return QStringLiteral(":/shaders/effect_film.frag.qsb");
     case pvj::core::FilterEffectFamily::Maxine:
         return QStringLiteral(":/shaders/effect_utility.frag.qsb");
     }
