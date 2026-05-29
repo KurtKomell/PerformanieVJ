@@ -1677,6 +1677,60 @@ void RhiMixerWidget::copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QS
     m_sceneHistPrimed = true;
 }
 
+void RhiMixerWidget::advanceFeedbackRingSlot()
+{
+    m_feedbackWriteIdx = quint8((m_feedbackWriteIdx + 1) % kFeedbackRingSize);
+    if (m_feedbackRingFilled < kFeedbackRingSize) {
+        ++m_feedbackRingFilled;
+    }
+}
+
+void RhiMixerWidget::runFeedbackAccumulationStep(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                                 const QSize& stagePx, const QColor& clear,
+                                                 QRhiTexture* filteredBelow,
+                                                 const QList<pvj::core::CellFilterNode>& postChain)
+{
+    if (!r || !cb || !filteredBelow) {
+        return;
+    }
+    QRhiTexture* historyRead = feedbackReadTexture();
+    QRhiTextureRenderTarget* writeRt = feedbackWriteRenderTarget();
+    if (!historyRead || !writeRt) {
+        return;
+    }
+    runFeedbackPass(r, cb, feedbackLayer, stagePx, clear, filteredBelow, historyRead, writeRt);
+
+    if (!postChain.isEmpty()) {
+        QRhiTexture* fbOut = feedbackWriteTexture();
+        if (fbOut && writeRt && m_layerFilterPingRt[feedbackLayer][1]) {
+            runTextureCopyPass(r, cb, fbOut, m_layerFilterPingRt[feedbackLayer][1].get(), stagePx);
+            runPerLayerFilterChain(r, cb, feedbackLayer, m_layerFilterPingTex[feedbackLayer][1].get(),
+                                   stagePx, clear, &postChain);
+            if (QRhiTexture* filtered = filterOutputTextureForLayer(feedbackLayer)) {
+                runTextureCopyPass(r, cb, filtered, writeRt, stagePx);
+            }
+        } else {
+            m_layerFilterLastOut[feedbackLayer] = -1;
+        }
+    } else {
+        m_layerFilterLastOut[feedbackLayer] = -1;
+    }
+}
+
+void RhiMixerWidget::primeFeedbackRingForDelay(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                               const QSize& stagePx, const QColor& clear,
+                                               QRhiTexture* filteredBelow,
+                                               const QList<pvj::core::CellFilterNode>& postChain)
+{
+    const int delay = qBound(0, m_layerFeedback[feedbackLayer].frameDelay,
+                             pvj::core::kFeedbackMaxFrameDelay);
+    const int targetFilled = delay + 1;
+    while (m_feedbackRingFilled < targetFilled) {
+        runFeedbackAccumulationStep(r, cb, feedbackLayer, stagePx, clear, filteredBelow, postChain);
+        advanceFeedbackRingSlot();
+    }
+}
+
 void RhiMixerWidget::clearFeedbackHistoryRing(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx)
 {
     m_feedbackWriteIdx = 0;
@@ -2265,7 +2319,6 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
         if (ensureFeedbackTargets(r, stagePx)) {
             QRhiTexture* feedbackBelow =
                 feedbackInjectSourceTexture(r, cb, F, stagePx, clear);
-            QRhiTexture* historyRead = feedbackReadTexture();
             QList<pvj::core::CellFilterNode> preChain;
             QList<pvj::core::CellFilterNode> postChain;
             pvj::core::splitFilterChainAtFeedbackMarker(m_layerFilterChain[F], &preChain, &postChain);
@@ -2317,67 +2370,16 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
                     m_layerFilterLastOut[F] = -1;
                 }
 
-                if (filteredBelow && historyRead) {
-                    runFeedbackPass(r, cb, F, stagePx, clear, filteredBelow, historyRead,
-                                    feedbackWriteRenderTarget());
-                    // History display: warp + wrap on the ring slot we just wrote (live params).
+                if (filteredBelow) {
+                    // Warm ring: need (frameDelay + 1) completed writes so the delayed read
+                    // slot is populated (e.g. delay 13 → fill slots 0..13 before display).
+                    primeFeedbackRingForDelay(r, cb, F, stagePx, clear, filteredBelow, postChain);
+
+                    runFeedbackAccumulationStep(r, cb, F, stagePx, clear, filteredBelow, postChain);
                     if (QRhiTexture* histSrc = feedbackWriteTexture()) {
                         runFeedbackHistDisplayPass(r, cb, F, stagePx, clear, histSrc);
                     }
                 }
-            }
-
-            if (!postChain.isEmpty()) {
-                QRhiTexture* fbOut = feedbackWriteTexture();
-                QRhiTextureRenderTarget* fbWriteRt = feedbackWriteRenderTarget();
-                // #region agent log
-                {
-                    static int s_postLog = 0;
-                    if (s_postLog < 40) {
-                        ++s_postLog;
-                        agentDebugLog("RhiMixerWidget.cpp:render",
-                                      "postChain branch", "C",
-                                      QJsonObject{
-                                          { QStringLiteral("fbOutOk"), fbOut != nullptr },
-                                          { QStringLiteral("fbWriteRtOk"), fbWriteRt != nullptr },
-                                          { QStringLiteral("ping1Ok"), m_layerFilterPingRt[F][1] != nullptr },
-                                          { QStringLiteral("willRun"),
-                                            fbOut && fbWriteRt && m_layerFilterPingRt[F][1] },
-                                          { QStringLiteral("filterRp"), qint64(reinterpret_cast<quintptr>(m_filterRp.get())) },
-                                          { QStringLiteral("feedbackRp"),
-                                            qint64(reinterpret_cast<quintptr>(m_feedbackRp.get())) },
-                                      });
-                    }
-                }
-                // #endregion
-                if (fbOut && fbWriteRt && m_layerFilterPingRt[F][1]) {
-                    // Copy feedback output into ping-pong first — do not sample the RT we
-                    // just wrote in the feedback pass (undefined on some GPU backends).
-                    runTextureCopyPass(r, cb, fbOut, m_layerFilterPingRt[F][1].get(), stagePx);
-                    runPerLayerFilterChain(r, cb, F, m_layerFilterPingTex[F][1].get(),
-                                           stagePx, clear, &postChain);
-                    if (QRhiTexture* filtered = filterOutputTextureForLayer(F)) {
-                        // #region agent log
-                        {
-                            static int s_copyBackLog = 0;
-                            if (s_copyBackLog < 40) {
-                                ++s_copyBackLog;
-                                agentDebugLog("RhiMixerWidget.cpp:render",
-                                              "postChain copy back to fb ring", "C",
-                                              QJsonObject{
-                                                  { QStringLiteral("filteredOk"), true },
-                                                  { QStringLiteral("lastOut"), m_layerFilterLastOut[F] },
-                                              });
-                            }
-                        }
-                        // #endregion
-                        runTextureCopyPass(r, cb, filtered, fbWriteRt, stagePx);
-                    }
-                } else {
-                    m_layerFilterLastOut[F] = -1;
-                }
-            } else {
-                m_layerFilterLastOut[F] = -1;
             }
         }
     }
@@ -2407,10 +2409,7 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
             F >= 0 && F < LayerCount && m_opacity[F] > 1e-4f;
         if (accumulateFeedback) {
             copySceneToHistory(r, cb, stagePx);
-            m_feedbackWriteIdx = quint8((m_feedbackWriteIdx + 1) % kFeedbackRingSize);
-            if (m_feedbackRingFilled < kFeedbackRingSize) {
-                ++m_feedbackRingFilled;
-            }
+            advanceFeedbackRingSlot();
             m_sceneHistWriteIdx = quint8(1 - m_sceneHistWriteIdx);
         }
     }

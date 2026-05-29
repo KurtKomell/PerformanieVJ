@@ -159,6 +159,15 @@ private:
                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx);
     void copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
     void clearFeedbackHistoryRing(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
+    void advanceFeedbackRingSlot();
+    void runFeedbackAccumulationStep(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                     const QSize& stagePx, const QColor& clear,
+                                     QRhiTexture* filteredBelow,
+                                     const QList<pvj::core::CellFilterNode>& postChain);
+    void primeFeedbackRingForDelay(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
+                                   const QSize& stagePx, const QColor& clear,
+                                   QRhiTexture* filteredBelow,
+                                   const QList<pvj::core::CellFilterNode>& postChain);
     void recomputeActiveFeedbackLayer();
 
     void applyBackgroundLayerState();
