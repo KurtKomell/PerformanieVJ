@@ -8,9 +8,12 @@
 
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QBitmap>
 #include <QDrag>
 #include <QFileDialog>
+#include <QImage>
 #include <QMimeData>
+#include <QPixmap>
 #include <QUrl>
 #include <QFileIconProvider>
 #include <QFileInfo>
@@ -59,6 +62,18 @@ protected:
         mime->setUrls({QUrl::fromLocalFile(path)});
         QDrag drag(this);
         drag.setMimeData(mime);
+        // Qt 6.10 Windows debug: default Drag* cursors are PNG-based and can
+        // assert in qpixmap_win.cpp (Format_Mono). Supply a tiny ARGB pixmap
+        // with an explicit mono mask instead.
+        {
+            QPixmap px(16, 16);
+            px.fill(Qt::transparent);
+            QImage maskImg(16, 16, QImage::Format_Mono);
+            maskImg.fill(1);
+            px.setMask(QBitmap::fromImage(maskImg));
+            drag.setDragCursor(px, Qt::CopyAction);
+            drag.setDragCursor(px, Qt::IgnoreAction);
+        }
         (void)drag.exec(Qt::CopyAction);
     }
 };

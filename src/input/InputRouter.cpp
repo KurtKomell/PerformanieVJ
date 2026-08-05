@@ -17,6 +17,9 @@ constexpr int kMixLayerDirectMidiChannel = 15; // MIDI channel 16 (zero-based)
 constexpr int kMixLayerDirectMidiNoteBase = 60; // C4 → slot 0 … 72 → slot 12
 constexpr int kMixLayerDirectCount        = 13;
 
+/// Hold a note this long during property learn → map poly aftertouch instead of a short note tap.
+constexpr int kAftertouchLearnHoldMs = 500;
+
 constexpr quint32 ccKey(int channel, int ccNumber)
 {
     return (quint32(channel & 0x1F) << 8) | quint32(ccNumber & 0x7F);
@@ -88,6 +91,15 @@ bool tryParseOneMidiMessage(const unsigned char* data, size_t len, size_t* consu
         out->value      = value;
         return true;
     }
+    if ((status & 0xF0) == 0xA0) {
+        const int note     = int(data[dataOffset]) & 0x7F;
+        const int pressure = int(data[dataOffset + 1]) & 0x7F;
+        out->type          = pvj::core::InputType::MidiAftertouch;
+        out->channel       = channel;
+        out->number        = note;
+        out->value         = pressure;
+        return true;
+    }
     if ((status & 0xF0) == 0x90) {
         const int note = int(data[dataOffset]) & 0x7F;
         const int vel  = int(data[dataOffset + 1]) & 0x7F;
@@ -124,6 +136,10 @@ void InputRouter::midiNoteReleasedThunk(void* ctx, int channel, int note)
         return;
     }
     router->clearMidiNoteDown(channel, note);
+    if (router->m_learnKind == LearnKind::PropertyCc
+        || router->m_learnKind == LearnKind::PropertyNote) {
+        router->onLearnNoteReleased(channel, note);
+    }
     router->dispatchCellNoteReleased(channel, note);
 }
 
@@ -162,11 +178,19 @@ void InputRouter::setProject(pvj::core::Project* project)
     m_project = project;
 }
 
+void InputRouter::clearLearnPendingNote()
+{
+    m_learnPendingNoteActive = false;
+    m_learnPendingChannel    = 0;
+    m_learnPendingNumber     = 0;
+}
+
 void InputRouter::cancelLearn()
 {
     if (m_learnKind == LearnKind::None) {
         return;
     }
+    clearLearnPendingNote();
     m_learnKind = LearnKind::None;
     m_learnProperty.clear();
     m_learnButtonMode  = pvj::core::PropertyButtonMode::Continuous;
@@ -179,6 +203,7 @@ void InputRouter::cancelLearn()
 
 void InputRouter::beginLearnCellTrigger(int bankSetIndex, int bankIndex, int cellIndex)
 {
+    clearLearnPendingNote();
     m_learnKind     = LearnKind::CellTrigger;
     m_learnBankSet  = bankSetIndex;
     m_learnBank     = bankIndex;
@@ -189,6 +214,7 @@ void InputRouter::beginLearnCellTrigger(int bankSetIndex, int bankIndex, int cel
 void InputRouter::beginLearnPropertyCc(int bankSetIndex, int bankIndex, int cellIndex,
                                        const QString& propertyName)
 {
+    clearLearnPendingNote();
     m_learnKind     = LearnKind::PropertyCc;
     m_learnBankSet  = bankSetIndex;
     m_learnBank     = bankIndex;
@@ -202,6 +228,7 @@ void InputRouter::beginLearnPropertyNote(int bankSetIndex, int bankIndex, int ce
                                          const QString& propertyName, core::PropertyButtonMode mode,
                                          double buttonValue)
 {
+    clearLearnPendingNote();
     m_learnKind        = LearnKind::PropertyNote;
     m_learnBankSet     = bankSetIndex;
     m_learnBank        = bankIndex;
@@ -216,6 +243,7 @@ void InputRouter::beginLearnBankNav(pvj::core::TriggerTarget target, int bankSet
     if (target == pvj::core::TriggerTarget::BankSetSwitch) {
         return;
     }
+    clearLearnPendingNote();
     m_learnKind     = LearnKind::BankNav;
     m_learnBankNavTarget = target;
     m_learnBankNavSet    = bankSetIndex;
@@ -320,6 +348,8 @@ void InputRouter::emitLearnTypeMismatch(const InputEvent& ev, const QString& exp
         got = tr("CC ch%1 #%2").arg(ev.channel + 1).arg(ev.number);
     } else if (ev.type == pvj::core::InputType::MidiNote) {
         got = tr("note ch%1 #%2").arg(ev.channel + 1).arg(ev.number);
+    } else if (ev.type == pvj::core::InputType::MidiAftertouch) {
+        got = tr("aftertouch ch%1 note%2").arg(ev.channel + 1).arg(ev.number);
     }
     emit learnHint(tr("Received %1 — expected %2.").arg(got, expected));
 }
@@ -359,10 +389,75 @@ void InputRouter::handleMidiBytes(const unsigned char* data, size_t len)
     }
 }
 
+void InputRouter::tryBeginLearnNotePending(const InputEvent& ev)
+{
+    if (ev.type != pvj::core::InputType::MidiNote) {
+        return;
+    }
+    m_learnPendingNoteActive = true;
+    m_learnPendingChannel    = ev.channel;
+    m_learnPendingNumber     = ev.number;
+    m_learnPendingTimer.restart();
+    if (m_learnKind == LearnKind::PropertyNote) {
+        emit learnHint(tr("Release quickly for a note button, or hold / press harder for aftertouch."));
+    } else {
+        emit learnHint(tr("Hold the note and press harder for aftertouch, or move a knob for CC."));
+    }
+}
+
+void InputRouter::onLearnNoteReleased(int channel, int note)
+{
+    if (!m_learnPendingNoteActive || channel != m_learnPendingChannel
+        || note != m_learnPendingNumber) {
+        return;
+    }
+    const bool heldLong =
+        m_learnPendingTimer.isValid() && m_learnPendingTimer.elapsed() >= kAftertouchLearnHoldMs;
+    clearLearnPendingNote();
+    if (heldLong) {
+        applyLearnPropertyAftertouch(channel, note, 0);
+        return;
+    }
+    if (m_learnKind == LearnKind::PropertyNote) {
+        InputEvent ev;
+        ev.type    = pvj::core::InputType::MidiNote;
+        ev.channel = channel;
+        ev.number  = note;
+        ev.value   = 127;
+        applyLearnPropertyNote(ev);
+        return;
+    }
+    emit learnHint(tr("Hold the note longer for aftertouch, or move a MIDI CC knob."));
+}
+
 void InputRouter::dispatchLearn(const InputEvent& ev)
 {
     if (!m_project) {
         cancelLearn();
+        return;
+    }
+
+    if (m_learnKind == LearnKind::PropertyCc || m_learnKind == LearnKind::PropertyNote) {
+        if (ev.type == pvj::core::InputType::MidiAftertouch) {
+            applyLearnPropertyAftertouch(ev.channel, ev.number, ev.value);
+            clearLearnPendingNote();
+            return;
+        }
+        if (ev.type == pvj::core::InputType::MidiNote) {
+            tryBeginLearnNotePending(ev);
+            return;
+        }
+        if (m_learnKind == LearnKind::PropertyCc) {
+            if (ev.type == pvj::core::InputType::MidiCC) {
+                clearLearnPendingNote();
+                applyLearnPropertyCc(ev);
+                return;
+            }
+            return;
+        }
+        if (ev.type == pvj::core::InputType::MidiCC) {
+            emitLearnTypeMismatch(ev, tr("a MIDI note (press or hold a pad)"));
+        }
         return;
     }
 
@@ -371,10 +466,7 @@ void InputRouter::dispatchLearn(const InputEvent& ev)
         applyLearnCellTrigger(ev);
         break;
     case LearnKind::PropertyCc:
-        applyLearnPropertyCc(ev);
-        break;
     case LearnKind::PropertyNote:
-        applyLearnPropertyNote(ev);
         break;
     case LearnKind::BankNav:
         applyLearnBankNav(ev);
@@ -558,6 +650,64 @@ void InputRouter::applyLearnPropertyNote(const InputEvent& ev)
                        .arg(m.property));
 }
 
+void InputRouter::applyLearnPropertyAftertouch(int channel, int note, int pressure)
+{
+    if (m_learnBankSet < 0 || m_learnBankSet >= m_project->bankSets.size()) {
+        cancelLearn();
+        return;
+    }
+    auto& set = m_project->bankSets[m_learnBankSet];
+    if (m_learnBank < 0 || m_learnBank >= set.banks.size()) {
+        cancelLearn();
+        return;
+    }
+    auto& bank = set.banks[m_learnBank];
+    if (m_learnCell < 0 || m_learnCell >= bank.cells.size()) {
+        cancelLearn();
+        return;
+    }
+
+    pvj::core::PropertyMapping m;
+    m.property = m_learnProperty;
+    m.input    = pvj::core::InputType::MidiAftertouch;
+    m.channel  = channel;
+    m.number   = note;
+    pvj::core::PropertyRegistry::learnMinMax(m_learnProperty, &m.minValue, &m.maxValue);
+    m.buttonMode  = pvj::core::PropertyButtonMode::Continuous;
+    m.buttonValue = 1.0;
+
+    removeAllPropertyMappingsForProperty(m_learnBankSet, m_learnBank, m_learnCell, m_learnProperty);
+
+    bank.cells[m_learnCell].propertyMappings.append(m);
+
+    const int savedBankSet = m_learnBankSet;
+    const int savedBank    = m_learnBank;
+    const int savedCell    = m_learnCell;
+    const QString savedProp = m.property;
+
+    m_learnKind = LearnKind::None;
+    m_learnProperty.clear();
+    m_learnButtonMode  = pvj::core::PropertyButtonMode::Continuous;
+    m_learnButtonValue = 1.0;
+
+    emit propertyMappingsChanged();
+    emit learnFinished(tr("Mapped MIDI aftertouch ch%1 note%2 → %3")
+                       .arg(channel + 1)
+                       .arg(note)
+                       .arg(savedProp));
+
+    const double n = pressure / 127.0;
+    const double scaled = scaleCcToProperty(n, m.minValue, m.maxValue);
+    const QString prop = pvj::core::PropertyRegistry::resolvePropertyId(savedProp);
+    if (pvj::core::PropertyRegistry::kindOf(prop) == pvj::core::PropertyRegistry::Kind::Enum) {
+        const double span = m.maxValue - m.minValue;
+        const double n01  = span > 1e-9 ? (scaled - m.minValue) / span : 0.0;
+        emit propertyValueChanged(savedBankSet, savedBank, savedCell, prop, n01);
+    } else if (pressure > 0) {
+        emit propertyValueChanged(savedBankSet, savedBank, savedCell, prop, scaled);
+    }
+}
+
 void InputRouter::applyLearnBankNav(const InputEvent& ev)
 {
     if (ev.type != pvj::core::InputType::MidiNote) {
@@ -721,6 +871,9 @@ bool InputRouter::matchTrigger(const pvj::core::TriggerMapping& t, const InputEv
     if (t.input == pvj::core::InputType::MidiCC) {
         return t.channel == ev.channel && t.number == ev.number;
     }
+    if (t.input == pvj::core::InputType::MidiAftertouch) {
+        return t.channel == ev.channel && t.number == ev.number;
+    }
     return false;
 }
 
@@ -746,8 +899,9 @@ bool InputRouter::dispatchPlayback(const InputEvent& ev)
         prevCc = m_lastCcValue.value(k, 0);
     }
 
-    // 1) Property mappings — CC faders / knobs (per cell)
-    if (ev.type == pvj::core::InputType::MidiCC) {
+    // 1) Property mappings — CC faders / knobs / poly aftertouch (per cell)
+    if (ev.type == pvj::core::InputType::MidiCC
+        || ev.type == pvj::core::InputType::MidiAftertouch) {
         const double n = ev.value / 127.0;
         for (int bi = 0; bi < m_project->bankSets.size(); ++bi) {
             const auto& set = m_project->bankSets[bi];
@@ -755,7 +909,7 @@ bool InputRouter::dispatchPlayback(const InputEvent& ev)
                 const auto& bank = set.banks[bj];
                 for (int ci = 0; ci < bank.cells.size(); ++ci) {
                     for (const auto& pm : bank.cells[ci].propertyMappings) {
-                        if (pm.input != pvj::core::InputType::MidiCC) {
+                        if (pm.input != ev.type) {
                             continue;
                         }
                         if (pm.channel != ev.channel || pm.number != ev.number) {

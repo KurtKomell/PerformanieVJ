@@ -24,6 +24,7 @@ enum class FilterEffectFamily {
     Revival,
     Temporal,
     Film,
+    Texture,
     Maxine,
 };
 
@@ -57,6 +58,9 @@ int filterEffectCatalogCount();
 
 /// True when the typeId uses the NVIDIA Maxine SDK backend (not GLSL).
 bool filterUsesMaxineBackend(const QString& typeId);
+
+/// True when the filter needs a per-layer frame-history ring (Temporal family).
+bool filterEffectNeedsTemporalHistory(const QString& typeId);
 
 /// English category key for Maxine catalog entries.
 QString maxineFilterCategoryKey();

@@ -26,6 +26,7 @@ FAMILY_ENUM = {
     "Light": "FilterEffectFamily::Light",
     "Revival": "FilterEffectFamily::Revival",
     "Temporal": "FilterEffectFamily::Temporal",
+    "Texture": "FilterEffectFamily::Texture",
     "Maxine": "FilterEffectFamily::Maxine",
 }
 

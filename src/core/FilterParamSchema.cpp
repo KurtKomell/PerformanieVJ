@@ -42,6 +42,14 @@ FilterParamSpec percentParam(const char* name, const char* label, double default
     return p;
 }
 
+FilterParamSpec intParam(const char* name, const char* label, double minV, double maxV,
+                         double defaultV, const char* section = "")
+{
+    FilterParamSpec p = floatParam(name, label, minV, maxV, defaultV, section);
+    p.kind = FilterParamKind::Float;
+    return p;
+}
+
 FilterParamSpec boolParam(const char* name, const char* label, bool defaultV = false,
                           const char* section = "")
 {
@@ -116,6 +124,215 @@ bool isFilmTypeId(const QString& typeId)
         QStringLiteral("film_gate"),
     };
     return k.contains(typeId.toLower());
+}
+
+bool isTemporalTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("motion_trails"),
+        QStringLiteral("smear"),
+        QStringLiteral("stop_motion"),
+        QStringLiteral("motion_blur"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+bool isTextureTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("analog_damage"),
+        QStringLiteral("film_damage"),
+        QStringLiteral("jpeg_damage"),
+        QStringLiteral("texture_pop"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+#define PVJ_SCRATCH_PARAMS(N, DEFPOS, MOVING)                                                       \
+    colorParam("scratch" #N "_color", "Scratch Color", 0xE8E8E8, "Add Scratch " #N),               \
+        percentParam("scratch" #N "_position", "Scratch Position", DEFPOS, "Add Scratch " #N),    \
+        percentParam("scratch" #N "_width", "Scratch Width", 0.002, "Add Scratch " #N),             \
+        percentParam("scratch" #N "_strength", "Scratch Strength", 0.4, "Add Scratch " #N),         \
+        percentParam("scratch" #N "_blur", "Scratch Blur", 0.3, "Add Scratch " #N),                \
+        boolParam("scratch" #N "_moving", "Moving Scratch", MOVING, "Add Scratch " #N),             \
+        percentParam("scratch" #N "_moving_amplitude", "Moving Amplitude", 0.3, "Add Scratch " #N), \
+        percentParam("scratch" #N "_moving_speed", "Moving Speed", 0.5, "Add Scratch " #N),         \
+        percentParam("scratch" #N "_moving_randomness", "Moving Randomness", 0.4,                   \
+                     "Add Scratch " #N),                                                            \
+        percentParam("scratch" #N "_flickering_speed", "Flickering Speed", 0.5,                   \
+                     "Add Scratch " #N)
+
+QVector<FilterParamSpec> jpegDamageParams()
+{
+    return {
+        percentParam("quality", "Quality", 1.0, "Controls"),
+        percentParam("resolution", "Resolution", 0.5, "Controls"),
+        percentParam("block_aspect_ratio", "Block Aspect Ratio", 0.5, "Controls"),
+        percentParam("frequency_scale", "Frequency Scale", 0.5, "Controls"),
+        enumParam("scale_component", "Scale Component", { "All Frequencies", "X-Frequency", "Y-Frequency" },
+                  0, "Controls"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> texturePopParams()
+{
+    return {
+        enumParam("mode", "Mode", { "Simple", "Advanced" }, 0, "Mode"),
+        floatParam("details", "Details", -1.0, 1.0, 0.0, "Simple"),
+        floatParam("rough", "Rough", -1.0, 1.0, 0.0, "Advanced"),
+        floatParam("coarse", "Coarse", -1.0, 1.0, 0.0, "Advanced"),
+        floatParam("medium", "Medium", -1.0, 1.0, 0.0, "Advanced"),
+        floatParam("small", "Small", -1.0, 1.0, 0.0, "Advanced"),
+        floatParam("fine", "Fine", -1.0, 1.0, 0.0, "Advanced"),
+        floatParam("tiny", "Tiny", -1.0, 1.0, 0.0, "Advanced"),
+        floatParam("strength", "Strength", 0.0, 2.0, 1.0, "Controls"),
+        percentParam("shadows", "Shadows", 1.0, "Tonal Range"),
+        percentParam("midtones", "Midtones", 1.0, "Tonal Range"),
+        percentParam("highlights", "Highlights", 1.0, "Tonal Range"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
+}
+
+QVector<FilterParamSpec> filmDamageParams()
+{
+    QVector<FilterParamSpec> p;
+    p.append({
+        percentParam("film_blur", "Film Blur", 0.15, "Blur and Shift"),
+        floatParam("temp_shift", "Temp Shift", -1.0, 1.0, 0.12, "Blur and Shift"),
+        floatParam("tint_shift", "Tint Shift", -1.0, 1.0, 0.18, "Blur and Shift"),
+        percentParam("focal_factor", "Focal Factor", 0.55, "Add Vignetting"),
+        percentParam("geometry_factor", "Geometry Factor", 0.5, "Add Vignetting"),
+        percentParam("tilt_amount", "Tilt Amount", 0.0, "Add Vignetting"),
+        angleParam("tilt_angle", "Tilt Angle", 0.0, "Add Vignetting"),
+        colorParam("dirt_color", "Dirt Color", 0x1A1A1A, "Add Dirt"),
+        boolParam("changing_dirt", "Changing Dirt", true, "Add Dirt"),
+        percentParam("dirt_density", "Dirt Density", 0.25, "Add Dirt"),
+        percentParam("dirt_size", "Dirt Size", 0.4, "Add Dirt"),
+        percentParam("dirt_blur", "Dirt Blur", 0.35, "Add Dirt"),
+        floatParam("dirt_seed", "Dirt Seed", 0.0, 100.0, 1.0, "Add Dirt"),
+    });
+    p.append({ PVJ_SCRATCH_PARAMS(1, 0.15, true), PVJ_SCRATCH_PARAMS(2, 0.35, true),
+               PVJ_SCRATCH_PARAMS(3, 0.55, false), PVJ_SCRATCH_PARAMS(4, 0.72, false),
+               PVJ_SCRATCH_PARAMS(5, 0.88, false) });
+    p.append(percentParam("blend", "Blend", 1.0, "Global Blend"));
+    return p;
+}
+
+QVector<FilterParamSpec> analogDamageParams()
+{
+    return {
+        enumParam("preset", "Preset",
+                  { "Custom", "VHS", "Bad Reception", "Old TV", "Damaged Tape", "Security Cam" }, 0,
+                  "Preset"),
+        percentParam("vignetting", "Vignetting", 0.35, "Telecine Source"),
+        percentParam("vignette_aspect", "Vignette Aspect", 0.5, "Telecine Source"),
+        percentParam("shutter_weave", "Shutter Weave", 0.2, "Telecine Source"),
+        percentParam("noise_scale", "Noise Scale", 0.5, "Broadcast Signal"),
+        percentParam("signal_noise", "Signal Noise", 0.25, "Broadcast Signal"),
+        percentParam("chroma_noise", "Chroma Noise", 0.2, "Broadcast Signal"),
+        percentParam("detail_loss", "Detail Loss", 0.2, "Broadcast Signal"),
+        percentParam("chroma_detail_loss", "Chroma Detail Loss", 0.15, "Broadcast Signal"),
+        percentParam("ghosting", "Ghosting", 0.15, "Broadcast Signal"),
+        percentParam("ghost_offset", "Ghost Offset", 0.3, "Broadcast Signal"),
+        percentParam("chroma_misalignment", "Chroma Misalignment", 0.2, "Broadcast Signal"),
+        percentParam("brightness", "Brightness", 0.5, "Color Dials"),
+        percentParam("contrast", "Contrast", 0.5, "Color Dials"),
+        percentParam("color", "Color", 0.5, "Color Dials"),
+        percentParam("tint", "Tint", 0.5, "Color Dials"),
+        percentParam("image_aspect", "Image Aspect", 0.5, "Scan"),
+        percentParam("h_shift", "H-Shift", 0.0, "Scan"),
+        percentParam("v_shift", "V-Shift", 0.0, "Scan"),
+        percentParam("v_hold", "V-Hold", 0.0, "Scan"),
+        boolParam("v_hold_latch", "V-Hold Latch", false, "Scan"),
+        percentParam("overscan", "Overscan", 0.0, "Scan"),
+        percentParam("v_scale", "V-Scale", 0.0, "Scan"),
+        percentParam("vertical_blanking", "Vertical Blanking", 0.0, "Scan"),
+        percentParam("line_sharpness", "Line Sharpness", 0.5, "Scan Lines"),
+        floatParam("line_frequency", "Line Frequency", 100.0, 800.0, 400.0, "Scan Lines"),
+        boolParam("colored_lines", "Colored Lines", false, "Scan Lines"),
+        percentParam("phosphor_brightness", "Phosphor Brightness", 0.05, "TV Construction"),
+        percentParam("phosphor_tint", "Phosphor Tint", 0.1, "TV Construction"),
+        percentParam("defocus", "Defocus", 0.15, "TV Construction"),
+        percentParam("screen_curvature", "Screen Curvature", 0.25, "TV Construction"),
+        boolParam("edge_mask", "Edge Mask", false, "TV Construction"),
+        boolParam("edges_transparent", "Edges Transparent", false, "TV Construction"),
+        percentParam("mask_curvature", "Mask Curvature", 0.5, "TV Construction"),
+        percentParam("mask_aspect", "Mask Aspect", 0.5, "TV Construction"),
+        percentParam("restless_foot_height", "Restless Foot Height", 0.0, "VHS"),
+        percentParam("restless_foot_offset", "Restless Foot Offset", 0.0, "VHS"),
+        percentParam("restless_foot_jitter", "Restless Foot Jitter", 0.3, "VHS"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
+}
+
+bool isStylizeTypeId(const QString& typeId)
+{
+    static const QSet<QString> k = {
+        QStringLiteral("abstraction"),
+        QStringLiteral("blanking_fill"),
+        QStringLiteral("drop_shadow"),
+        QStringLiteral("edge_detect"),
+        QStringLiteral("emboss"),
+        QStringLiteral("mirrors"),
+        QStringLiteral("pencil_sketch"),
+        QStringLiteral("prism_blur"),
+        QStringLiteral("scanlines"),
+        QStringLiteral("stylize"),
+        QStringLiteral("tilt_shift"),
+        QStringLiteral("vignette"),
+        QStringLiteral("watercolor"),
+    };
+    return k.contains(typeId.toLower());
+}
+
+QVector<FilterParamSpec> mirrorsParams()
+{
+    return {
+        enumParam("mirror_placement", "Mirror Placement",
+                  { "Individual", "Rosette", "Kaleidoscope" }, 0, "Main"),
+        boolParam("reflect_at_borders", "Reflect at Borders", false, "Main"),
+        boolParam("mirror1_enable", "Mirror 1 Enable", true, "Individual Mirrors"),
+        percentParam("mirror1_x", "Mirror 1 X", 0.5, "Individual Mirrors"),
+        percentParam("mirror1_y", "Mirror 1 Y", 0.5, "Individual Mirrors"),
+        angleParam("mirror1_angle", "Mirror 1 Angle", 0.0, "Individual Mirrors"),
+        boolParam("mirror1_flip", "Mirror 1 Flip", false, "Individual Mirrors"),
+        boolParam("mirror2_enable", "Mirror 2 Enable", false, "Mirror 2"),
+        percentParam("mirror2_x", "Mirror 2 X", 0.5, "Mirror 2"),
+        percentParam("mirror2_y", "Mirror 2 Y", 0.5, "Mirror 2"),
+        angleParam("mirror2_angle", "Mirror 2 Angle", 0.0, "Mirror 2"),
+        boolParam("mirror2_flip", "Mirror 2 Flip", false, "Mirror 2"),
+        boolParam("mirror3_enable", "Mirror 3 Enable", false, "Mirror 3"),
+        percentParam("mirror3_x", "Mirror 3 X", 0.5, "Mirror 3"),
+        percentParam("mirror3_y", "Mirror 3 Y", 0.5, "Mirror 3"),
+        angleParam("mirror3_angle", "Mirror 3 Angle", 0.0, "Mirror 3"),
+        boolParam("mirror3_flip", "Mirror 3 Flip", false, "Mirror 3"),
+        boolParam("mirror4_enable", "Mirror 4 Enable", false, "Mirror 4"),
+        percentParam("mirror4_x", "Mirror 4 X", 0.5, "Mirror 4"),
+        percentParam("mirror4_y", "Mirror 4 Y", 0.5, "Mirror 4"),
+        angleParam("mirror4_angle", "Mirror 4 Angle", 0.0, "Mirror 4"),
+        boolParam("mirror4_flip", "Mirror 4 Flip", false, "Mirror 4"),
+        boolParam("mirror5_enable", "Mirror 5 Enable", false, "Mirror 5"),
+        percentParam("mirror5_x", "Mirror 5 X", 0.5, "Mirror 5"),
+        percentParam("mirror5_y", "Mirror 5 Y", 0.5, "Mirror 5"),
+        angleParam("mirror5_angle", "Mirror 5 Angle", 0.0, "Mirror 5"),
+        boolParam("mirror5_flip", "Mirror 5 Flip", false, "Mirror 5"),
+        boolParam("mirror6_enable", "Mirror 6 Enable", false, "Mirror 6"),
+        percentParam("mirror6_x", "Mirror 6 X", 0.5, "Mirror 6"),
+        percentParam("mirror6_y", "Mirror 6 Y", 0.5, "Mirror 6"),
+        angleParam("mirror6_angle", "Mirror 6 Angle", 0.0, "Mirror 6"),
+        boolParam("mirror6_flip", "Mirror 6 Flip", false, "Mirror 6"),
+        percentParam("rosette_x", "Rosette X", 0.5, "Rosette"),
+        percentParam("rosette_y", "Rosette Y", 0.5, "Rosette"),
+        angleParam("rosette_angle", "Rosette Angle", 0.0, "Rosette"),
+        percentParam("rosette_wedge_width", "Wedge Width", 0.5, "Rosette"),
+        percentParam("kaleido_x", "Kaleidoscope X", 0.5, "Kaleidoscope"),
+        percentParam("kaleido_y", "Kaleidoscope Y", 0.5, "Kaleidoscope"),
+        percentParam("kaleido_center_size", "Center Size", 0.5, "Kaleidoscope"),
+        angleParam("kaleido_angle", "Kaleidoscope Angle", 0.0, "Kaleidoscope"),
+        floatParam("kaleido_sides", "Number of Sides", 3.0, 8.0, 4.0, "Kaleidoscope"),
+        percentParam("blend", "Blend", 1.0, "Global Blend"),
+    };
 }
 
 QVector<FilterParamSpec> gaussianBlurParams()
@@ -251,7 +468,7 @@ QVector<FilterParamSpec> softenSharpenParams()
 QHash<QString, FilterNodeSpec> buildSchemas()
 {
     QHash<QString, FilterNodeSpec> schema;
-    schema.reserve(40);
+    schema.reserve(60);
 
     auto insertSpec = [&](const QString& typeId, QVector<FilterParamSpec> params) {
         FilterNodeSpec spec;
@@ -526,6 +743,180 @@ QHash<QString, FilterNodeSpec> buildSchemas()
                     { "Add", "Screen", "Overlay", "Luminosity" }, 0, "Appearance"),
           percentParam("blend", "Blend", 1.0, "Global Blend") });
 
+    // Resolve FX Stylize (Resolve 21)
+    insertSpec(QStringLiteral("abstraction"),
+        { percentParam("pre_blur", "Pre Blur", 0.15, "Main Controls"),
+          percentParam("abstraction_strength", "Abstraction Strength", 0.65, "Main Controls"),
+          percentParam("iterate_abstraction", "Iterate Abstraction", 0.35, "Main Controls"),
+          boolParam("quantization", "Quantization", true, "Quantization"),
+          floatParam("steps", "Steps", 2.0, 32.0, 6.0, "Quantization"),
+          percentParam("softness", "Softness", 0.1, "Quantization"),
+          boolParam("draw_edge", "Draw Edge", true, "Draw Edge"),
+          percentParam("edge_strength", "Edge Strength", 0.55, "Draw Edge"),
+          percentParam("edge_detection_threshold", "Edge Detection Threshold", 0.22, "Draw Edge"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("blanking_fill"),
+        { enumParam("zoom_mode", "Zoom Mode", { "Auto", "Manual", "Warp Top Layer" }, 0, "Main"),
+          percentParam("expand", "Expand", 0.5, "Manual"),
+          percentParam("aspect", "Aspect", 0.5, "Manual"),
+          percentParam("blend_edges", "Blend Edges", 0.5, "Fill Appearance"),
+          percentParam("blur_background", "Blur Background", 0.3, "Fill Appearance"),
+          percentParam("fade_amount", "Fade Amount", 0.0, "Fill Appearance"),
+          colorParam("fade_color", "Fade Color", 0x000000, "Fill Appearance"),
+          percentParam("shadow_strength", "Shadow Strength", 0.5, "Drop Shadow"),
+          angleParam("drop_angle", "Drop Angle", 135.0, "Drop Shadow"),
+          percentParam("drop_distance", "Drop Distance", 0.05, "Drop Shadow"),
+          percentParam("drop_blur", "Blur", 0.3, "Drop Shadow"),
+          colorParam("drop_color", "Color", 0x000000, "Drop Shadow"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("drop_shadow"),
+        { percentParam("shadow_strength", "Shadow Strength", 0.5, "Controls"),
+          angleParam("drop_angle", "Drop Angle", 135.0, "Controls"),
+          percentParam("drop_distance", "Drop Distance", 0.05, "Controls"),
+          percentParam("blur", "Blur", 0.3, "Controls"),
+          colorParam("color", "Color", 0x000000, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("edge_detect"),
+        { enumParam("mode", "Mode", { "RGB", "Grayscale" }, 0, "Main"),
+          colorParam("edge_color", "Edge Color", 0xFFFFFF, "Main"),
+          percentParam("edge_thickness", "Edge Thickness", 0.5, "Main"),
+          percentParam("threshold", "Threshold", 0.2, "Main"),
+          percentParam("glow", "Glow", 0.0, "Main"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("emboss"),
+        { enumParam("emboss_style", "Emboss Style",
+                    { "Relief", "Emboss Over", "Sobel", "Laplacian" }, 0, "Controls"),
+          percentParam("power", "Power", 0.5, "Controls"),
+          angleParam("angle", "Angle", 45.0, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("mirrors"), mirrorsParams());
+
+    insertSpec(QStringLiteral("pencil_sketch"),
+        { boolParam("color_sketch", "Color Sketch", false, "Main"),
+          percentParam("stroke_thickness", "Stroke Thickness", 0.5, "Sketch Stroke"),
+          percentParam("stroke_threshold", "Stroke Threshold", 0.5, "Sketch Stroke"),
+          percentParam("stroke_length", "Stroke Length", 0.5, "Sketch Stroke"),
+          floatParam("tone_levels", "Tone Levels", 2.0, 16.0, 6.0, "Sketch Tone"),
+          percentParam("tone_shadows", "Shadows", 0.5, "Sketch Tone"),
+          percentParam("tone_midtones", "Midtones", 0.5, "Sketch Tone"),
+          percentParam("tone_highlights", "Highlights", 0.5, "Sketch Tone"),
+          percentParam("texture_amount", "Texture Amount", 0.3, "Sketch Texture"),
+          percentParam("texture_scale", "Texture Scale", 0.5, "Sketch Texture"),
+          boolParam("auto_animate", "Auto Animate", false, "Sketch Texture"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("prism_blur"),
+        { percentParam("blur_strength", "Blur Strength", 0.5, "Controls"),
+          percentParam("aberration_distance", "Aberration Distance", 0.25, "Controls"),
+          percentParam("vignette_size", "Vignette Size", 0.5, "Controls"),
+          percentParam("vignette_sharpness", "Vignette Sharpness", 0.5, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("scanlines"),
+        { floatParam("line_frequency", "Line Frequency", 1.0, 100.0, 10.0, "Controls"),
+          percentParam("line_sharpness", "Line Sharpness", 0.5, "Controls"),
+          angleParam("line_angle", "Line Angle", 0.0, "Controls"),
+          percentParam("line_width", "Line Width", 0.5, "Controls"),
+          percentParam("line_shift", "Line Shift", 0.0, "Controls"),
+          colorParam("color1", "Color 1", 0x000000, "Controls"),
+          colorParam("color2", "Color 2", 0x000000, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("stylize"),
+        { enumParam("style", "Styles",
+                    { "Antimonocromatismo", "Asheville", "Brush Stroke", "Candy", "Chinese Brush",
+                      "Kandinsky Composition", "Dance", "Edtaonisl", "Feather", "Illustrated Portrait",
+                      "La Muse", "Mondrian", "Stained Glass", "Cafe Terrace", "Impressionist Reservoir",
+                      "Scream", "Protocubist Portrait", "Udnie", "Great Wave", "Fauvist Portrait" },
+                    0, "Controls"),
+          percentParam("style_scale", "Style Scale", 0.5, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("tilt_shift"),
+        { enumParam("blur_type", "Blur Type", { "Fast Blur", "Lens Blur" }, 1, "Main"),
+          percentParam("blur_strength", "Blur Strength", 0.5, "Main"),
+          enumParam("iris_shape", "Iris Shape",
+                    { "Circle", "Triangle", "Square", "Pentagon", "Hexagon", "Heptagon", "Octagon" },
+                    0, "Depth of Field"),
+          floatParam("iris_blades", "Iris Blades", 3.0, 12.0, 6.0, "Depth of Field"),
+          percentParam("focus_center", "Focus Center", 0.5, "Depth of Field"),
+          percentParam("focus_width", "Focus Width", 0.3, "Depth of Field"),
+          angleParam("focus_angle", "Focus Angle", 0.0, "Depth of Field"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("vignette"),
+        { percentParam("size", "Size", 0.5, "Controls"),
+          percentParam("softness", "Softness", 0.5, "Controls"),
+          percentParam("strength", "Strength", 0.5, "Controls"),
+          colorParam("color", "Color", 0x000000, "Controls"),
+          percentParam("roundness", "Roundness", 0.5, "Controls"),
+          percentParam("center_x", "Center X", 0.5, "Controls"),
+          percentParam("center_y", "Center Y", 0.5, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("watercolor"),
+        { percentParam("detail", "Detail", 0.5, "Controls"),
+          percentParam("brush_size", "Brush Size", 0.5, "Controls"),
+          percentParam("edge_darkening", "Edge Darkening", 0.3, "Controls"),
+          percentParam("paper_texture", "Paper Texture", 0.2, "Controls"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    // Resolve FX Temporal (Resolve 21 handbook)
+    insertSpec(QStringLiteral("motion_trails"),
+        { intParam("trail_length", "Trail Length", 1.0, 16.0, 6.0, "General"),
+          percentParam("dropoff", "Dropoff", 0.5, "General"),
+          enumParam("composite_gamma", "Composite Gamma",
+                    { "Timeline", "Rec.709", "Linear", "Custom" }, 0, "Advanced"),
+          percentParam("composite_gamma_custom", "Composite Gamma", 0.6, "Advanced"),
+          percentParam("pan", "Pan", 0.02, "Move Trail"),
+          angleParam("pan_angle", "Pan Angle", 0.0, "Move Trail"),
+          percentParam("zoom", "Zoom", 0.0, "Move Trail"),
+          angleParam("rotate", "Rotate", 0.0, "Move Trail"),
+          boolParam("reuse_current_frame", "Reuse Current Frame", false, "Move Trail"),
+          enumParam("border_type", "Border Type",
+                    { "Black", "Soften", "Replicate", "Reflect", "Wrap-Around" }, 0, "Advanced"),
+          enumParam("input_alpha", "Input Alpha", { "Ignore", "Use in Compositing" }, 0,
+                    "Advanced"),
+          boolParam("use_alpha", "Use Alpha", true, "Advanced"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("smear"),
+        { intParam("frames_either_side", "Frames Either Side", 0.0, 8.0, 2.0, "General"),
+          percentParam("luma_threshold", "Luma Threshold", 0.5, "General"),
+          percentParam("chroma_threshold", "Chroma Threshold", 0.5, "General"),
+          enumParam("input_alpha", "Input Alpha", { "Ignore", "Use in Compositing" }, 0,
+                    "Advanced"),
+          boolParam("use_alpha", "Use Alpha", true, "Advanced"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("stop_motion"),
+        { intParam("frame_hold", "Frame Hold", 1.0, 24.0, 2.0, "General"),
+          enumParam("input_alpha", "Input Alpha", { "Ignore", "Use in Compositing" }, 0,
+                    "Advanced"),
+          boolParam("use_alpha", "Use Alpha", true, "Advanced"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    insertSpec(QStringLiteral("motion_blur"),
+        { enumParam("motion_est_type", "Motion Est. Type", { "Better", "Faster" }, 0, "General"),
+          percentParam("motion_range", "Motion Range", 0.5, "General"),
+          percentParam("motion_blur", "Motion Blur", 0.5, "General"),
+          enumParam("blur_direction", "Blur Direction",
+                    { "Both Directions", "From Previous Frame", "Towards Next Frame" }, 0,
+                    "General"),
+          percentParam("granularity", "Granularity", 0.5, "General"),
+          percentParam("blend", "Blend", 1.0, "Global Blend") });
+
+    // Resolve FX Texture (Resolve 21 handbook)
+    insertSpec(QStringLiteral("jpeg_damage"), jpegDamageParams());
+    insertSpec(QStringLiteral("texture_pop"), texturePopParams());
+    insertSpec(QStringLiteral("film_damage"), filmDamageParams());
+    insertSpec(QStringLiteral("analog_damage"), analogDamageParams());
+
     insertSpec(feedbackMarkerTypeId(), {});
 
     // Keying-only (not in catalog picker).
@@ -577,7 +968,8 @@ bool isColorTypeId(const QString& typeId)
 bool filterAllowsExtendedParams(const QString& typeId)
 {
     return isBlurTypeId(typeId) || isColorTypeId(typeId) || isFilmTypeId(typeId)
-        || isLightTypeId(typeId);
+        || isLightTypeId(typeId) || isStylizeTypeId(typeId) || isTemporalTypeId(typeId)
+        || isTextureTypeId(typeId);
 }
 
 const QHash<QString, FilterNodeSpec>& filterParamSchemas()

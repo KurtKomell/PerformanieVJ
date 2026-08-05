@@ -65,6 +65,12 @@ QString formatMidiActivityLine(const QByteArray& bytes)
             .arg(u(1))
             .arg(u(2));
     }
+    if (bytes.size() >= 3 && high == 0xA0) {
+        return PreferencesDialog::tr("Aftertouch — channel %1, note %2, pressure %3")
+            .arg(channel)
+            .arg(u(1))
+            .arg(u(2));
+    }
     if (bytes.size() >= 2 && (high == 0xC0 || high == 0xD0)) {
         return PreferencesDialog::tr("Program / channel pressure — channel %1, value %2")
             .arg(channel)

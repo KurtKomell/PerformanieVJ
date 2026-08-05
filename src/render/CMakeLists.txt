@@ -1,6 +1,8 @@
 set(_pvj_render_sources
     RhiPreviewWidget.h
     RhiPreviewWidget.cpp
+    FeedbackPipeline.h
+    FeedbackPipeline.cpp
     RhiMixerWidget.h
     RhiMixerWidget.cpp
     FullscreenOutputWindow.h
@@ -21,6 +23,8 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.vert
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.frag
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback_hist.frag
+    ${CMAKE_SOURCE_DIR}/shaders/feedback_above_coverage.frag
+    ${CMAKE_SOURCE_DIR}/shaders/feedback_layer_composite.frag
     ${CMAKE_SOURCE_DIR}/shaders/stack_combine.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_blur.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_color.frag
@@ -39,6 +43,7 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/effect_revival.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_temporal.frag
     ${CMAKE_SOURCE_DIR}/shaders/effect_film.frag
+    ${CMAKE_SOURCE_DIR}/shaders/effect_texture.frag
     ${CMAKE_SOURCE_DIR}/shaders/transition.vert
     ${CMAKE_SOURCE_DIR}/shaders/transition_crossfade.frag
     ${CMAKE_SOURCE_DIR}/shaders/transition_luma.frag
@@ -52,6 +57,8 @@ set(_pvj_shader_outputs
     layer_feedback.vert.qsb
     layer_feedback.frag.qsb
     layer_feedback_hist.frag.qsb
+    feedback_above_coverage.frag.qsb
+    feedback_layer_composite.frag.qsb
     stack_combine.frag.qsb
     effect_blur.frag.qsb
     effect_color.frag.qsb
@@ -70,6 +77,7 @@ set(_pvj_shader_outputs
     effect_revival.frag.qsb
     effect_temporal.frag.qsb
     effect_film.frag.qsb
+    effect_texture.frag.qsb
     transition.vert.qsb
     transition_crossfade.frag.qsb
     transition_luma.frag.qsb

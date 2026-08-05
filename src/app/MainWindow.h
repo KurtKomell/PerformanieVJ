@@ -153,6 +153,7 @@ private:
     void rememberRecentProject(const QString& path);
     void updateRecentFilesMenu();
     void rebindUiToProject(bool preloadMedia = true);
+    void showProjectLoadProgress(const QString& label, int percent);
     void showMediaPreloadHint();
     void closeMediaPreloadHint();
     void onMediaPreloadProgress(int completed, int total);

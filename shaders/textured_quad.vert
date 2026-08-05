@@ -10,9 +10,11 @@ layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
     // x = optional vertex rotation (radians); yzw used by fragment effects (e.g. key weights, effectId).
     vec4 rotation;
-  // Fragment effect parameters; VS does not read these.
+    // Fragment effect parameters; VS does not read these (must match EffectQuadUbo2 / extended effect_*.frag).
     vec4 params;
     vec4 params2;
+    vec4 params3;
+    vec4 light[16];
 } ubuf;
 
 void main()

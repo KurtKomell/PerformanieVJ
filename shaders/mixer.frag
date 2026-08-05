@@ -18,7 +18,6 @@ layout(binding = 12) uniform sampler2D u_tex11;
 layout(binding = 13) uniform sampler2D u_tex12;
 layout(binding = 14) uniform sampler2D u_under;
 layout(binding = 15) uniform sampler2D u_aboveKey;
-layout(binding = 16) uniform sampler2D u_feedbackHist;
 
 layout(std140, binding = 0) uniform Block {
     vec4 scaleOffset;
@@ -403,16 +402,11 @@ void main()
 
     int maxLayer = int(ubuf.mixerCfg.x + 0.5);
     if (maxLayer <= 0) maxLayer = 14;
-    int cfgLayer = int(ubuf.mixerCfg.y + 0.5);
-    const bool feedbackActive = ubuf.mixerCfg.z > 0.5;
-    const int feedbackLayer = feedbackActive ? cfgLayer : -1;
+    int minLayer = int(ubuf.mixerCfg.y + 0.5);
+    if (minLayer < 0) minLayer = 0;
 
     for (int i = 0; i < 14; i++) {
-        if (feedbackActive) {
-            if (i >= maxLayer) continue;
-        } else {
-            if (i < cfgLayer || i >= maxLayer) continue;
-        }
+        if (i < minLayer || i >= maxLayer) continue;
         vec4 lp = ubuf.layers[i];
         if (lp.z < 0.5) {
             continue;
@@ -426,41 +420,6 @@ void main()
         float alpha = clamp(c.a * op, 0.0, 1.0);
         int mode = int(lp.y + 0.5);
         int matteRole = int(lp.w + 0.5);
-
-        // Feedback layer: fade over the normal mix below; key from layers above
-        // uses per-layer alpha/coverage so keyed holes stay open for feedback.
-        const bool isFeedbackLayer = feedbackActive && i == feedbackLayer;
-        if (isFeedbackLayer) {
-            vec3 under = dst;
-            float vis = op;
-            // mixerCfg.w: 0 = no key mask, 1 = BelowOnly hole mask, 2 = unified (full trail)
-            if (ubuf.mixerCfg.w > 0.5 && ubuf.mixerCfg.w < 1.5) {
-                float upperCov = 0.0;
-                for (int j = feedbackLayer + 1; j < 14; j++) {
-                    vec4 aboveLp = ubuf.layers[j];
-                    if (aboveLp.z < 0.5) {
-                        continue;
-                    }
-                    vec4 aboveSample = sampleLayer(j);
-                    float aboveOp = clamp(aboveLp.x, 0.0, 1.0);
-                    float alphaCov = clamp(aboveSample.a * aboveOp, 0.0, 1.0);
-                    float lumaCov = clamp(length(aboveSample.rgb - kBg) * 1.8, 0.0, 1.0) * aboveOp;
-                    upperCov = max(upperCov, max(alphaCov, lumaCov));
-                }
-                vis *= (1.0 - upperCov);
-            }
-            // Transparency crossfade: 0 = video only (under), 1 = warped history only (no live inject).
-            vec3 histOnly = texture(u_feedbackHist, v_uv).rgb;
-            if (vis <= 1e-4) {
-                dst = under;
-            } else if (vis >= 1.0 - 1e-4) {
-                dst = histOnly;
-            } else {
-                dst = mix(under, histOnly, vis);
-            }
-            hasBase = true;
-            continue;
-        }
 
         if (matteRole == MATTE_LUMA) {
             float m = mix(1.0, lum(src), alpha);

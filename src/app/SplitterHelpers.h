@@ -11,10 +11,10 @@
 
 namespace pvj::app {
 
-/// Splitter handle that avoids pixmap-based resize cursors on Windows.
-/// Qt::SplitHCursor / Qt::SplitVCursor / Qt::SizeHorCursor / Qt::SizeVerCursor can
-/// trigger Q_ASSERT(bm.format() == QImage::Format_Mono) in qpixmap_win.cpp when Qt
-/// builds the Win32 cursor mask (Qt 6.10+, some DPI / theme combinations).
+/// Splitter handle that avoids pixmap-based Split* cursors on Windows.
+/// Qt::SplitHCursor / Qt::SplitVCursor (and Drag*/Hand cursors) are PNG-based on
+/// Windows and can trigger Q_ASSERT(bm.format() == QImage::Format_Mono) in
+/// qpixmap_win.cpp (Qt 6.10+). We use stock SizeHor/SizeVer cursors instead.
 class PvjSplitterHandle final : public QSplitterHandle
 {
 public:

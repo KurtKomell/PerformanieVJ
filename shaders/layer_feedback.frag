@@ -14,6 +14,68 @@ layout(std140, binding = 0) uniform Block {
     vec4 fbE; // inGamma, layerOpacity, 0, 0
 } ubuf;
 
+float hue2rgb(float p, float q, float t)
+{
+    float x = t;
+    if (x < 0.0) x += 1.0;
+    if (x > 1.0) x -= 1.0;
+    if (x < 1.0 / 6.0) return p + (q - p) * 6.0 * x;
+    if (x < 0.5) return q;
+    if (x < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - x) * 6.0;
+    return p;
+}
+
+vec3 hsl2rgb(vec3 hsl)
+{
+    float h = fract(hsl.x);
+    float s = hsl.y;
+    float l = hsl.z;
+    if (s < 1e-5) return vec3(l);
+    float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
+    float p = 2.0 * l - q;
+    return vec3(
+        hue2rgb(p, q, h + 1.0 / 3.0),
+        hue2rgb(p, q, h),
+        hue2rgb(p, q, h - 1.0 / 3.0));
+}
+
+vec3 rgb2hsl(vec3 c)
+{
+    float maxc = max(max(c.r, c.g), c.b);
+    float minc = min(min(c.r, c.g), c.b);
+    float l = (maxc + minc) * 0.5;
+    float delta = maxc - minc;
+    float h = 0.0;
+    float s = 0.0;
+    if (delta > 1e-6) {
+        s = l < 0.5 ? delta / (maxc + minc) : delta / (2.0 - maxc - minc);
+        if (maxc == c.r) h = (c.g - c.b) / delta + (c.g < c.b ? 6.0 : 0.0);
+        else if (maxc == c.g) h = (c.b - c.r) / delta + 2.0;
+        else h = (c.r - c.g) / delta + 4.0;
+        h /= 6.0;
+    }
+    return vec3(h, s, l);
+}
+
+const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
+
+vec3 applyGrading(vec3 c, float brightness, float contrast, float saturation, float hueShift, float gamma)
+{
+    c = (c - 0.5) * contrast + 0.5 + brightness;
+    c = clamp(c, vec3(0.0), vec3(1.0));
+    float luma = dot(c, kLum);
+    if (abs(hueShift) > 1e-5) {
+        vec3 hsl = rgb2hsl(c);
+        if (hsl.y > 0.02) {
+            hsl.x = fract(hsl.x + hueShift);
+            c = hsl2rgb(hsl);
+        }
+    }
+    c = mix(vec3(luma), c, clamp(saturation, 0.0, 2.0));
+    c = pow(clamp(c, vec3(0.0), vec3(1.0)), vec3(1.0 / max(gamma, 0.01)));
+    return c;
+}
+
 vec2 transformUv(vec2 uv)
 {
     float zoom = ubuf.fbB.w;
@@ -67,10 +129,16 @@ void main()
 {
     const int wrapMode = int(ubuf.fbC.w + 0.5);
 
-    // Ungraded inject; input color is for live video only (mixer), not baked into the ring.
-    vec3 below = texture(u_below, v_uv).rgb;
+    // Input grade baked into the ring with each inject sample.
+    vec3 belowRaw = texture(u_below, v_uv).rgb;
+    vec3 below = applyGrading(belowRaw,
+                              ubuf.fbD.x,
+                              ubuf.fbD.y,
+                              ubuf.fbD.z,
+                              ubuf.fbD.w,
+                              max(ubuf.fbE.x, 0.01));
 
-    // Ring stores ungraded accumulation; history color is applied on read (hist display pass).
+    // Ring stores ungraded history; history color is applied on read (hist display pass).
     vec3 historyRaw = sampleWarpedHistory(u_history, v_uv, wrapMode);
 
     float layerOpacity = clamp(ubuf.fbE.y, 0.0, 1.0);

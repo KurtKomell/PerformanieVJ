@@ -12,6 +12,8 @@
 #include <array>
 #include <memory>
 
+#include "FeedbackPipeline.h"
+
 QT_BEGIN_NAMESPACE
 class QRhi;
 class QRhiBuffer;
@@ -36,6 +38,7 @@ class RhiMixerWidget : public QRhiWidget
 public:
     static constexpr int LayerCount = 14;
     static constexpr int kFeedbackRingSize = pvj::core::kFeedbackRingCapacity;
+    static constexpr int kTemporalHistoryCapacity = 16;
     static constexpr int BackgroundLayerIndex = 0;
     static constexpr int UserLayerMin = 1;
     static constexpr int UserLayerMax = 13;
@@ -98,28 +101,21 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    friend class FeedbackPipeline;
+
     void releaseGpuResources();
     void releaseOffscreenGpuResources();
-    void releaseFeedbackGpuResources();
 
     bool ensureOffscreenSceneTargets(QRhi* r, const QSize& pixelSize);
     void ensurePresentPipelineForSwapchain(QRhi* r);
 
     void rebuildMixerShaderResourceBindings();
-    void rebuildBelowMixerShaderResourceBindings();
-    void rebuildFeedbackShaderResourceBindings(QRhiTexture* belowTex, QRhiTexture* historyRead);
-    void rebuildFeedbackHistShaderResourceBindings(QRhiTexture* historyRead);
-    void rebuildStackCombineShaderResourceBindings();
     void rebuildTextureCopyShaderResourceBindings(QRhiTexture* sourceTex);
     void rebuildPresentShaderResourceBindings(QRhiTexture* sourceTex);
 
     void uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch);
     void updateMixerUniformBuffer(QRhiResourceUpdateBatch* batch, int maxLayerExclusive = -1,
                                   int minLayerInclusive = 0);
-    bool feedbackKeyFromAboveActive() const;
-    void updateBelowMixerUniformBuffer(QRhiResourceUpdateBatch* batch,
-                                       int minLayerInclusive, int maxLayerExclusive);
-    void updateFeedbackUniformBuffer(QRhiResourceUpdateBatch* batch, int feedbackLayer);
     void updatePresentUniformBuffer(QRhiResourceUpdateBatch* batch, const QSize& widgetPx);
     void updateFilterUniformBuffer(QRhiResourceUpdateBatch* batch, QRhiBuffer* ubuf,
                                    const pvj::core::CellFilterNode& node, const QSize& pixelSize,
@@ -128,7 +124,8 @@ private:
     bool ensureLayerFilterPassResources(QRhi* r, int layer);
     void rebuildLayerFilterShaderResourceBindings(int layer, QRhiTexture* sourceTex,
                                                   const QString& typeId,
-                                                  QRhiTexture* origTex = nullptr);
+                                                  QRhiTexture* origTex = nullptr,
+                                                  QRhiTexture* historyTex = nullptr);
     QRhiGraphicsPipeline* ensureFilterPipeline(QRhi* r, const QString& typeId, int layerIndex,
                                                QRhiShaderResourceBindings* srb,
                                                QRhiRenderPassDescriptor* rp);
@@ -138,48 +135,26 @@ private:
     bool ensureOutputFilterTargets(QRhi* r, const QSize& pixelSize);
     bool ensureOutputFilterPassResources(QRhi* r);
     void rebuildOutputFilterShaderResourceBindings(QRhiTexture* sourceTex, const QString& typeId,
-                                                   QRhiTexture* origTex = nullptr);
+                                                   QRhiTexture* origTex = nullptr,
+                                                   QRhiTexture* historyTex = nullptr);
+    bool ensureLayerTemporalHistory(QRhi* r, int layer, const QSize& pixelSize);
+    bool ensureOutputTemporalHistory(QRhi* r, const QSize& pixelSize);
+    void pushLayerTemporalHistory(QRhi* r, QRhiCommandBuffer* cb, int layer, QRhiTexture* sourceTex,
+                                  const QSize& stagePx,
+                                  const pvj::core::CellFilterNode& node);
+    void pushOutputTemporalHistory(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
+                                   const QSize& stagePx, const pvj::core::CellFilterNode& node);
+    QRhiTexture* layerTemporalHistorySample(int layer, int delayFrames) const;
+    QRhiTexture* outputTemporalHistorySample(int delayFrames) const;
+    void releaseTemporalGpuResources();
     void runOutputFilterChain(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
     QRhiTexture* outputFilterResultTexture() const;
 
-    bool ensureFeedbackTargets(QRhi* r, const QSize& pixelSize);
-    void runPartialMixerPass(QRhi* r, QRhiCommandBuffer* cb,
-                             int minLayerInclusive, int maxLayerExclusive,
-                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx, const QColor& clear);
-    void runFeedbackPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                         const QSize& stagePx, const QColor& clear,
-                         QRhiTexture* belowTex, QRhiTexture* historyRead,
-                         QRhiTextureRenderTarget* writeRt);
-    void runFeedbackHistDisplayPass(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                                    const QSize& stagePx, const QColor& clear,
-                                    QRhiTexture* historyRead);
-    void runStackCombinePass(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx, const QColor& clear);
-    bool ensureTextureCopyPipeline(QRhi* r, QRhiRenderPassDescriptor* rp);
+    QRhiGraphicsPipeline* ensureTextureCopyPipeline(QRhi* r, QRhiRenderPassDescriptor* rp);
     void runTextureCopyPass(QRhi* r, QRhiCommandBuffer* cb, QRhiTexture* sourceTex,
                             QRhiTextureRenderTarget* targetRt, const QSize& stagePx);
-    void copySceneToHistory(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
-    void clearFeedbackHistoryRing(QRhi* r, QRhiCommandBuffer* cb, const QSize& stagePx);
-    void advanceFeedbackRingSlot();
-    void runFeedbackAccumulationStep(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                                     const QSize& stagePx, const QColor& clear,
-                                     QRhiTexture* filteredBelow,
-                                     const QList<pvj::core::CellFilterNode>& postChain);
-    void primeFeedbackRingForDelay(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                                   const QSize& stagePx, const QColor& clear,
-                                   QRhiTexture* filteredBelow,
-                                   const QList<pvj::core::CellFilterNode>& postChain);
-    void recomputeActiveFeedbackLayer();
 
     void applyBackgroundLayerState();
-
-    pvj::core::FeedbackInputMode activeFeedbackInputMode() const;
-    QRhiTexture* feedbackInjectSourceTexture(QRhi* r, QRhiCommandBuffer* cb, int feedbackLayer,
-                                             const QSize& stagePx, const QColor& clear);
-    QRhiTexture* feedbackWriteTexture() const;
-    QRhiTexture* feedbackReadTexture() const;
-    QRhiTextureRenderTarget* feedbackWriteRenderTarget() const;
-    QRhiTexture* sceneHistReadTexture() const;
-    QRhiTextureRenderTarget* sceneHistWriteRenderTarget() const;
 
     QRhiTexture* sourceTextureForLayer(int layer) const;
     QRhiTexture* filterOutputTextureForLayer(int layer) const;
@@ -189,6 +164,8 @@ private:
     bool shouldDrawCenterLabel() const;
 
     QString m_label;
+
+    FeedbackPipeline m_feedback;
 
     std::array<QImage, LayerCount>   m_pending{};
     std::array<bool, LayerCount>     m_dirty{};
@@ -204,52 +181,33 @@ private:
     /// Per-layer RGB key weights for GPU key filters (defaults 1,1,1).
     std::array<std::array<float, 3>, LayerCount> m_layerKeyChannel{};
 
-  // Single-cell feedback state
-    int m_activeFeedbackLayer = -1;
-    std::array<bool, LayerCount> m_layerIsFeedback{};
-    std::array<pvj::core::FeedbackParams, LayerCount> m_layerFeedback{};
-    quint8 m_feedbackWriteIdx = 0;
-    /// Completed feedback writes since ring reset (caps frameDelay reads).
-    int m_feedbackRingFilled = 0;
-    QSize m_feedbackPixelSize;
-
-    std::array<std::unique_ptr<QRhiTexture>, kFeedbackRingSize> m_feedbackTex{};
-    std::array<std::unique_ptr<QRhiTextureRenderTarget>, kFeedbackRingSize> m_feedbackRt{};
-    std::unique_ptr<QRhiRenderPassDescriptor> m_feedbackRp;
-    std::unique_ptr<QRhiBuffer> m_feedbackUbuf;
-    std::unique_ptr<QRhiShaderResourceBindings> m_feedbackSrb;
-    std::unique_ptr<QRhiGraphicsPipeline> m_feedbackPipeline;
-    std::unique_ptr<QRhiShaderResourceBindings> m_feedbackHistSrb;
-    std::unique_ptr<QRhiGraphicsPipeline> m_feedbackHistPipeline;
-
-    std::unique_ptr<QRhiTexture> m_belowTex;
-    std::unique_ptr<QRhiTextureRenderTarget> m_belowRt;
-    std::unique_ptr<QRhiRenderPassDescriptor> m_belowRp;
-    std::unique_ptr<QRhiShaderResourceBindings> m_belowSrb;
-    std::unique_ptr<QRhiGraphicsPipeline> m_mixerBelowPipeline;
-    std::unique_ptr<QRhiBuffer> m_belowUbuf;
-
-    std::unique_ptr<QRhiTexture> m_aboveTex;
-    std::unique_ptr<QRhiTextureRenderTarget> m_aboveRt;
-
-    std::unique_ptr<QRhiTexture> m_stackTex;
-    std::unique_ptr<QRhiTextureRenderTarget> m_stackRt;
-    std::unique_ptr<QRhiShaderResourceBindings> m_stackCombineSrb;
-    std::unique_ptr<QRhiGraphicsPipeline> m_stackCombinePipeline;
-
-    std::array<std::unique_ptr<QRhiTexture>, 2> m_sceneHistTex{};
-    std::array<std::unique_ptr<QRhiTextureRenderTarget>, 2> m_sceneHistRt{};
-    quint8 m_sceneHistWriteIdx = 0;
-    bool m_sceneHistPrimed = false;
-
     std::unique_ptr<QRhiShaderResourceBindings> m_textureCopySrb;
-    std::unique_ptr<QRhiGraphicsPipeline> m_textureCopyPipeline;
-    QRhiRenderPassDescriptor* m_textureCopyPipelineRp = nullptr;
-
-    int m_mixerMinLayerInclusive = 0;
-    int m_mixerMaxLayerExclusive = -1;
+    // Keyed by render-pass descriptor: copy targets with different attachment shapes
+    // (e.g. layer filter ping targets vs. the feedback stack target) can both be used
+    // within the same recorded frame, so pipelines must not be destroyed mid-frame when
+    // switching between them (a still-recorded, not-yet-submitted draw may reference the
+    // old pipeline object). Cache one pipeline per distinct rp instead of a single slot.
+    QHash<QRhiRenderPassDescriptor*, QRhiGraphicsPipeline*> m_textureCopyPipelineByRp;
+    std::vector<std::unique_ptr<QRhiGraphicsPipeline>> m_textureCopyPipelinesOwned;
 
     QElapsedTimer m_elapsed;
+    quint32 m_presentFrame = 0;
+
+    std::array<std::array<std::unique_ptr<QRhiTexture>, kTemporalHistoryCapacity>, LayerCount>
+        m_layerTemporalTex{};
+    std::array<std::array<std::unique_ptr<QRhiTextureRenderTarget>, kTemporalHistoryCapacity>,
+               LayerCount>
+        m_layerTemporalRt{};
+    std::array<quint8, LayerCount> m_layerTemporalWriteIdx{};
+    std::array<int, LayerCount> m_layerTemporalFilled{};
+    QSize m_layerTemporalPixelSize;
+
+    std::array<std::unique_ptr<QRhiTexture>, kTemporalHistoryCapacity> m_outputTemporalTex{};
+    std::array<std::unique_ptr<QRhiTextureRenderTarget>, kTemporalHistoryCapacity>
+        m_outputTemporalRt{};
+    quint8 m_outputTemporalWriteIdx = 0;
+    int m_outputTemporalFilled = 0;
+    QSize m_outputTemporalPixelSize;
 
     std::unique_ptr<QRhiBuffer>   m_vbuf;
     std::unique_ptr<QRhiBuffer>   m_ubuf;

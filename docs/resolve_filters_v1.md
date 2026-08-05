@@ -58,3 +58,52 @@ GPU path: `effect_film.frag` via `packFilmUniforms()` (80-byte UBO with `params3
 **film_gate:** `ratio` (4:3, 16:10, 16:9, 1.85, 2.39, Super 16, Super 8), `padding`, `softness` (Resolve 21), `blend`
 
 Keying-only nodes (`chroma_key`, `luma_key`, `mask`) remain in `FilterEffectIds` for layer keying injection but are not listed in the filter picker.
+
+## Resolve FX Temporal (Resolve 21 handbook)
+
+GPU path: `effect_temporal.frag` via `packTemporalUniforms()`. Per-layer **frame-history ring** (16 slots) in `RhiMixerWidget`; shader binding `u_history` = previous frame. **No optical flow** — Smear and Motion Blur use frame-difference approximations.
+
+| typeId | Display name | `familyId` |
+|--------|--------------|------------|
+| `motion_trails` | Motion Trails | 0 |
+| `smear` | Smear | 1 |
+| `stop_motion` | Stop Motion | 2 |
+| `motion_blur` | Motion Blur | 3 |
+
+### Parameter mapping (handbook → schema)
+
+**motion_trails:** `trail_length`, `dropoff`, `composite_gamma` (Timeline / Rec.709 / Linear / Custom), `composite_gamma_custom`, `pan`, `pan_angle`, `zoom`, `rotate`, `reuse_current_frame`, `border_type` (Black / Soften / Replicate / Reflect / Wrap-Around), `input_alpha`, `use_alpha`, `blend`
+
+**smear:** `frames_either_side`, `luma_threshold`, `chroma_threshold`, `input_alpha`, `use_alpha`, `blend`
+
+**stop_motion:** `frame_hold`, `input_alpha`, `use_alpha`, `blend` (`frame_hold` = output frames per source frame; ring updates only on hold boundaries)
+
+**motion_blur:** `motion_est_type` (Better / Faster), `motion_range`, `motion_blur`, `blur_direction` (Both Directions / From Previous Frame / Towards Next Frame), `granularity`, `blend`
+
+## Resolve FX Texture (Resolve 21 handbook)
+
+GPU path: `effect_texture.frag` via `packTextureUniforms()`. Studio-only effects in Resolve; implementations are procedural GPU approximations tuned for live VJ use.
+
+| typeId | Display name | `familyId` |
+|--------|--------------|------------|
+| `jpeg_damage` | JPEG Damage | 0 |
+| `texture_pop` | Texture Pop | 1 |
+| `film_damage` | Film Damage | 2 |
+| `analog_damage` | Analog Damage | 3 |
+
+### Parameter mapping (handbook → schema)
+
+**jpeg_damage:** `quality`, `resolution`, `block_aspect_ratio`, `frequency_scale`, `scale_component` (All / X / Y Frequencies), `blend`
+
+**texture_pop:** `mode` (Simple / Advanced), `details` (Simple, −1…1), `rough`…`tiny` (Advanced, −1…1), `strength`, `shadows` / `midtones` / `highlights` (Tonal Range), `blend`
+
+**film_damage:** `film_blur`, `temp_shift`, `tint_shift`; vignetting `focal_factor`, `geometry_factor`, `tilt_amount`, `tilt_angle`; dirt `dirt_color`, `changing_dirt`, `dirt_density`, `dirt_size`, `dirt_blur`, `dirt_seed`; five scratch groups `scratchN_*` (color, position, width, strength, blur, moving, moving_amplitude, moving_speed, moving_randomness, flickering_speed); `blend`
+
+**analog_damage:** `preset` (Custom, VHS, Bad Reception, Old TV, Damaged Tape, Security Cam); Telecine `vignetting`, `vignette_aspect`, `shutter_weave`; Broadcast `noise_scale`, `signal_noise`, `chroma_noise`, `detail_loss`, `chroma_detail_loss`, `ghosting`, `ghost_offset`, `chroma_misalignment`; Color Dials `brightness`, `contrast`, `color`, `tint`; Scan `image_aspect`, `h_shift`, `v_shift`, `v_hold`, `v_hold_latch`, `overscan`, `v_scale`, `vertical_blanking`; Scan Lines `line_sharpness`, `line_frequency`, `colored_lines`; TV `phosphor_brightness`, `phosphor_tint`, `defocus`, `screen_curvature`, `edge_mask`, `edges_transparent`, `mask_curvature`, `mask_aspect`; VHS `restless_foot_height`, `restless_foot_offset`, `restless_foot_jitter`; `blend`
+
+### Resolve 21 QA checklist (manual compare)
+
+1. Import a still with skin texture + fine mechanical detail (Resolve Texture Pop handbook examples).
+2. Per effect: default, one extreme, one preset (`analog_damage` presets 1–5).
+3. Compare macroblocking (`jpeg_damage`), midtone detail bands (`texture_pop`), dirt/scratches (`film_damage`), scan/VHS (`analog_damage`).
+4. Document residual differences under “Known approximations” only if algorithmically blocked (no Resolve binary).

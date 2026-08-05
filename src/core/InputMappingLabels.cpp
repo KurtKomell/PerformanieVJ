@@ -9,6 +9,8 @@ QString formatTriggerInputLabel(InputType input, int channel, int number)
         return QStringLiteral("CH%1 CC%2").arg(channel + 1).arg(number);
     case InputType::MidiNote:
         return QStringLiteral("CH%1 N%2").arg(channel + 1).arg(number);
+    case InputType::MidiAftertouch:
+        return QStringLiteral("CH%1 AT%2").arg(channel + 1).arg(number);
     default:
         return {};
     }

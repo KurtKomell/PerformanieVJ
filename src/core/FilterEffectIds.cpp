@@ -58,6 +58,33 @@ constexpr RawEntry kEntries[] = {
     { "light_rays", FilterEffectFamily::Light, 4, 1, -1 },
     { "glow", FilterEffectFamily::Light, 5, 4, -1 },
 
+    // Resolve FX Stylize (familyId matches effect_stylize.frag pvjEffectId())
+    { "abstraction", FilterEffectFamily::Stylize, 0, 1, -1 },
+    { "blanking_fill", FilterEffectFamily::Stylize, 1, 1, -1 },
+    { "drop_shadow", FilterEffectFamily::Stylize, 2, 1, -1 },
+    { "edge_detect", FilterEffectFamily::Stylize, 3, 1, -1 },
+    { "emboss", FilterEffectFamily::Stylize, 4, 1, -1 },
+    { "mirrors", FilterEffectFamily::Stylize, 5, 1, -1 },
+    { "pencil_sketch", FilterEffectFamily::Stylize, 6, 1, -1 },
+    { "prism_blur", FilterEffectFamily::Stylize, 7, 1, -1 },
+    { "scanlines", FilterEffectFamily::Stylize, 8, 1, -1 },
+    { "stylize", FilterEffectFamily::Stylize, 9, 1, -1 },
+    { "tilt_shift", FilterEffectFamily::Stylize, 10, 1, -1 },
+    { "vignette", FilterEffectFamily::Stylize, 11, 1, -1 },
+    { "watercolor", FilterEffectFamily::Stylize, 12, 1, -1 },
+
+    // Resolve FX Temporal (familyId matches effect_temporal.frag)
+    { "motion_trails", FilterEffectFamily::Temporal, 0, 1, -1 },
+    { "smear", FilterEffectFamily::Temporal, 1, 1, -1 },
+    { "stop_motion", FilterEffectFamily::Temporal, 2, 1, -1 },
+    { "motion_blur", FilterEffectFamily::Temporal, 3, 1, -1 },
+
+    // Resolve FX Texture (familyId matches effect_texture.frag)
+    { "jpeg_damage", FilterEffectFamily::Texture, 0, 1, -1 },
+    { "texture_pop", FilterEffectFamily::Texture, 1, 1, -1 },
+    { "film_damage", FilterEffectFamily::Texture, 2, 1, -1 },
+    { "analog_damage", FilterEffectFamily::Texture, 3, 1, -1 },
+
     // Injected by layer keying (not listed in FilterCatalog picker).
     { "chroma_key", FilterEffectFamily::Key, 0, 1, -1 },
     { "luma_key", FilterEffectFamily::Key, 1, 1, -1 },
@@ -124,6 +151,11 @@ int filterEffectCatalogCount()
 bool filterUsesMaxineBackend(const QString& typeId)
 {
     return filterEffectMeta(typeId).backend == FilterExecutionBackend::Maxine;
+}
+
+bool filterEffectNeedsTemporalHistory(const QString& typeId)
+{
+    return filterEffectMeta(typeId).family == FilterEffectFamily::Temporal;
 }
 
 QString maxineFilterCategoryKey()

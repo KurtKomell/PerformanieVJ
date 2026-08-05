@@ -940,6 +940,10 @@ void MainWindow::setupMenus()
 
 void MainWindow::rebindUiToProject(bool preloadMedia)
 {
+    if (preloadMedia) {
+        showProjectLoadProgress(tr("Preparing project…"), 0);
+    }
+
     Project* p = m_project.get();
     p->ensureSingleBankSet();
     p->resizeBanksForGrid(p->settings.matrix.gridRows, p->settings.matrix.gridCols);
@@ -963,39 +967,49 @@ void MainWindow::rebindUiToProject(bool preloadMedia)
         showMediaPreloadHint();
         if (m_bankGrid) {
             m_bankGrid->preloadProjectMediaThumbnails();
-            onMediaPreloadProgress(m_bankGrid->mediaPreloadCompleted(),
-                                   m_bankGrid->mediaPreloadTotal());
+            // If the batch finished synchronously, mediaPreloadFinished already
+            // closed the dialog and reset counters to 0. Calling progress with
+            // (0,0) would reopen an empty progress window that never closes.
+            if (m_bankGrid->mediaPreloadTotal() > 0) {
+                onMediaPreloadProgress(m_bankGrid->mediaPreloadCompleted(),
+                                       m_bankGrid->mediaPreloadTotal());
+            }
         }
     }
 }
 
-void MainWindow::showMediaPreloadHint()
+void MainWindow::showProjectLoadProgress(const QString& label, int percent)
 {
     if (!m_mediaPreloadDialog) {
         m_mediaPreloadDialog = new QProgressDialog(this);
-        m_mediaPreloadDialog->setWindowTitle(tr("Loading videos"));
+        m_mediaPreloadDialog->setWindowTitle(tr("Loading project"));
         m_mediaPreloadDialog->setWindowModality(Qt::ApplicationModal);
         m_mediaPreloadDialog->setMinimumDuration(0);
         m_mediaPreloadDialog->setAutoClose(false);
         m_mediaPreloadDialog->setAutoReset(false);
         m_mediaPreloadDialog->setCancelButton(nullptr);
         m_mediaPreloadDialog->setAttribute(Qt::WA_QuitOnClose, false);
+        m_mediaPreloadDialog->setMinimumWidth(360);
         Qt::WindowFlags flags = Qt::Dialog | Qt::WindowTitleHint | Qt::CustomizeWindowHint;
         flags &= ~Qt::WindowCloseButtonHint;
         flags &= ~Qt::WindowMaximizeButtonHint;
         flags &= ~Qt::WindowMinimizeButtonHint;
         flags &= ~Qt::WindowSystemMenuHint;
         m_mediaPreloadDialog->setWindowFlags(flags);
-        m_mediaPreloadDialog->setRange(0, 100);
-        m_mediaPreloadDialog->setValue(0);
-        m_mediaPreloadDialog->setLabelText(tr("Loading video previews…"));
     }
-    m_mediaPreloadDialog->setRange(0, 100);
-    m_mediaPreloadDialog->setValue(0);
-    m_mediaPreloadDialog->setLabelText(tr("Loading video previews… %1%").arg(0));
+
+    if (percent < 0) {
+        m_mediaPreloadDialog->setRange(0, 0);
+    } else {
+        m_mediaPreloadDialog->setRange(0, 100);
+        m_mediaPreloadDialog->setValue(qBound(0, percent, 100));
+    }
+    m_mediaPreloadDialog->setLabelText(label);
     if (!m_mediaPreloadDialog->isVisible()) {
         m_mediaPreloadDialog->show();
     }
+    m_mediaPreloadDialog->raise();
+    m_mediaPreloadDialog->activateWindow();
     // Force an immediate paint so the dialog does not stay blank/white until the
     // first thumbnail finishes (setValue(0) on an already-zero value is a no-op
     // and would not trigger a repaint on its own).
@@ -1003,28 +1017,27 @@ void MainWindow::showMediaPreloadHint()
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
+void MainWindow::showMediaPreloadHint()
+{
+    showProjectLoadProgress(tr("Loading video previews… %1%").arg(0), 0);
+}
+
 void MainWindow::onMediaPreloadProgress(int completed, int total)
 {
-    const int percent = mediaPreloadPercent(completed, total);
-    if (!m_mediaPreloadDialog) {
+    if (total <= 0) {
         return;
     }
-    m_mediaPreloadDialog->setRange(0, 100);
-    m_mediaPreloadDialog->setValue(percent);
-    m_mediaPreloadDialog->setLabelText(
-        tr("Loading video previews… %1%").arg(percent));
-    if (!m_mediaPreloadDialog->isVisible()) {
-        m_mediaPreloadDialog->show();
-    }
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    const int percent = mediaPreloadPercent(completed, total);
+    showProjectLoadProgress(tr("Loading video previews… %1%").arg(percent), percent);
 }
 
 void MainWindow::closeMediaPreloadHint()
 {
-    if (!m_mediaPreloadDialog || !m_mediaPreloadDialog->isVisible()) {
+    if (!m_mediaPreloadDialog) {
         return;
     }
-    m_mediaPreloadDialog->close();
+    m_mediaPreloadDialog->hide();
+    m_mediaPreloadDialog->reset();
 }
 
 void MainWindow::onMediaPreloadFinished()
@@ -1435,9 +1448,12 @@ void MainWindow::onFileOpen()
 
 void MainWindow::openProjectFromPath(const QString& path)
 {
+    showProjectLoadProgress(tr("Opening project…"), -1);
+
     auto next = std::make_unique<Project>();
     auto res = PvjSerializer::load(*next, path);
     if (!res.ok) {
+        closeMediaPreloadHint();
         QMessageBox::warning(this, tr("Open failed"), res.errorMessage);
         return;
     }
@@ -1614,9 +1630,13 @@ void MainWindow::onImportVj2()
     const QString path = QFileDialog::getOpenFileName(this, tr("Import GrandVJ Project"),
                                                       {}, QString::fromLatin1(kVj2Filter));
     if (path.isEmpty()) return;
+
+    showProjectLoadProgress(tr("Importing GrandVJ project…"), -1);
+
     auto next = std::make_unique<Project>();
     auto res = Vj2Importer::importFile(*next, path);
     if (!res.ok) {
+        closeMediaPreloadHint();
         QMessageBox::warning(this, tr("Import failed"), res.errorMessage);
         return;
     }
@@ -1636,9 +1656,13 @@ void MainWindow::onImportAvc()
     const QString path = QFileDialog::getOpenFileName(this, tr("Import Resolume Composition"),
                                                       {}, QString::fromLatin1(kAvcFilter));
     if (path.isEmpty()) return;
+
+    showProjectLoadProgress(tr("Importing Resolume composition…"), -1);
+
     auto next = std::make_unique<Project>();
     auto res = AvcImporter::importFile(*next, path);
     if (!res.ok) {
+        closeMediaPreloadHint();
         QMessageBox::warning(this, tr("Import failed"), res.errorMessage);
         return;
     }

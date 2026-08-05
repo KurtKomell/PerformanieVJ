@@ -1,5 +1,6 @@
 #include "FilterUniformPacker.h"
 
+#include "core/FilterEffectIds.h"
 #include "core/FilterParamSchema.h"
 
 #include <QtGlobal>
@@ -517,11 +518,468 @@ void packLightUniforms(EffectQuadUbo2& ubo, const pvj::core::CellFilterNode& nod
     packGenericParams(ubo, node);
 }
 
+void packMirrorSlot(EffectQuadUbo2& ubo, int slot, const pvj::core::CellFilterNode& node, int index)
+{
+    const QString prefix = QStringLiteral("mirror%1_").arg(index);
+    ubo.light[3 + slot][0] = float(namedParam(node, prefix + QStringLiteral("enable"), index == 1 ? 1.0 : 0.0) >= 0.5 ? 1.0f : 0.0f);
+    ubo.light[3 + slot][1] = float(namedParam(node, prefix + QStringLiteral("x"), 0.5));
+    ubo.light[3 + slot][2] = float(namedParam(node, prefix + QStringLiteral("y"), 0.5));
+    const double angleDeg = namedParam(node, prefix + QStringLiteral("angle"), 0.0);
+    ubo.light[3 + slot][3] = float(angleDeg * 3.14159265358979323846 / 180.0);
+    ubo.params3[slot] = float(namedParam(node, prefix + QStringLiteral("flip"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+}
+
+void packStylizeUniforms(EffectQuadUbo2& ubo, const pvj::core::CellFilterNode& node,
+                         const QSize& pixelSize, int /*internalPass*/)
+{
+    const float blend = float(qBound(0.0, namedParam(node, QStringLiteral("blend"), 1.0), 1.0));
+    const QString type = node.typeId.toLower();
+    const float minDim = float(qMax(1, qMin(pixelSize.width(), pixelSize.height())));
+
+    ubo.rotation[0] = 0.0f;
+    ubo.rotation[1] = 1.0f / minDim;
+    ubo.rotation[2] = 0.0f;
+    ubo.params2[3] = 0.0f;
+
+    if (type == QStringLiteral("abstraction")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("pre_blur"), 0.15));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("abstraction_strength"), 0.65));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("iterate_abstraction"), 0.35));
+        ubo.params[3] = blend;
+        // params2[0] = internalPass (set by packFilterUniformBuffer)
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("quantization"), 1.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.params2[2] = float(qBound(2.0, namedParam(node, QStringLiteral("steps"), 6.0), 32.0));
+        ubo.params2[3] = float(namedParam(node, QStringLiteral("softness"), 0.1));
+        ubo.params3[0] = float(namedParam(node, QStringLiteral("draw_edge"), 1.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.params3[1] = float(namedParam(node, QStringLiteral("edge_strength"), 0.55));
+        ubo.params3[2] = float(namedParam(node, QStringLiteral("edge_detection_threshold"), 0.22));
+        return;
+    }
+
+    if (type == QStringLiteral("blanking_fill")) {
+        ubo.params[0] = blend;
+        ubo.params[1] = float(namedParam(node, QStringLiteral("zoom_mode"), 0.0));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("expand"), 0.5));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("aspect"), 0.5));
+        ubo.params2[0] = float(namedParam(node, QStringLiteral("blend_edges"), 0.5));
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("blur_background"), 0.3));
+        ubo.params2[2] = float(namedParam(node, QStringLiteral("fade_amount"), 0.0));
+        float rgb[3] = { 0, 0, 0 };
+        unpackColorRgb(namedParam(node, QStringLiteral("fade_color"), 0x000000), rgb);
+        ubo.light[0][0] = rgb[0];
+        ubo.light[0][1] = rgb[1];
+        ubo.light[0][2] = rgb[2];
+        ubo.params3[0] = float(namedParam(node, QStringLiteral("shadow_strength"), 0.5));
+        ubo.params3[1] = float(namedParam(node, QStringLiteral("drop_angle"), 135.0) * 3.14159265358979323846 / 180.0);
+        ubo.params3[2] = float(namedParam(node, QStringLiteral("drop_distance"), 0.05));
+        ubo.params3[3] = float(namedParam(node, QStringLiteral("drop_blur"), 0.3));
+        unpackColorRgb(namedParam(node, QStringLiteral("drop_color"), 0x000000), rgb);
+        ubo.light[1][0] = rgb[0];
+        ubo.light[1][1] = rgb[1];
+        ubo.light[1][2] = rgb[2];
+        return;
+    }
+
+    if (type == QStringLiteral("drop_shadow")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("shadow_strength"), 0.5));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("drop_angle"), 135.0) * 3.14159265358979323846 / 180.0);
+        ubo.params[2] = float(namedParam(node, QStringLiteral("drop_distance"), 0.05));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("blur"), 0.3));
+        float rgb[3] = { 0, 0, 0 };
+        unpackColorRgb(namedParam(node, QStringLiteral("color"), 0x000000), rgb);
+        ubo.light[0][0] = rgb[0];
+        ubo.light[0][1] = rgb[1];
+        ubo.light[0][2] = rgb[2];
+        ubo.params2[0] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("edge_detect")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("mode"), 0.0));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("edge_thickness"), 0.5));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("threshold"), 0.2));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("glow"), 0.0));
+        float rgb[3] = { 1, 1, 1 };
+        unpackColorRgb(namedParam(node, QStringLiteral("edge_color"), 0xFFFFFF), rgb);
+        ubo.light[0][0] = rgb[0];
+        ubo.light[0][1] = rgb[1];
+        ubo.light[0][2] = rgb[2];
+        ubo.params2[0] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("emboss")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("emboss_style"), 0.0));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("power"), 0.5));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("angle"), 45.0) * 3.14159265358979323846 / 180.0);
+        ubo.params[3] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("mirrors")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("mirror_placement"), 0.0));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("reflect_at_borders"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.params[2] = blend;
+        ubo.light[0][0] = float(namedParam(node, QStringLiteral("rosette_x"), 0.5));
+        ubo.light[0][1] = float(namedParam(node, QStringLiteral("rosette_y"), 0.5));
+        ubo.light[0][2] = float(namedParam(node, QStringLiteral("rosette_angle"), 0.0) * 3.14159265358979323846 / 180.0);
+        ubo.light[0][3] = float(namedParam(node, QStringLiteral("rosette_wedge_width"), 0.5));
+        ubo.light[1][0] = float(namedParam(node, QStringLiteral("kaleido_x"), 0.5));
+        ubo.light[1][1] = float(namedParam(node, QStringLiteral("kaleido_y"), 0.5));
+        ubo.light[1][2] = float(namedParam(node, QStringLiteral("kaleido_center_size"), 0.5));
+        ubo.light[1][3] = float(namedParam(node, QStringLiteral("kaleido_angle"), 0.0) * 3.14159265358979323846 / 180.0);
+        ubo.light[2][0] = float(qBound(3.0, namedParam(node, QStringLiteral("kaleido_sides"), 4.0), 8.0));
+        for (int i = 1; i <= 6; ++i) {
+            packMirrorSlot(ubo, i - 1, node, i);
+        }
+        return;
+    }
+
+    if (type == QStringLiteral("pencil_sketch")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("color_sketch"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.params[1] = float(namedParam(node, QStringLiteral("stroke_thickness"), 0.5));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("stroke_threshold"), 0.5));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("stroke_length"), 0.5));
+        ubo.params2[0] = float(qBound(2.0, namedParam(node, QStringLiteral("tone_levels"), 6.0), 16.0) / 16.0f);
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("tone_shadows"), 0.5));
+        ubo.params2[2] = float(namedParam(node, QStringLiteral("tone_midtones"), 0.5));
+        ubo.params2[3] = float(namedParam(node, QStringLiteral("tone_highlights"), 0.5));
+        ubo.params3[0] = float(namedParam(node, QStringLiteral("texture_amount"), 0.3));
+        ubo.params3[1] = float(namedParam(node, QStringLiteral("texture_scale"), 0.5));
+        ubo.params3[2] = float(namedParam(node, QStringLiteral("auto_animate"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.params3[3] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("prism_blur")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("blur_strength"), 0.5));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("aberration_distance"), 0.25));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("vignette_size"), 0.5));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("vignette_sharpness"), 0.5));
+        ubo.params2[0] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("scanlines")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("line_frequency"), 10.0));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("line_sharpness"), 0.5));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("line_angle"), 0.0) * 3.14159265358979323846 / 180.0);
+        ubo.params[3] = float(namedParam(node, QStringLiteral("line_width"), 0.5));
+        ubo.params2[0] = float(namedParam(node, QStringLiteral("line_shift"), 0.0));
+        ubo.params2[1] = blend;
+        float rgb[3] = { 0, 0, 0 };
+        unpackColorRgb(namedParam(node, QStringLiteral("color1"), 0x000000), rgb);
+        ubo.light[0][0] = rgb[0];
+        ubo.light[0][1] = rgb[1];
+        ubo.light[0][2] = rgb[2];
+        unpackColorRgb(namedParam(node, QStringLiteral("color2"), 0x000000), rgb);
+        ubo.light[1][0] = rgb[0];
+        ubo.light[1][1] = rgb[1];
+        ubo.light[1][2] = rgb[2];
+        return;
+    }
+
+    if (type == QStringLiteral("stylize")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("style"), 0.0));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("style_scale"), 0.5));
+        ubo.params[2] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("tilt_shift")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("blur_type"), 1.0));
+        ubo.params[1] = strengthToUvRadius(namedParam(node, QStringLiteral("blur_strength"), 0.5), pixelSize);
+        ubo.params[2] = float(namedParam(node, QStringLiteral("iris_shape"), 0.0));
+        ubo.params[3] = float(qBound(3.0, namedParam(node, QStringLiteral("iris_blades"), 6.0), 12.0));
+        ubo.params2[0] = float(namedParam(node, QStringLiteral("focus_center"), 0.5));
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("focus_width"), 0.3));
+        ubo.params2[2] = float(namedParam(node, QStringLiteral("focus_angle"), 0.0) * 3.14159265358979323846 / 180.0);
+        ubo.params2[3] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("vignette")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("size"), 0.5));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("softness"), 0.5));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("strength"), 0.5));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("roundness"), 0.5));
+        ubo.params2[0] = float(namedParam(node, QStringLiteral("center_x"), 0.5));
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("center_y"), 0.5));
+        ubo.params2[2] = blend;
+        float rgb[3] = { 0, 0, 0 };
+        unpackColorRgb(namedParam(node, QStringLiteral("color"), 0x000000), rgb);
+        ubo.light[0][0] = rgb[0];
+        ubo.light[0][1] = rgb[1];
+        ubo.light[0][2] = rgb[2];
+        return;
+    }
+
+    if (type == QStringLiteral("watercolor")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("detail"), 0.5));
+        ubo.params[1] = float(namedParam(node, QStringLiteral("brush_size"), 0.5));
+        ubo.params[2] = float(namedParam(node, QStringLiteral("edge_darkening"), 0.3));
+        ubo.params[3] = float(namedParam(node, QStringLiteral("paper_texture"), 0.2));
+        ubo.params2[0] = blend;
+        return;
+    }
+
+    packGenericParams(ubo, node);
+}
+
+void packTemporalUniforms(EffectQuadUbo2& ubo, const pvj::core::CellFilterNode& node,
+                          const QSize& pixelSize, float presentFrame)
+{
+    Q_UNUSED(pixelSize);
+    const float blend = float(qBound(0.0, namedParam(node, QStringLiteral("blend"), 1.0), 1.0));
+    const QString type = node.typeId.toLower();
+
+    ubo.rotation[0] = presentFrame;
+    ubo.rotation[1] = 60.0f;
+
+    if (type == QStringLiteral("motion_trails")) {
+        ubo.params[0] = float(qBound(1, int(namedParam(node, QStringLiteral("trail_length"), 6.0)), 16));
+        ubo.params[1] = float(qBound(0.01, namedParam(node, QStringLiteral("dropoff"), 0.5), 1.0));
+        ubo.params[2] = blend;
+        ubo.params[3] = float(qBound(0.0, namedParam(node, QStringLiteral("pan"), 0.02), 1.0));
+        const double panDeg = namedParam(node, QStringLiteral("pan_angle"), 0.0);
+        ubo.params2[1] = float(panDeg * 3.14159265358979323846 / 180.0);
+        ubo.params2[2] = float(qBound(-1.0, namedParam(node, QStringLiteral("zoom"), 0.0), 1.0));
+        const double rotDeg = namedParam(node, QStringLiteral("rotate"), 0.0);
+        ubo.params2[3] = float(rotDeg * 3.14159265358979323846 / 180.0);
+        ubo.params3[0] =
+            float(namedParam(node, QStringLiteral("reuse_current_frame"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.params3[1] = float(namedParam(node, QStringLiteral("composite_gamma"), 0.0));
+        ubo.params3[2] =
+            float(qBound(0.0, namedParam(node, QStringLiteral("composite_gamma_custom"), 0.6), 1.0));
+        ubo.params3[3] = float(namedParam(node, QStringLiteral("border_type"), 0.0));
+        ubo.light[0][0] = float(namedParam(node, QStringLiteral("input_alpha"), 0.0));
+        ubo.light[0][1] =
+            float(namedParam(node, QStringLiteral("use_alpha"), 1.0) >= 0.5 ? 1.0f : 0.0f);
+        return;
+    }
+
+    if (type == QStringLiteral("smear")) {
+        ubo.params[0] = float(qBound(0, int(namedParam(node, QStringLiteral("frames_either_side"), 2.0)), 8));
+        ubo.params[1] = float(qBound(0.0, namedParam(node, QStringLiteral("luma_threshold"), 0.5), 1.0));
+        ubo.params[2] = float(qBound(0.0, namedParam(node, QStringLiteral("chroma_threshold"), 0.5), 1.0));
+        ubo.params[3] = blend;
+        ubo.light[0][0] = float(namedParam(node, QStringLiteral("input_alpha"), 0.0));
+        ubo.light[0][1] =
+            float(namedParam(node, QStringLiteral("use_alpha"), 1.0) >= 0.5 ? 1.0f : 0.0f);
+        return;
+    }
+
+    if (type == QStringLiteral("stop_motion")) {
+        ubo.params[0] = float(qMax(1, int(namedParam(node, QStringLiteral("frame_hold"), 2.0))));
+        ubo.params[1] = blend;
+        ubo.light[0][0] = float(namedParam(node, QStringLiteral("input_alpha"), 0.0));
+        ubo.light[0][1] =
+            float(namedParam(node, QStringLiteral("use_alpha"), 1.0) >= 0.5 ? 1.0f : 0.0f);
+        return;
+    }
+
+    if (type == QStringLiteral("motion_blur")) {
+        ubo.params[0] = float(qBound(0.0, namedParam(node, QStringLiteral("motion_blur"), 0.5), 1.0));
+        ubo.params[1] = float(qBound(0.0, namedParam(node, QStringLiteral("motion_range"), 0.5), 1.0));
+        ubo.params[2] = float(qBound(0.0, namedParam(node, QStringLiteral("granularity"), 0.5), 1.0));
+        ubo.params[3] = blend;
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("motion_est_type"), 0.0));
+        ubo.params2[2] = float(namedParam(node, QStringLiteral("blur_direction"), 0.0));
+        return;
+    }
+
+    packGenericParams(ubo, node);
+}
+
+void packFilmScratchSlot(EffectQuadUbo2& ubo, int index, const pvj::core::CellFilterNode& node)
+{
+    const QString pfx = QStringLiteral("scratch%1_").arg(index + 1);
+    const int li = 4 + index * 2;
+    ubo.light[li][0] = float(namedParam(node, pfx + QStringLiteral("position"), 0.2));
+    ubo.light[li][1] = float(qMax(0.0005, namedParam(node, pfx + QStringLiteral("width"), 0.002)));
+    ubo.light[li][2] = float(namedParam(node, pfx + QStringLiteral("strength"), 0.4));
+    ubo.light[li][3] = float(namedParam(node, pfx + QStringLiteral("blur"), 0.3));
+    float rgb[3] = { 0.91f, 0.91f, 0.91f };
+    unpackColorRgb(namedParam(node, pfx + QStringLiteral("color"), 0xE8E8E8), rgb);
+    ubo.light[li + 1][0] = rgb[0];
+    ubo.light[li + 1][1] = rgb[1];
+    ubo.light[li + 1][2] = rgb[2];
+    ubo.light[li + 1][3] =
+        float(namedParam(node, pfx + QStringLiteral("moving"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+    const float amp = float(namedParam(node, pfx + QStringLiteral("moving_amplitude"), 0.3));
+    const float spd = float(namedParam(node, pfx + QStringLiteral("moving_speed"), 0.5));
+    const float flick = float(namedParam(node, pfx + QStringLiteral("flickering_speed"), 0.5));
+    if (index < 2) {
+        ubo.light[14][index * 2] = amp;
+        ubo.light[14][index * 2 + 1] = spd;
+    } else if (index < 4) {
+        ubo.light[15][(index - 2) * 2] = amp;
+        ubo.light[15][(index - 2) * 2 + 1] = spd;
+    }
+    if (index == 0) {
+        ubo.params3[0] = flick;
+    } else if (index == 1) {
+        ubo.params3[1] = flick;
+    } else if (index == 2) {
+        ubo.params3[2] = flick;
+    } else if (index == 3) {
+        ubo.light[15][2] = flick;
+    } else {
+        ubo.light[15][3] = flick;
+    }
+}
+
+void ubufPresetVhs(EffectQuadUbo2& ubo)
+{
+    ubo.light[1][1] = 0.35f;
+    ubo.light[1][2] = 0.25f;
+    ubo.light[2][2] = 0.35f;
+    ubo.light[6][1] = 450.0f;
+    ubo.light[9][0] = 0.08f;
+    ubo.light[9][2] = 0.5f;
+}
+
+void packTextureUniforms(EffectQuadUbo2& ubo, const pvj::core::CellFilterNode& node,
+                         const QSize& pixelSize, int /*internalPass*/)
+{
+    const float blend = float(qBound(0.0, namedParam(node, QStringLiteral("blend"), 1.0), 1.0));
+    const QString type = node.typeId.toLower();
+    const float minDim = float(qMax(1, qMin(pixelSize.width(), pixelSize.height())));
+    ubo.rotation[0] = 0.0f;
+    ubo.rotation[1] = 1.0f / minDim;
+    ubo.rotation[2] = 0.0f;
+
+    if (type == QStringLiteral("jpeg_damage")) {
+        ubo.params[0] = float(qBound(0.0, namedParam(node, QStringLiteral("quality"), 1.0), 1.0));
+        ubo.params[1] = float(qBound(0.0, namedParam(node, QStringLiteral("resolution"), 0.5), 1.0));
+        ubo.params[2] =
+            float(qBound(0.0, namedParam(node, QStringLiteral("block_aspect_ratio"), 0.5), 1.0));
+        ubo.params[3] =
+            float(qBound(0.0, namedParam(node, QStringLiteral("frequency_scale"), 0.5), 1.0));
+        ubo.params2[0] = 0.0f;
+        ubo.params2[1] = float(namedParam(node, QStringLiteral("scale_component"), 0.0));
+        ubo.params2[2] = blend;
+        return;
+    }
+
+    if (type == QStringLiteral("texture_pop")) {
+        ubo.params[0] = float(namedParam(node, QStringLiteral("mode"), 0.0));
+        ubo.params[1] = float(qBound(0.0, namedParam(node, QStringLiteral("strength"), 1.0), 2.0));
+        ubo.params[2] = blend;
+        ubo.params[3] = float(qBound(0.0, namedParam(node, QStringLiteral("shadows"), 1.0), 1.0));
+        ubo.params2[0] = float(qBound(0.0, namedParam(node, QStringLiteral("midtones"), 1.0), 1.0));
+        ubo.params2[1] =
+            float(qBound(0.0, namedParam(node, QStringLiteral("highlights"), 1.0), 1.0));
+        ubo.params2[2] = float(qBound(-1.0, namedParam(node, QStringLiteral("details"), 0.0), 1.0));
+        ubo.params3[0] = float(qBound(-1.0, namedParam(node, QStringLiteral("rough"), 0.0), 1.0));
+        ubo.params3[1] = float(qBound(-1.0, namedParam(node, QStringLiteral("coarse"), 0.0), 1.0));
+        ubo.params3[2] = float(qBound(-1.0, namedParam(node, QStringLiteral("medium"), 0.0), 1.0));
+        ubo.light[0][0] = float(qBound(-1.0, namedParam(node, QStringLiteral("small"), 0.0), 1.0));
+        ubo.light[0][1] = float(qBound(-1.0, namedParam(node, QStringLiteral("fine"), 0.0), 1.0));
+        ubo.light[0][2] = float(qBound(-1.0, namedParam(node, QStringLiteral("tiny"), 0.0), 1.0));
+        return;
+    }
+
+    if (type == QStringLiteral("film_damage")) {
+        ubo.light[0][0] = float(namedParam(node, QStringLiteral("film_blur"), 0.15));
+        ubo.light[0][1] = float(namedParam(node, QStringLiteral("temp_shift"), 0.12));
+        ubo.light[0][2] = float(namedParam(node, QStringLiteral("tint_shift"), 0.18));
+        ubo.light[0][3] = blend;
+        ubo.light[1][0] = float(namedParam(node, QStringLiteral("focal_factor"), 0.55));
+        ubo.light[1][1] = float(namedParam(node, QStringLiteral("geometry_factor"), 0.5));
+        ubo.light[1][2] = float(namedParam(node, QStringLiteral("tilt_amount"), 0.0));
+        ubo.light[1][3] = float(namedParam(node, QStringLiteral("tilt_angle"), 0.0)
+                                * 3.14159265358979323846 / 180.0);
+        ubo.light[2][0] = float(namedParam(node, QStringLiteral("dirt_density"), 0.25));
+        ubo.light[2][1] = float(namedParam(node, QStringLiteral("dirt_size"), 0.4));
+        ubo.light[2][2] = float(namedParam(node, QStringLiteral("dirt_blur"), 0.35));
+        ubo.light[2][3] = float(namedParam(node, QStringLiteral("dirt_seed"), 1.0));
+        float dirtRgb[3] = { 0.1f, 0.1f, 0.1f };
+        unpackColorRgb(namedParam(node, QStringLiteral("dirt_color"), 0x1A1A1A), dirtRgb);
+        ubo.light[3][0] = dirtRgb[0];
+        ubo.light[3][1] = dirtRgb[1];
+        ubo.light[3][2] = dirtRgb[2];
+        ubo.light[3][3] =
+            float(namedParam(node, QStringLiteral("changing_dirt"), 1.0) >= 0.5 ? 1.0f : 0.0f);
+        for (int i = 0; i < 5; ++i) {
+            packFilmScratchSlot(ubo, i, node);
+        }
+        ubo.params3[3] =
+            float(namedParam(node, QStringLiteral("scratch1_moving_randomness"), 0.4));
+        return;
+    }
+
+    if (type == QStringLiteral("analog_damage")) {
+        const int preset = int(namedParam(node, QStringLiteral("preset"), 0.0));
+        ubo.params[0] = float(preset);
+        ubo.params[3] = blend;
+        ubo.light[0][0] = float(namedParam(node, QStringLiteral("vignetting"), 0.35));
+        ubo.light[0][1] = float(namedParam(node, QStringLiteral("vignette_aspect"), 0.5));
+        ubo.light[0][2] = float(namedParam(node, QStringLiteral("shutter_weave"), 0.2));
+        ubo.light[1][0] = float(namedParam(node, QStringLiteral("noise_scale"), 0.5));
+        ubo.light[1][1] = float(namedParam(node, QStringLiteral("signal_noise"), 0.25));
+        ubo.light[1][2] = float(namedParam(node, QStringLiteral("chroma_noise"), 0.2));
+        ubo.light[1][3] = float(namedParam(node, QStringLiteral("detail_loss"), 0.2));
+        ubo.light[2][0] = float(namedParam(node, QStringLiteral("chroma_detail_loss"), 0.15));
+        ubo.light[2][1] = float(namedParam(node, QStringLiteral("ghosting"), 0.15));
+        ubo.light[2][2] = float(namedParam(node, QStringLiteral("ghost_offset"), 0.3));
+        ubo.light[2][3] = float(namedParam(node, QStringLiteral("chroma_misalignment"), 0.2));
+        ubo.light[3][0] = float(namedParam(node, QStringLiteral("brightness"), 0.5) - 0.5);
+        ubo.light[3][1] = float(namedParam(node, QStringLiteral("contrast"), 0.5));
+        ubo.light[3][2] = float(namedParam(node, QStringLiteral("color"), 0.5));
+        ubo.light[3][3] = float(namedParam(node, QStringLiteral("tint"), 0.5) - 0.5);
+        ubo.light[4][0] = float(namedParam(node, QStringLiteral("image_aspect"), 0.5));
+        ubo.light[4][1] = float(namedParam(node, QStringLiteral("h_shift"), 0.0) - 0.5) * 2.0f;
+        ubo.light[4][2] = float(namedParam(node, QStringLiteral("v_shift"), 0.0) - 0.5) * 2.0f;
+        ubo.light[4][3] = float(namedParam(node, QStringLiteral("v_hold"), 0.0));
+        ubo.light[5][0] = float(namedParam(node, QStringLiteral("overscan"), 0.0));
+        ubo.light[5][1] = float(namedParam(node, QStringLiteral("v_scale"), 0.0));
+        ubo.light[5][2] = float(namedParam(node, QStringLiteral("vertical_blanking"), 0.0));
+        ubo.light[6][0] = float(namedParam(node, QStringLiteral("line_sharpness"), 0.5));
+        ubo.light[6][1] = float(qBound(50.0, namedParam(node, QStringLiteral("line_frequency"), 400.0),
+                                       800.0));
+        ubo.light[6][2] =
+            float(namedParam(node, QStringLiteral("colored_lines"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.light[7][0] = float(namedParam(node, QStringLiteral("phosphor_brightness"), 0.05));
+        ubo.light[7][1] = float(namedParam(node, QStringLiteral("phosphor_tint"), 0.1));
+        ubo.light[7][2] = float(namedParam(node, QStringLiteral("defocus"), 0.15));
+        ubo.light[7][3] = float(namedParam(node, QStringLiteral("screen_curvature"), 0.25));
+        ubo.light[8][0] = float(namedParam(node, QStringLiteral("edge_mask"), 0.0) >= 0.5 ? 1.0f : 0.0f);
+        ubo.light[8][1] = float(namedParam(node, QStringLiteral("mask_curvature"), 0.5));
+        ubo.light[8][2] = float(namedParam(node, QStringLiteral("mask_aspect"), 0.5));
+        ubo.light[9][0] = float(namedParam(node, QStringLiteral("restless_foot_height"), 0.0));
+        ubo.light[9][1] = float(namedParam(node, QStringLiteral("restless_foot_offset"), 0.0));
+        ubo.light[9][2] = float(namedParam(node, QStringLiteral("restless_foot_jitter"), 0.3));
+        if (preset == 1) {
+            ubufPresetVhs(ubo);
+        } else if (preset == 2) {
+            ubo.light[1][1] = 0.55f;
+            ubo.light[2][2] = 0.5f;
+            ubo.light[6][1] = 520.0f;
+        } else if (preset == 3) {
+            ubo.light[0][0] = 0.55f;
+            ubo.light[6][1] = 380.0f;
+            ubo.light[7][2] = 0.35f;
+        } else if (preset == 4) {
+            ubo.light[1][1] = 0.45f;
+            ubo.light[9][0] = 0.12f;
+            ubo.light[9][2] = 0.65f;
+        } else if (preset == 5) {
+            ubo.light[1][1] = 0.2f;
+            ubo.light[2][1] = 0.1f;
+            ubo.light[7][0] = 0.15f;
+        }
+        return;
+    }
+
+    packGenericParams(ubo, node);
+}
+
 } // namespace
 
 void packFilterUniformBuffer(EffectQuadUbo2& ubo, const pvj::core::CellFilterNode& node,
                              const QSize& pixelSize, float elapsedSec, int internalPass,
-                             const float keyChannelRgb[3])
+                             const float keyChannelRgb[3], quint32 presentFrame)
 {
     ubo = EffectQuadUbo2{};
     ubo.scaleOffset[0] = 1.0f;
@@ -560,6 +1018,18 @@ void packFilterUniformBuffer(EffectQuadUbo2& ubo, const pvj::core::CellFilterNod
         return;
     case pvj::core::FilterEffectFamily::Light:
         packLightUniforms(ubo, node, pixelSize, internalPass);
+        ubo.rotation[0] = 0.0f;
+        return;
+    case pvj::core::FilterEffectFamily::Stylize:
+        packStylizeUniforms(ubo, node, pixelSize, internalPass);
+        ubo.rotation[0] = 0.0f;
+        return;
+    case pvj::core::FilterEffectFamily::Temporal:
+        ubo.scaleOffset[2] = float(presentFrame);
+        packTemporalUniforms(ubo, node, pixelSize, float(presentFrame));
+        return;
+    case pvj::core::FilterEffectFamily::Texture:
+        packTextureUniforms(ubo, node, pixelSize, internalPass);
         ubo.rotation[0] = 0.0f;
         return;
     default:

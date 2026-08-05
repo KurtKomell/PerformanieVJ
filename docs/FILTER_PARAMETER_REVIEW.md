@@ -2285,12 +2285,21 @@ Regenerieren: `python tools/generate_filter_param_review.py`
 
 | Key | Label | Typ | Bereich | Default |
 |-----|-------|-----|---------|---------|
+| `trail_length` | Trail Length | Float | 1–16 | 6 |
+| `dropoff` | Dropoff | Percent | 0.0–1.0 | 0.5 |
+| `composite_gamma` | Composite Gamma | Enum | Timeline…Custom | Timeline |
+| `composite_gamma_custom` | Composite Gamma | Percent | 0.0–1.0 | 0.6 |
+| `pan` | Pan | Percent | 0.0–1.0 | 0.02 |
+| `pan_angle` | Pan Angle | Angle | -180°–180° | 0° |
+| `zoom` | Zoom | Percent | 0.0–1.0 | 0.0 |
+| `rotate` | Rotate | Angle | -180°–180° | 0° |
+| `reuse_current_frame` | Reuse Current Frame | Bool | — | false |
+| `border_type` | Border Type | Enum | Black…Wrap-Around | Black |
+| `input_alpha` | Input Alpha | Enum | Ignore / Use in Compositing | Ignore |
+| `use_alpha` | Use Alpha | Bool | — | true |
 | `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
 
-**Shader** — `effect_temporal.frag`; `familyId=0`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
+**Shader** — `effect_temporal.frag`; `familyId=0`; `packTemporalUniforms` + frame ring (`u_history`)
 
 ---
 
@@ -2298,12 +2307,14 @@ Regenerieren: `python tools/generate_filter_param_review.py`
 
 | Key | Label | Typ | Bereich | Default |
 |-----|-------|-----|---------|---------|
+| `frames_either_side` | Frames Either Side | Float | 0–8 | 2 |
+| `luma_threshold` | Luma Threshold | Percent | 0.0–1.0 | 0.5 |
+| `chroma_threshold` | Chroma Threshold | Percent | 0.0–1.0 | 0.5 |
+| `input_alpha` | Input Alpha | Enum | Ignore / Use in Compositing | Ignore |
+| `use_alpha` | Use Alpha | Bool | — | true |
 | `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
 
-**Shader** — `effect_temporal.frag`; `familyId=1`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
+**Shader** — `effect_temporal.frag`; `familyId=1`; `packTemporalUniforms` + frame ring
 
 ---
 
@@ -2311,67 +2322,49 @@ Regenerieren: `python tools/generate_filter_param_review.py`
 
 | Key | Label | Typ | Bereich | Default |
 |-----|-------|-----|---------|---------|
+| `frame_hold` | Frame Hold | Float | 1–24 | 2 |
+| `input_alpha` | Input Alpha | Enum | Ignore / Use in Compositing | Ignore |
+| `use_alpha` | Use Alpha | Bool | — | true |
 | `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
 
-**Shader** — `effect_temporal.frag`; `familyId=2`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
+**Shader** — `effect_temporal.frag`; `familyId=2`; `packTemporalUniforms` + frame ring (push on hold boundary)
+
+---
+
+### Motion Blur (`motion_blur`)
+
+| Key | Label | Typ | Bereich | Default |
+|-----|-------|-----|---------|---------|
+| `motion_est_type` | Motion Est. Type | Enum | Better / Faster | Better |
+| `motion_range` | Motion Range | Percent | 0.0–1.0 | 0.5 |
+| `motion_blur` | Motion Blur | Percent | 0.0–1.0 | 0.5 |
+| `blur_direction` | Blur Direction | Enum | Both / Previous / Next | Both |
+| `granularity` | Granularity | Percent | 0.0–1.0 | 0.5 |
+| `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
+
+**Shader** — `effect_temporal.frag`; `familyId=3`; flow **approximation** (frame difference, not Resolve optical flow)
 
 ---
 
 
 ## Resolve FX Texture
 
-### 193/221 — Analog Damage (`analog_damage`)
+*(Live catalog — see `FilterParamSchema.cpp` for full parameter tables.)*
 
-| Key | Label | Typ | Bereich | Default |
-|-----|-------|-----|---------|---------|
-| `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
+| typeId | Shader | `familyId` | Packer |
+|--------|--------|------------|--------|
+| `jpeg_damage` | `effect_texture.frag` | 0 | `packTextureUniforms` — macroblock quantize |
+| `texture_pop` | `effect_texture.frag` | 1 | multi-band soften/sharpen + tonal range |
+| `film_damage` | `effect_texture.frag` | 2 | blur/shift, vignette, dirt, 5× scratch |
+| `analog_damage` | `effect_texture.frag` | 3 | scan/noise/CRT/VHS pipeline + presets |
 
-**Shader** — `effect_stylize.frag`; `familyId=29`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
+**jpeg_damage:** `quality`, `resolution`, `block_aspect_ratio`, `frequency_scale`, `scale_component`, `blend`
 
----
+**texture_pop:** `mode`, `details`, `rough`…`tiny`, `strength`, `shadows`, `midtones`, `highlights`, `blend`
 
-### 194/221 — Film Damage (`film_damage`)
+**film_damage:** `film_blur`, `temp_shift`, `tint_shift`, vignette + dirt + `scratch1`…`scratch5` groups, `blend`
 
-| Key | Label | Typ | Bereich | Default |
-|-----|-------|-----|---------|---------|
-| `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
-
-**Shader** — `effect_stylize.frag`; `familyId=30`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
-
----
-
-### 195/221 — JPEG Damage (`jpeg_damage`)
-
-| Key | Label | Typ | Bereich | Default |
-|-----|-------|-----|---------|---------|
-| `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
-
-**Shader** — `effect_stylize.frag`; `familyId=31`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
-
----
-
-### 196/221 — Texture Pop (`texture_pop`)
-
-| Key | Label | Typ | Bereich | Default |
-|-----|-------|-----|---------|---------|
-| `blend` | Blend | Percent | 0.0–1.0 | 1.0 |
-| `strength` | Strength | Percent | 0.0–1.0 | 0.5 |
-| `detail` | Detail | Float | 0.0–1.0 | 0.5 |
-| `size` | Size | Float | 0.0–1.0 | 0.5 |
-
-**Shader** — `effect_stylize.frag`; `familyId=32`; **Resolve-Stub** — `packGenericParams` (blend/strength/detail/size), früher Return
+**analog_damage:** `preset`, Telecine/Broadcast/Color/Scan/Scan Lines/TV/VHS sections per Resolve handbook, `blend`
 
 ---
 

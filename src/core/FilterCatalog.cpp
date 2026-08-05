@@ -8,7 +8,7 @@ namespace {
 QVector<FilterCatalogEntry> buildCatalog()
 {
     QVector<FilterCatalogEntry> e;
-    e.reserve(30);
+    e.reserve(54);
 
     auto add = [&](const char* cat, const char* id, const char* name) {
         e.append({ QString::fromLatin1(id), QString::fromLatin1(cat), QString::fromLatin1(name) });
@@ -53,6 +53,33 @@ QVector<FilterCatalogEntry> buildCatalog()
     add("Light FX", "lens_flare", "Lens Flare");
     add("Light FX", "lens_reflections", "Lens Reflections");
     add("Light FX", "light_rays", "Light Rays");
+
+    // Resolve FX Stylize (Resolve 21)
+    add("Stylize", "abstraction", "Abstraction");
+    add("Stylize", "blanking_fill", "Blanking Fill");
+    add("Stylize", "drop_shadow", "Drop Shadow");
+    add("Stylize", "edge_detect", "Edge Detect");
+    add("Stylize", "emboss", "Emboss");
+    add("Stylize", "mirrors", "Mirrors");
+    add("Stylize", "pencil_sketch", "Pencil Sketch");
+    add("Stylize", "prism_blur", "Prism Blur");
+    add("Stylize", "scanlines", "Scanlines");
+    add("Stylize", "stylize", "Stylize");
+    add("Stylize", "tilt_shift", "Tilt-Shift Blur");
+    add("Stylize", "vignette", "Vignette");
+    add("Stylize", "watercolor", "Watercolor");
+
+    // Resolve FX Temporal (Resolve 21 handbook)
+    add("Resolve FX Temporal", "motion_trails", "Motion Trails");
+    add("Resolve FX Temporal", "smear", "Smear");
+    add("Resolve FX Temporal", "stop_motion", "Stop Motion");
+    add("Resolve FX Temporal", "motion_blur", "Motion Blur");
+
+    // Resolve FX Texture (Resolve 21 handbook)
+    add("Resolve FX Texture", "analog_damage", "Analog Damage");
+    add("Resolve FX Texture", "film_damage", "Film Damage");
+    add("Resolve FX Texture", "jpeg_damage", "JPEG Damage");
+    add("Resolve FX Texture", "texture_pop", "Texture Pop");
 
     return e;
 }

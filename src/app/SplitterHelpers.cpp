@@ -9,20 +9,30 @@ namespace {
 
 constexpr int kMinSplitterHandleWidth = 5;
 
+Qt::CursorShape safeResizeCursorFor(Qt::Orientation orientation)
+{
+    // Stock Win32 cursors (IDC_SIZEWE / IDC_SIZENS) — safe on Qt 6.10 Windows debug.
+    // Do NOT use Qt::SplitHCursor / Qt::SplitVCursor (PNG → qt_createIconMask assert).
+    return orientation == Qt::Horizontal ? Qt::SizeHorCursor : Qt::SizeVerCursor;
+}
+
 } // namespace
 
 void PvjSplitterHandle::applySafeCursor()
 {
 #ifndef QT_NO_CURSOR
-    unsetCursor();
+    const Qt::CursorShape want = safeResizeCursorFor(orientation());
+    if (testAttribute(Qt::WA_SetCursor) && cursor().shape() == want) {
+        return;
+    }
+    setCursor(want);
 #endif
 }
 
 void PvjSplitterHandle::resizeEvent(QResizeEvent* event)
 {
-    QSplitterHandle::resizeEvent(event);
-    // QSplitterHandle::resizeEvent may call setMask() when handleWidth < 5 (tiny grab area).
-    // On Qt 6.10 Windows debug builds that can interact badly with mono bitmap conversion.
+    // Skip QSplitterHandle::resizeEvent: it may call setMask() when handleWidth < 5.
+    QWidget::resizeEvent(event);
     clearMask();
     setAttribute(Qt::WA_MouseNoMask, false);
     setContentsMargins(0, 0, 0, 0);
@@ -45,8 +55,8 @@ void PvjSplitterHandle::changeEvent(QEvent* event)
 
 void PvjSplitterHandle::enterEvent(QEnterEvent* event)
 {
-    QSplitterHandle::enterEvent(event);
     applySafeCursor();
+    QSplitterHandle::enterEvent(event);
 }
 
 void PvjSplitterHandle::mouseMoveEvent(QMouseEvent* event)
@@ -101,9 +111,10 @@ void PvjSplitter::childEvent(QChildEvent* e)
 void PvjSplitter::applySafeCursorToAllHandles()
 {
 #ifndef QT_NO_CURSOR
+    const Qt::CursorShape want = safeResizeCursorFor(orientation());
     for (int i = 0; i < count(); ++i) {
         if (QSplitterHandle* h = handle(i)) {
-            h->unsetCursor();
+            h->setCursor(want);
             h->clearMask();
         }
     }

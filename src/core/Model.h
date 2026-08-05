@@ -136,6 +136,8 @@ enum class InputType {
     None,
     MidiNote,
     MidiCC,
+    /// Polyphonic key pressure (MIDI status 0xA0); `number` is the note.
+    MidiAftertouch,
     Key,
     Osc,
 };
@@ -209,6 +211,8 @@ enum class FeedbackInputMode : int {
 
 inline constexpr int kFeedbackRingCapacity = 32;
 inline constexpr int kFeedbackMaxFrameDelay = kFeedbackRingCapacity - 2;
+/// All ring slots are primed when transparency > 0 (full delay pipeline warm-up).
+inline constexpr int kFeedbackRingPrimeCount = kFeedbackRingCapacity;
 inline constexpr double kFeedbackZoomMin = -0.2;
 inline constexpr double kFeedbackZoomMax = 0.2;
 

@@ -4,6 +4,7 @@
 
 #include "core/Model.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QKeyCombination>
 #include <QKeySequence>
@@ -86,7 +87,11 @@ private:
     void applyLearnCellTrigger(const InputEvent& ev);
     void applyLearnPropertyCc(const InputEvent& ev);
     void applyLearnPropertyNote(const InputEvent& ev);
+    void applyLearnPropertyAftertouch(int channel, int note, int pressure);
     void applyLearnBankNav(const InputEvent& ev);
+    void tryBeginLearnNotePending(const InputEvent& ev);
+    void onLearnNoteReleased(int channel, int note);
+    void clearLearnPendingNote();
     void emitLearnTypeMismatch(const InputEvent& ev, const QString& expected);
     void removeConflictingTriggers(const core::TriggerMapping& except);
     void removeConflictingPropertyMapping(int bankSetIndex, int bankIndex, int cellIndex,
@@ -121,6 +126,12 @@ private:
     QHash<quint32, bool> m_midiNoteDown;
 
     unsigned char m_runningStatus = 0;
+
+    /// During property CC/note learn: wait for hold or aftertouch before committing.
+    bool          m_learnPendingNoteActive = false;
+    int           m_learnPendingChannel    = 0;
+    int           m_learnPendingNumber     = 0;
+    QElapsedTimer m_learnPendingTimer;
 };
 
 } // namespace pvj::input

@@ -7,25 +7,22 @@
     <Output/>
   </Settings>
   <MediaLibrary>
-    <Item id="3abfcf28-ce24-4dc9-876d-b891be669d94" path="D:/vpool1080dvx/autobrueckenachts.mov" name="autobrueckenachts.mov"/>
+    <Item id="98f1db13-2387-4def-b037-41a6574a0ff6" path="D:/komell/vpool1080/babyberuehrtkamera.mp4" name="babyberuehrtkamera.mp4"/>
+    <Item id="69ede367-27f7-4e48-a77f-99063e99f4c7" path="D:/komell/vpool1080/stricknah.mp4" name="stricknah.mp4"/>
   </MediaLibrary>
   <BankSet type="A">
     <Bank index="0" name="Bank 1">
       <Cell index="0">
-        <Visual type="media" mediaId="3abfcf28-ce24-4dc9-876d-b891be669d94"/>
-        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="5" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="true" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Visual type="media" mediaId="98f1db13-2387-4def-b037-41a6574a0ff6"/>
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
         </Props>
       </Cell>
       <Cell index="1">
-        <Visual type="generator" generator="internalFeedback"/>
-        <Props priority="0" transparency="0.945" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Visual type="media" mediaId="69ede367-27f7-4e48-a77f-99063e99f4c7"/>
+        <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="5" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
-          <Feedback loopRetention="1" liveInject="1" inSaturation="1.622" inBrightness="-0.656" inContrast="1.388" saturation="1" brightness="0" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0" inputMode="sceneLoopback" wrapMode="mirrorOnce"/>
         </Props>
-        <FilterChain>
-          <FilterNode id="7b1cee7e-108e-43bb-91d8-1261fcda6562" type="feedback_marker"/>
-        </FilterChain>
       </Cell>
       <Cell index="2">
         <Visual type="empty"/>
@@ -232,28 +229,10 @@
         </Props>
       </Cell>
       <Cell index="36">
-        <Visual type="generator" generator="internalFeedback"/>
+        <Visual type="empty"/>
         <Props priority="0" transparency="1" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
-          <Feedback loopRetention="0.874" liveInject="0.328" saturation="1" brightness="0" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0" inputMode="sceneLoopback" wrapMode="mirrorOnce"/>
         </Props>
-        <FilterChain>
-          <FilterNode id="6bf406fe-ed5e-4d94-9b50-1678c8ac1920" type="pencil_sketch">
-            <Param name="color_sketch" value="0"/>
-            <Param name="stroke_thickness" value="0.5"/>
-            <Param name="stroke_threshold" value="0.5"/>
-            <Param name="stroke_length" value="0.5"/>
-            <Param name="tone_levels" value="6"/>
-            <Param name="tone_shadows" value="0.5"/>
-            <Param name="tone_midtones" value="0.5"/>
-            <Param name="tone_highlights" value="0.5"/>
-            <Param name="texture_amount" value="0.3"/>
-            <Param name="texture_scale" value="0.5"/>
-            <Param name="auto_animate" value="0"/>
-            <Param name="blend" value="1"/>
-          </FilterNode>
-          <FilterNode id="353741cb-67ff-47bb-b08a-3eafa9382a9a" type="feedback_marker"/>
-        </FilterChain>
       </Cell>
       <Cell index="37">
         <Visual type="empty"/>
@@ -18593,5 +18572,8 @@
       </Cell>
     </Bank>
   </BankSet>
-  <TriggerMappings/>
+  <TriggerMappings>
+    <Trigger input="midiNote" channel="0" number="28" target="cell" bankSetIndex="0" bankIndex="-1" cellIndex="0"/>
+    <Trigger input="midiNote" channel="0" number="31" target="cell" bankSetIndex="0" bankIndex="-1" cellIndex="1"/>
+  </TriggerMappings>
 </PerformanieVJ>

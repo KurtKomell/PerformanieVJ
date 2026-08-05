@@ -255,6 +255,7 @@ QString toString(InputType i)
     case InputType::None:     return QStringLiteral("none");
     case InputType::MidiNote: return QStringLiteral("midiNote");
     case InputType::MidiCC:   return QStringLiteral("midiCC");
+    case InputType::MidiAftertouch: return QStringLiteral("midiAftertouch");
     case InputType::Key:      return QStringLiteral("key");
     case InputType::Osc:      return QStringLiteral("osc");
     }
@@ -267,6 +268,7 @@ InputType inputTypeFromString(const QString& s, InputType fallback)
     if (k == QLatin1String("none"))     return InputType::None;
     if (k == QLatin1String("midinote")) return InputType::MidiNote;
     if (k == QLatin1String("midicc"))   return InputType::MidiCC;
+    if (k == QLatin1String("midiaftertouch")) return InputType::MidiAftertouch;
     if (k == QLatin1String("key"))      return InputType::Key;
     if (k == QLatin1String("osc"))      return InputType::Osc;
     return fallback;
