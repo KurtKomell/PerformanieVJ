@@ -1,7 +1,10 @@
 #include "MidiInput.h"
 
 #include <QDebug>
+#include <QHash>
 #include <QMetaObject>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSettings>
 #include <QtGlobal>
 
@@ -21,9 +24,34 @@
 
 namespace pvj::input {
 
+struct MidiInput::Impl {
+    struct OpenPort {
+        std::unique_ptr<RtMidiIn> in;
+        QString                   name;
+        int                       index = -1;
+    };
+
+    std::unique_ptr<RtMidiIn>  enumerator;
+    std::vector<OpenPort>      open;
+
+    // RT callback → UI: keep only the latest CC per channel/controller so a busy UI
+    // thread does not process a long backlog of intermediate fader values.
+    QMutex                     pendingMutex;
+    QHash<quint32, QByteArray> pendingCc;
+    QList<QByteArray>          pendingOther;
+    bool                       flushScheduled = false;
+};
+
 namespace {
 
-void midiCallback(double /*stamp*/, std::vector<unsigned char>* message, void* userData)
+quint32 ccMergeKey(int status, int ccNumber)
+{
+    return (quint32(status & 0xFF) << 8) | quint32(ccNumber & 0x7F);
+}
+
+} // namespace
+
+void MidiInput::rtMidiCallback(double /*stamp*/, std::vector<unsigned char>* message, void* userData)
 {
     auto* self = static_cast<MidiInput*>(userData);
     if (!message || message->empty() || !self) {
@@ -34,24 +62,76 @@ void midiCallback(double /*stamp*/, std::vector<unsigned char>* message, void* u
     for (size_t i = 0; i < message->size(); ++i) {
         bytes[static_cast<int>(i)] = static_cast<char>((*message)[i]);
     }
-    QMetaObject::invokeMethod(
-        self,
-        [self, bytes]() { emit self->messageReceived(bytes); },
-        Qt::QueuedConnection);
+    self->enqueueMidiBytes(bytes);
 }
 
-} // namespace
+void MidiInput::enqueueMidiBytes(const QByteArray& bytes)
+{
+    if (bytes.isEmpty() || !m_impl) {
+        return;
+    }
+    bool needSchedule = false;
+    {
+        QMutexLocker lock(&m_impl->pendingMutex);
+        const unsigned char status = static_cast<unsigned char>(bytes[0]);
+        const unsigned char high = status & 0xF0;
+        if (high == 0xB0 && bytes.size() >= 3) {
+            const quint32 key = ccMergeKey(status, int(uchar(bytes[1])));
+            m_impl->pendingCc.insert(key, bytes);
+        } else {
+            m_impl->pendingOther.append(bytes);
+        }
+        if (!m_impl->flushScheduled) {
+            m_impl->flushScheduled = true;
+            needSchedule = true;
+        }
+    }
+    if (needSchedule) {
+        QMetaObject::invokeMethod(
+            this,
+            [this]() { flushPendingMidi(); },
+            Qt::QueuedConnection);
+    }
+}
 
-struct MidiInput::Impl {
-    struct OpenPort {
-        std::unique_ptr<RtMidiIn> in;
-        QString                   name;
-        int                       index = -1;
-    };
+void MidiInput::flushPendingMidi()
+{
+    if (!m_impl) {
+        return;
+    }
+    QHash<quint32, QByteArray> ccs;
+    QList<QByteArray> other;
+    {
+        QMutexLocker lock(&m_impl->pendingMutex);
+        ccs.swap(m_impl->pendingCc);
+        other.swap(m_impl->pendingOther);
+    }
 
-    std::unique_ptr<RtMidiIn>  enumerator;
-    std::vector<OpenPort>      open;
-};
+    for (const QByteArray& bytes : other) {
+        emit messageReceived(bytes);
+    }
+    for (auto it = ccs.constBegin(); it != ccs.constEnd(); ++it) {
+        emit messageReceived(it.value());
+    }
+
+    bool needSchedule = false;
+    {
+        QMutexLocker lock(&m_impl->pendingMutex);
+        if (m_impl->pendingCc.isEmpty() && m_impl->pendingOther.isEmpty()) {
+            m_impl->flushScheduled = false;
+        } else {
+            // More MIDI arrived while we were emitting — flush again.
+            m_impl->flushScheduled = true;
+            needSchedule = true;
+        }
+    }
+    if (needSchedule) {
+        QMetaObject::invokeMethod(
+            this,
+            [this]() { flushPendingMidi(); },
+            Qt::QueuedConnection);
+    }
+}
 
 MidiInput::MidiInput(QObject* parent)
     : QObject(parent)
@@ -202,7 +282,7 @@ bool MidiInput::openPortAtIndex(int index, const QString& expectedName)
     Impl::OpenPort entry;
     entry.in = std::make_unique<RtMidiIn>(RtMidi::UNSPECIFIED, "PerformanieVJ");
     entry.in->ignoreTypes(false, false, false);
-    entry.in->setCallback(&midiCallback, this);
+    entry.in->setCallback(&MidiInput::rtMidiCallback, this);
     try {
         entry.in->openPort(static_cast<unsigned int>(index));
         entry.name  = QString::fromStdString(entry.in->getPortName());

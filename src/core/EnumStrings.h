@@ -50,7 +50,7 @@ PropertyButtonMode propertyButtonModeFromString(const QString& s,
 // FeedbackInputMode
 QString toString(FeedbackInputMode m);
 FeedbackInputMode feedbackInputModeFromString(const QString& s,
-                                              FeedbackInputMode fallback = FeedbackInputMode::SceneLoopback);
+                                              FeedbackInputMode fallback = FeedbackInputMode::StackComposite);
 
 // WrapMode
 QString toString(WrapMode m);

@@ -205,8 +205,8 @@ struct PictureParams {
 /// Source image for the feedback accumulation pass.
 enum class FeedbackInputMode : int {
     BelowOnly = 0,       // partial mix below F only; key holes masked in mixer
-    StackComposite = 1,  // below + above partial mixes combined (default)
-    SceneLoopback = 2,   // previous frame mixer output
+    StackComposite = 1,  // below (no key) + above (keyed); default
+    SceneLoopback = 2,   // previous full mixer frame (legacy Spout Out→In)
 };
 
 inline constexpr int kFeedbackRingCapacity = 32;
@@ -217,25 +217,23 @@ inline constexpr double kFeedbackZoomMin = -0.2;
 inline constexpr double kFeedbackZoomMax = 0.2;
 
 struct FeedbackParams {
-    double loopRetention = 1.0;  // 0..1; lit history never decays (see layer_feedback.frag)
-    double liveInject    = 0.04; // 0..1 fresh source per frame
-    /// Pre-feedback source grade (applied to live inject input, not history ring).
+    /// Input grade (applied to stack inject before path grade).
     double inSaturation  = 1.0;   // 0..2
     double inBrightness  = 0.0;   // -1..1
     double inContrast    = 1.0;   // 0..2
-    double inHueShift    = 0.0;   // -1..1
+    double inHueShift    = 0.0;   // 0..1 hue rotate on inject (MIDI/CC maps 0..1)
     double inGamma       = 1.0;   // 0.1..4
-    /// History-ring grade (applied each frame to warped history texture).
-    double saturation  = 1.0;   // 0..2 history saturation
-    double brightness  = 0.0;   // -1..1 history brightness
-    double contrast    = 1.0;   // 0..2 history contrast
-    double hueShift    = 0.0;   // -1..1 hue rotate per frame
-    double gamma       = 1.0;   // 0.1..4 history gamma
-    double rotationDeg = 0.0;   // 0..360 history rotation (applied on read, live)
+    /// Feedback path grade (applied after input grade).
+    double saturation  = 1.0;   // 0..2
+    double brightness  = 0.0;   // -1..1
+    double contrast    = 1.0;   // 0..2
+    double hueShift    = 0.0;   // 0..1 hue rotate (MIDI/CC maps 0..1)
+    double gamma       = 1.0;   // 0.1..4
+    double rotationDeg = 0.0;   // 0..360 path rotation (applied on read, live)
     double zoom        = 0.0;   // kFeedbackZoomMin..kFeedbackZoomMax (+ = zoom out, live on read)
     int frameDelay     = 0;     // 0..kFeedbackMaxFrameDelay frames back for history read
     FeedbackInputMode inputMode = FeedbackInputMode::StackComposite;
-    WrapMode wrapMode = WrapMode::Black; // history UV border (applied on read, live)
+    WrapMode wrapMode = WrapMode::Black; // UV border (applied on read, live)
 };
 
 struct CellProps {

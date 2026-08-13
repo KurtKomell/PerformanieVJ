@@ -1,5 +1,6 @@
 #include "Vj2Importer.h"
 
+#include "BankOps.h"
 #include "EnumStrings.h"
 #include "FilterEffectIds.h"
 #include "FilterParamSchema.h"
@@ -7,6 +8,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QUuid>
 #include <QXmlStreamReader>
 
@@ -16,6 +18,7 @@ namespace pvj::core {
 
 namespace {
 
+void readTriggerMappings(QXmlStreamReader& r, QList<TriggerMapping>& out, QStringList& warnings);
 QString normalizePath(const QString& path)
 {
     QString out = path;
@@ -200,8 +203,11 @@ const QHash<QString, QString>& grandVjCellTargetMap()
         add("PLAYMODE", "playMode");
         add("PAUS", "clipPaused");
         add("PAUSED", "clipPaused");
-        add("FBLR", "feedbackLoopRetention");
-        add("FBLI", "feedbackLiveInject");
+        add("FBIS", "feedbackInSaturation");
+        add("FBIB", "feedbackInBrightness");
+        add("FBIC", "feedbackInContrast");
+        add("FBIH", "feedbackInHueShift");
+        add("FBIG", "feedbackInGamma");
         add("FBSA", "feedbackSaturation");
         add("FBBR", "feedbackBrightness");
         add("FBCO", "feedbackContrast");
@@ -304,7 +310,89 @@ int grandVjMidiChannelToZeroBased(int grandVjChannel)
     return qBound(0, grandVjChannel, 15);
 }
 
-bool parseGrandVjChannel(const QString& channel, InputType& input, int& midiChannel, int& number)
+/// Map GrandVJ keyboard tokens (`F1`, `A`, `#1`, `SFT`, …) to Qt portable key-sequence text.
+QString grandVjKeyTokenToPortableText(QString token)
+{
+    token = token.trimmed();
+    if (token.isEmpty()) {
+        return {};
+    }
+
+    // Same physical keys under different GrandVJ export spellings.
+    if (token.compare(QLatin1String("SFT"), Qt::CaseInsensitive) == 0
+        || token == QLatin1String("#1")) {
+        return QStringLiteral("Shift");
+    }
+    if (token == QLatin1String("#2")) {
+        return QStringLiteral("\\");
+    }
+
+    if (token.size() >= 2
+        && (token[0] == QLatin1Char('F') || token[0] == QLatin1Char('f'))) {
+        bool ok = false;
+        const int n = QStringView{token}.mid(1).toInt(&ok);
+        if (ok && n >= 1 && n <= 24) {
+            return QStringLiteral("F%1").arg(n);
+        }
+    }
+
+    static const QHash<QString, QString> named = {
+        {QStringLiteral("SPACE"), QStringLiteral("Space")},
+        {QStringLiteral("SPC"), QStringLiteral("Space")},
+        {QStringLiteral("ESC"), QStringLiteral("Esc")},
+        {QStringLiteral("ENTER"), QStringLiteral("Return")},
+        {QStringLiteral("RETURN"), QStringLiteral("Return")},
+        {QStringLiteral("TAB"), QStringLiteral("Tab")},
+        {QStringLiteral("BKSP"), QStringLiteral("Backspace")},
+        {QStringLiteral("BACKSPACE"), QStringLiteral("Backspace")},
+        {QStringLiteral("DEL"), QStringLiteral("Delete")},
+        {QStringLiteral("DELETE"), QStringLiteral("Delete")},
+        {QStringLiteral("INS"), QStringLiteral("Insert")},
+        {QStringLiteral("INSERT"), QStringLiteral("Insert")},
+        {QStringLiteral("HOME"), QStringLiteral("Home")},
+        {QStringLiteral("END"), QStringLiteral("End")},
+        {QStringLiteral("PGUP"), QStringLiteral("PgUp")},
+        {QStringLiteral("PGDN"), QStringLiteral("PgDown")},
+        {QStringLiteral("LEFT"), QStringLiteral("Left")},
+        {QStringLiteral("RIGHT"), QStringLiteral("Right")},
+        {QStringLiteral("UP"), QStringLiteral("Up")},
+        {QStringLiteral("DOWN"), QStringLiteral("Down")},
+        {QStringLiteral("CTRL"), QStringLiteral("Ctrl")},
+        {QStringLiteral("ALT"), QStringLiteral("Alt")},
+        {QStringLiteral("SHIFT"), QStringLiteral("Shift")},
+    };
+    const auto namedIt = named.constFind(token.toUpper());
+    if (namedIt != named.cend()) {
+        return *namedIt;
+    }
+
+    if (token.size() == 1) {
+        const QChar c = token.at(0);
+        if (c.isLetter()) {
+            return QString(c.toUpper());
+        }
+        return token;
+    }
+
+    return token;
+}
+
+QString grandVjKeyboardKeyText(const QString& channel)
+{
+    const QStringList parts = channel.split(QLatin1Char(':'), Qt::KeepEmptyParts);
+    if (parts.size() < 3) {
+        return {};
+    }
+    const QString kind = parts[0].toLower();
+    if (kind != QLatin1String("keyboard") && kind != QLatin1String("key")) {
+        return {};
+    }
+    // keyboard:<device>:<keyToken> — key token may theoretically contain ':'
+    return grandVjKeyTokenToPortableText(parts.mid(2).join(QLatin1Char(':')));
+}
+
+bool parseGrandVjChannel(const QString& channel, InputType& input, int& midiChannel, int& number,
+                         QString* keyText = nullptr)
 {
     const QStringList parts = channel.split(QLatin1Char(':'), Qt::SkipEmptyParts);
     if (parts.isEmpty()) {
@@ -312,7 +400,7 @@ bool parseGrandVjChannel(const QString& channel, InputType& input, int& midiChan
     }
     const QString kind = parts[0].toLower();
     if (kind == QLatin1String("midi")) {
-        // midi:device:channel:cc:number  (GrandVJ 2.7)
+        // midi:device:channel:cc:number  (GrandVJ 2.7) — device may be "all"
         if (parts.size() >= 5) {
             const QString msg = parts[3].toLower();
             if (msg == QLatin1String("cc")) {
@@ -347,9 +435,17 @@ bool parseGrandVjChannel(const QString& channel, InputType& input, int& midiChan
         return false;
     }
     if (kind == QLatin1String("keyboard") || kind == QLatin1String("key")) {
+        // keyboard:0:F1 — third field is a key name, not an integer
+        const QString text = grandVjKeyboardKeyText(channel);
+        if (text.isEmpty()) {
+            return false;
+        }
         input = InputType::Key;
         midiChannel = parts.size() > 1 ? parts[1].toInt() : 0;
-        number = parts.size() > 2 ? parts[2].toInt() : 0;
+        number = 0;
+        if (keyText) {
+            *keyText = text;
+        }
         return true;
     }
     if (kind == QLatin1String("osc")) {
@@ -744,7 +840,17 @@ Bank readBank(QXmlStreamReader& r, int bankIndex, LibMap& libMap, QList<MediaIte
                 }
             }
         } else if (r.name() == QLatin1String("NAME")) {
-            const QString n = r.attributes().value(QLatin1String("VALUE")).toString();
+            // GrandVJ uses <NAME name="Babel2"/>; some exports use VALUE.
+            QString n = r.attributes().value(QLatin1String("name")).toString();
+            if (n.isEmpty()) {
+                n = r.attributes().value(QLatin1String("NAME")).toString();
+            }
+            if (n.isEmpty()) {
+                n = r.attributes().value(QLatin1String("VALUE")).toString();
+            }
+            if (n.isEmpty()) {
+                n = gvj27ValueAttr(r.attributes());
+            }
             if (!n.isEmpty()) {
                 bank.name = n;
             }
@@ -757,7 +863,8 @@ Bank readBank(QXmlStreamReader& r, int bankIndex, LibMap& libMap, QList<MediaIte
 }
 
 BankSet readBankSet(QXmlStreamReader& r, LibMap& libMap, QList<MediaItem>& library,
-                    QStringList& warnings, int cellsPerBank)
+                    QStringList& warnings, int cellsPerBank, int bankSetIndex,
+                    QList<TriggerMapping>& triggerMappings)
 {
     BankSet set;
     const int typeValue = r.attributes().value(QLatin1String("TYPE")).toInt();
@@ -767,6 +874,17 @@ BankSet readBankSet(QXmlStreamReader& r, LibMap& libMap, QList<MediaItem>& libra
         if (r.name() == QLatin1String("BANK")) {
             set.banks.append(readBank(r, bankIndex, libMap, library, warnings, cellsPerBank));
             ++bankIndex;
+        } else if (r.name() == QLatin1String("TRIGGERMAPPINGS")) {
+            // GrandVJ nests cell keyboard/MIDI/OSC triggers inside each BANKSET.
+            QList<TriggerMapping> local;
+            readTriggerMappings(r, local, warnings);
+            for (TriggerMapping& t : local) {
+                t.bankSetIndex = bankSetIndex;
+                if (t.target == TriggerTarget::Cell) {
+                    t.bankIndex = kBankIndexAllBanks;
+                }
+                triggerMappings.append(t);
+            }
         } else {
             r.skipCurrentElement();
         }
@@ -793,21 +911,85 @@ void readMediaLibrary(QXmlStreamReader& r, LibMap& libMap, QList<MediaItem>& lib
 void readDataMatrix(QXmlStreamReader& r, Project& project)
 {
     const auto a = r.attributes();
-    int cols = a.value(QLatin1String("MATRIXWIDTH")).toInt();
-    int rows = a.value(QLatin1String("MATRIXHEIGHT")).toInt();
-    if (cols <= 0) {
-        cols = a.value(QLatin1String("WIDTH")).toInt();
+    int cols = 0;
+    int rows = 0;
+
+    // Prefer GrandVJ matrix cell-grid attributes (not stage pixel size).
+    for (const QXmlStreamAttribute& attr : a) {
+        const QString name = attr.qualifiedName().toString().toUpper();
+        const int value = attr.value().toInt();
+        if (value <= 0) {
+            continue;
+        }
+        if (name == QLatin1String("MATRIXWIDTH") || name == QLatin1String("COLS")
+            || name == QLatin1String("COLUMNS") || name == QLatin1String("GRIDCOLS")) {
+            cols = value;
+        } else if (name == QLatin1String("MATRIXHEIGHT") || name == QLatin1String("ROWS")
+                   || name == QLatin1String("GRIDROWS")) {
+            rows = value;
+        }
     }
-    if (rows <= 0) {
-        rows = a.value(QLatin1String("HEIGHT")).toInt();
+
+    // Nested GrandVJ 2.7 style: <MATRIXWIDTH VALUE="12"/> etc.
+    while (r.readNextStartElement()) {
+        const QString tag = r.name().toString().toUpper();
+        const int value = gvj27ValueAttr(r.attributes()).toInt();
+        if (value > 0) {
+            if (tag == QLatin1String("MATRIXWIDTH") || tag == QLatin1String("COLS")
+                || tag == QLatin1String("COLUMNS") || tag == QLatin1String("GRIDCOLS")) {
+                cols = value;
+            } else if (tag == QLatin1String("MATRIXHEIGHT") || tag == QLatin1String("ROWS")
+                       || tag == QLatin1String("GRIDROWS")) {
+                rows = value;
+            }
+        }
+        r.skipCurrentElement();
     }
+
     if (cols > 0) {
         project.settings.matrix.gridCols = cols;
     }
     if (rows > 0) {
         project.settings.matrix.gridRows = rows;
     }
-    r.skipCurrentElement();
+}
+
+/// If DATA omitted the grid size, derive rows/cols from the densest bank.
+void inferGridDimensionsFromBanks(Project& project)
+{
+    if (project.bankSets.isEmpty()) {
+        return;
+    }
+    int maxCells = 0;
+    for (const Bank& bank : project.bankSets[0].banks) {
+        maxCells = qMax(maxCells, bank.cells.size());
+    }
+    if (maxCells <= 0) {
+        return;
+    }
+
+    int cols = project.settings.matrix.gridCols;
+    int rows = project.settings.matrix.gridRows;
+    if (cols <= 0) {
+        cols = 12;
+    }
+    if (rows <= 0) {
+        rows = 4;
+    }
+
+    // Grow so every imported cell index fits the grid.
+    if (maxCells > rows * cols) {
+        // Prefer keeping column count (GrandVJ MATRIXWIDTH); add rows as needed.
+        rows = (maxCells + cols - 1) / cols;
+        // If that exceeds the usual max, try a nearer rectangular fit.
+        if (rows > 16) {
+            cols = qMin(16, maxCells);
+            rows = (maxCells + cols - 1) / cols;
+            cols = (maxCells + rows - 1) / rows;
+        }
+        project.settings.matrix.gridCols = cols;
+        project.settings.matrix.gridRows = rows;
+    }
 }
 
 void readTriggerMappings(QXmlStreamReader& r, QList<TriggerMapping>& out, QStringList& warnings)
@@ -856,15 +1038,16 @@ void readTriggerMappings(QXmlStreamReader& r, QList<TriggerMapping>& out, QStrin
             TriggerMapping t;
             t.target = TriggerTarget::Cell;
             t.bankSetIndex = 0;
-            t.bankIndex = 0;
+            t.bankIndex = kBankIndexAllBanks;
             t.cellIndex = a.value(QLatin1String("CELLID")).toInt();
 
+            const QString mapping = a.value(QLatin1String("MAPPING")).toString();
             InputType parsed = InputType::None;
             int ch = 0;
             int num = 0;
-            if (!parseGrandVjChannel(a.value(QLatin1String("MAPPING")).toString(), parsed, ch, num)) {
-                warnings.append(QStringLiteral("Unparsed cell trigger \"%1\"")
-                                    .arg(a.value(QLatin1String("MAPPING")).toString()));
+            QString keyText;
+            if (!parseGrandVjChannel(mapping, parsed, ch, num, &keyText)) {
+                warnings.append(QStringLiteral("Unparsed cell trigger \"%1\"").arg(mapping));
                 r.skipCurrentElement();
                 continue;
             }
@@ -872,7 +1055,12 @@ void readTriggerMappings(QXmlStreamReader& r, QList<TriggerMapping>& out, QStrin
             t.channel = ch;
             t.number = num;
             if (parsed == InputType::Key) {
-                t.keyText = QString::number(num);
+                t.keyText = keyText;
+                if (t.keyText.isEmpty()) {
+                    warnings.append(QStringLiteral("Empty keyboard cell trigger \"%1\"").arg(mapping));
+                    r.skipCurrentElement();
+                    continue;
+                }
             }
             out.append(t);
             r.skipCurrentElement();
@@ -894,8 +1082,10 @@ void processVj2Elements(QXmlStreamReader& r, Project& project, LibMap& libMap, V
         } else if (tag.compare(QLatin1String("BANKSET"), Qt::CaseInsensitive) == 0) {
             const int cellsPerBank = qMax(
                 1, project.settings.matrix.gridRows * project.settings.matrix.gridCols);
-            project.bankSets.append(
-                readBankSet(r, libMap, project.mediaLibrary, res.warnings, cellsPerBank));
+            const int bankSetIndex = project.bankSets.size();
+            project.bankSets.append(readBankSet(r, libMap, project.mediaLibrary, res.warnings,
+                                                cellsPerBank, bankSetIndex,
+                                                project.triggerMappings));
         } else if (tag.compare(QLatin1String("TRIGGERMAPPINGS"), Qt::CaseInsensitive) == 0) {
             readTriggerMappings(r, project.triggerMappings, res.warnings);
         } else if (tag.compare(QLatin1String("MATRIX"), Qt::CaseInsensitive) == 0) {
@@ -978,10 +1168,165 @@ Vj2Importer::Result Vj2Importer::importFile(Project& project, const QString& fil
         res.warnings.append(QStringLiteral("No BANKSET elements found; populated with empty defaults"));
     } else {
         project.ensureSingleBankSet();
+        inferGridDimensionsFromBanks(project);
         project.resizeBanksForGrid(project.settings.matrix.gridRows, project.settings.matrix.gridCols);
     }
     project.normalizeCellSlotTriggers();
 
+    res.ok = true;
+    return res;
+}
+
+namespace {
+
+void remapCellMediaIds(Cell& cell, const QHash<QUuid, QUuid>& mediaMap)
+{
+    if (cell.visual.type != VisualType::Media || cell.visual.mediaId.isNull()) {
+        return;
+    }
+    const auto it = mediaMap.constFind(cell.visual.mediaId);
+    if (it != mediaMap.cend()) {
+        cell.visual.mediaId = it.value();
+    }
+}
+
+QHash<QUuid, QUuid> mergeMediaLibrary(Project& destination, const Project& source)
+{
+    QHash<QUuid, QUuid> mediaMap;
+    QHash<QString, QUuid> pathToId;
+    for (const MediaItem& m : destination.mediaLibrary) {
+        const QString key = QFileInfo(m.path).absoluteFilePath();
+        if (!key.isEmpty()) {
+            pathToId.insert(key, m.id);
+        }
+    }
+
+    for (const MediaItem& m : source.mediaLibrary) {
+        const QString key = QFileInfo(m.path).absoluteFilePath();
+        if (!key.isEmpty()) {
+            const auto pathIt = pathToId.constFind(key);
+            if (pathIt != pathToId.cend()) {
+                mediaMap.insert(m.id, pathIt.value());
+                continue;
+            }
+        }
+
+        MediaItem copy = m;
+        if (!destination.findMedia(copy.id)) {
+            // keep source id when free
+        } else {
+            copy.id = QUuid::createUuid();
+        }
+        mediaMap.insert(m.id, copy.id);
+        if (!key.isEmpty()) {
+            pathToId.insert(key, copy.id);
+        }
+        destination.mediaLibrary.append(copy);
+    }
+    return mediaMap;
+}
+
+Bank makeEmptyBank(int index, int cellsPerBank)
+{
+    Bank bank;
+    bank.index = index;
+    bank.name = QStringLiteral("Bank %1").arg(index + 1);
+    bank.cells.reserve(cellsPerBank);
+    for (int i = 0; i < cellsPerBank; ++i) {
+        Cell c;
+        c.index = i;
+        bank.cells.append(c);
+    }
+    return bank;
+}
+
+} // namespace
+
+Vj2Importer::Result Vj2Importer::mergeFile(Project& destination, const QString& filePath,
+                                           int destinationStartBank, int sourceStartBank)
+{
+    Project imported;
+    Result res = importFile(imported, filePath);
+    if (!res.ok) {
+        return res;
+    }
+    if (imported.bankSets.isEmpty() || imported.bankSets[0].banks.isEmpty()) {
+        res.ok = false;
+        res.errorMessage = QStringLiteral("Imported project has no banks");
+        return res;
+    }
+
+    destination.ensureSingleBankSet();
+    if (destination.bankSets.isEmpty()) {
+        destination.initializeDefault();
+    }
+
+    // Grow grid if the imported matrix is larger.
+    const int rows = qMax(destination.settings.matrix.gridRows, imported.settings.matrix.gridRows);
+    const int cols = qMax(destination.settings.matrix.gridCols, imported.settings.matrix.gridCols);
+    destination.resizeBanksForGrid(rows, cols);
+
+    BankSet& destSet = destination.bankSets[0];
+    const BankSet& srcSet = imported.bankSets[0];
+    const int cellsPerBank =
+        qMax(1, destination.settings.matrix.gridRows * destination.settings.matrix.gridCols);
+
+    const int srcStart = qMax(0, sourceStartBank);
+    if (srcStart >= srcSet.banks.size()) {
+        res.ok = false;
+        res.errorMessage = QStringLiteral("Source start bank %1 is past the end (%2 banks)")
+                               .arg(srcStart + 1)
+                               .arg(srcSet.banks.size());
+        return res;
+    }
+
+    const int destStart = qMax(0, destinationStartBank);
+    const int srcCount = srcSet.banks.size() - srcStart;
+    const int needed = destStart + srcCount;
+    while (destSet.banks.size() < needed) {
+        destSet.banks.append(makeEmptyBank(destSet.banks.size(), cellsPerBank));
+    }
+    // Keep bank indices consistent after padding.
+    for (int i = 0; i < destSet.banks.size(); ++i) {
+        destSet.banks[i].index = i;
+    }
+
+    const QHash<QUuid, QUuid> mediaMap = mergeMediaLibrary(destination, imported);
+
+    int merged = 0;
+    for (int i = 0; i < srcCount; ++i) {
+        Bank& dst = destSet.banks[destStart + i];
+        const Bank& src = srcSet.banks[srcStart + i];
+        // Ensure destination bank has enough cells before copy.
+        if (dst.cells.size() < cellsPerBank) {
+            const int old = dst.cells.size();
+            dst.cells.resize(cellsPerBank);
+            for (int c = old; c < cellsPerBank; ++c) {
+                dst.cells[c].index = c;
+            }
+        }
+        copyBankContent(dst, src);
+        for (Cell& cell : dst.cells) {
+            remapCellMediaIds(cell, mediaMap);
+        }
+        ++merged;
+    }
+
+    // Merge cell-slot triggers (keyboard / MIDI note) from the imported file.
+    for (const TriggerMapping& t : imported.triggerMappings) {
+        if (t.target != TriggerTarget::Cell) {
+            continue;
+        }
+        if (t.input == InputType::Key && !t.keyText.isEmpty()) {
+            destination.setKeyboardTriggerForCell(0, kBankIndexAllBanks, t.cellIndex, t.keyText,
+                                                  t.number);
+        } else if (t.input == InputType::MidiNote) {
+            destination.setMidiCellTriggerForCell(0, t.cellIndex, t.channel, t.number);
+        }
+    }
+    destination.normalizeCellSlotTriggers();
+
+    res.banksMerged = merged;
     res.ok = true;
     return res;
 }

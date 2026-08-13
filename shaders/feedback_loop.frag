@@ -3,14 +3,15 @@
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 fragColor;
 
+layout(binding = 1) uniform sampler2D u_fresh;
 layout(binding = 2) uniform sampler2D u_history;
 
 layout(std140, binding = 0) uniform Block {
-    vec4 fbA; // loopRetention, saturation, brightness, contrast (history)
-    vec4 fbB; // hueShift, gamma, rotationDeg, zoom
-    vec4 fbC; // centerX, centerY, liveInject, wrapMode
-    vec4 fbD; // unused for history-only display
-    vec4 fbE; // unused
+    vec4 fbA; // unused, pathSaturation, pathBrightness, pathContrast
+    vec4 fbB; // pathHueShift, pathGamma, rotationDeg, zoom
+    vec4 fbC; // centerX, centerY, unused, wrapMode
+    vec4 fbD; // inBrightness, inContrast, inSaturation, inHueShift
+    vec4 fbE; // inGamma, layerOpacity, stageWidthPx, stageHeightPx
 } ubuf;
 
 float hue2rgb(float p, float q, float t)
@@ -110,28 +111,32 @@ vec2 applyWrap(vec2 uv, int mode)
     return clamp(uv, 0.0, 1.0);
 }
 
-vec3 sampleWarpedHistory(sampler2D historyTex, vec2 screenUv, int wrapMode)
-{
-    vec2 histUv = transformUv(screenUv);
-    const bool histOob = histUv.x < 0.0 || histUv.x > 1.0 || histUv.y < 0.0 || histUv.y > 1.0;
-    if (wrapMode == 4) {
-        if (histOob) {
-            return vec3(0.0);
-        }
-        return texture(historyTex, histUv).rgb;
-    }
-    histUv = applyWrap(histUv, wrapMode);
-    return texture(historyTex, histUv).rgb;
-}
-
 void main()
 {
+    // Pipeline: stack inject (below no-key + above keyed) → UV zoom/rot/wrap
+    // → input grade → feedback grade → write ring. Opacity is mixer-only.
     const int wrapMode = int(ubuf.fbC.w + 0.5);
+    vec2 uv = transformUv(v_uv);
+    const bool oob = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+    if (wrapMode == 4 && oob) {
+        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
 
-    vec3 historyRaw = sampleWarpedHistory(u_history, v_uv, wrapMode);
-    // History color correction applied on read so slider changes affect the whole loop live.
-    vec3 histOnly = applyGrading(historyRaw, ubuf.fbA.z, ubuf.fbA.w, ubuf.fbA.y, ubuf.fbB.x,
-                                 max(ubuf.fbB.y, 0.01));
-    histOnly = clamp(histOnly, 0.0, 1.0);
-    fragColor = vec4(histOnly, 1.0);
+    vec3 rgb = texture(u_fresh, applyWrap(uv, wrapMode)).rgb;
+    // 1) Input color grade
+    rgb = applyGrading(rgb,
+                       ubuf.fbD.x,
+                       ubuf.fbD.y,
+                       ubuf.fbD.z,
+                       ubuf.fbD.w,
+                       max(ubuf.fbE.x, 0.01));
+    // 2) Feedback path color grade
+    rgb = applyGrading(rgb,
+                       ubuf.fbA.z,
+                       ubuf.fbA.w,
+                       ubuf.fbA.y,
+                       ubuf.fbB.x,
+                       max(ubuf.fbB.y, 0.01));
+    fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
 }

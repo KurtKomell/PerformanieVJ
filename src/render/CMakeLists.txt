@@ -1,8 +1,8 @@
 set(_pvj_render_sources
     RhiPreviewWidget.h
     RhiPreviewWidget.cpp
-    FeedbackPipeline.h
-    FeedbackPipeline.cpp
+    FeedbackLoop.h
+    FeedbackLoop.cpp
     RhiMixerWidget.h
     RhiMixerWidget.cpp
     FullscreenOutputWindow.h
@@ -21,8 +21,7 @@ set(_pvj_shader_files
     ${CMAKE_SOURCE_DIR}/shaders/mixer.vert
     ${CMAKE_SOURCE_DIR}/shaders/mixer.frag
     ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.vert
-    ${CMAKE_SOURCE_DIR}/shaders/layer_feedback.frag
-    ${CMAKE_SOURCE_DIR}/shaders/layer_feedback_hist.frag
+    ${CMAKE_SOURCE_DIR}/shaders/feedback_loop.frag
     ${CMAKE_SOURCE_DIR}/shaders/feedback_above_coverage.frag
     ${CMAKE_SOURCE_DIR}/shaders/feedback_layer_composite.frag
     ${CMAKE_SOURCE_DIR}/shaders/stack_combine.frag
@@ -55,8 +54,7 @@ set(_pvj_shader_outputs
     mixer.vert.qsb
     mixer.frag.qsb
     layer_feedback.vert.qsb
-    layer_feedback.frag.qsb
-    layer_feedback_hist.frag.qsb
+    feedback_loop.frag.qsb
     feedback_above_coverage.frag.qsb
     feedback_layer_composite.frag.qsb
     stack_combine.frag.qsb

@@ -28,6 +28,7 @@
 
 #include "input/InputRouter.h"
 #include "input/MidiInput.h"
+#include "undo/ProjectUndoCommands.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -47,6 +48,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
 #include <QProgressBar>
@@ -60,6 +62,7 @@
 #include <QSet>
 #include <QStatusBar>
 #include <QTimer>
+#include <QUndoStack>
 #include <QUuid>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -68,6 +71,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 
 namespace pvj::app {
 
@@ -137,6 +141,9 @@ constexpr const char* kPvjFilter = "PerformanieVJ Project (*.pvj)";
 constexpr const char* kVj2Filter = "GrandVJ Project (*.vj2)";
 constexpr const char* kAvcFilter = "Resolume Composition (*.avc)";
 constexpr const char* kUiMainSplitterState = "ui/mainSplitterState";
+constexpr const char* kUiUpperSplitterState = "ui/upperSplitterState";
+constexpr const char* kUiParameterInspectorVisible = "ui/parameterInspectorVisible";
+constexpr const char* kUiMediaLibraryVisible = "ui/mediaLibraryVisible";
 constexpr const char* kOutputStageWidth    = "output/stageWidth";
 constexpr const char* kOutputStageHeight   = "output/stageHeight";
 constexpr const char* kOutputScreenIndex   = "output/screenIndex";
@@ -275,6 +282,15 @@ bool applyMappedProperty(pvj::core::Cell& c, const QString& raw, double v)
         return PReg::applyEnumFromNormalized(c, p, v);
     }
     return PReg::applyValue(c, p, v);
+}
+
+/// Mixer samples layers with `picture.rotationDeg`; inspector/MIDI Rotation Z is `rotationZ`
+/// in −1…+1 (±180°). Combine both so MIDI/UI rotation actually turns the layer.
+pvj::core::PictureParams pictureParamsForMixer(const Cell& c)
+{
+    pvj::core::PictureParams pic = c.props.picture;
+    pic.rotationDeg += c.props.rotationZ * 180.0;
+    return pic;
 }
 
 int preferredLayerFromCell(const Cell* c)
@@ -492,6 +508,28 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_project(std::make_unique<Project>())
 {
+    m_undoStack = new QUndoStack(this);
+    connect(m_undoStack, &QUndoStack::indexChanged, this, [this](int) {
+        refreshUiAfterProjectEdit();
+    });
+    connect(m_undoStack, &QUndoStack::cleanChanged, this, [this](bool clean) {
+        if (!clean) {
+            markProjectDirty();
+        }
+    });
+
+    m_filterParamsUndoTimer = new QTimer(this);
+    m_filterParamsUndoTimer->setSingleShot(true);
+    m_filterParamsUndoTimer->setInterval(350);
+    connect(m_filterParamsUndoTimer, &QTimer::timeout, this, [this]() {
+        if (m_filterParamsUndoBankSet < 0) {
+            return;
+        }
+        commitFilterCellUndo(m_filterParamsUndoBankSet, m_filterParamsUndoBank,
+                             m_filterParamsUndoCell, tr("Edit filter parameters"));
+        m_filterParamsUndoBankSet = -1;
+    });
+
     m_audioEngine = std::make_unique<pvj::audio::AudioEngine>(this);
     if (!m_audioEngine->initialize(pvj::audio::AudioEngine::kDefaultSampleRate)) {
         qWarning() << "Audio output could not be initialized; video-only playback.";
@@ -518,6 +556,10 @@ MainWindow::MainWindow(QWidget* parent)
     m_filterEditor = std::make_unique<FilterNodeEditorWindow>(this);
     connect(m_filterEditor.get(), &FilterNodeEditorWindow::chainEdited, this,
             [this](int bankSetIndex, int bankIndex, int cellIndex) {
+                if (m_filterParamsUndoTimer) {
+                    m_filterParamsUndoTimer->stop();
+                }
+                commitFilterCellUndo(bankSetIndex, bankIndex, cellIndex, tr("Edit filter graph"));
                 if (m_bankGrid) {
                     m_bankGrid->refresh();
                 }
@@ -540,6 +582,7 @@ MainWindow::MainWindow(QWidget* parent)
             });
     connect(m_filterEditor.get(), &FilterNodeEditorWindow::filterParamsEdited, this,
             [this](int bankSetIndex, int bankIndex, int cellIndex) {
+                scheduleFilterParamsUndo(bankSetIndex, bankIndex, cellIndex);
                 const int layer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
                 const Cell* cell = layer >= 0 ? cellAtDeck(m_layerSlots[static_cast<size_t>(layer)]) : nullptr;
                 const bool feedbackPlaying = cell && cell->visual.type == VisualType::Generator
@@ -558,6 +601,8 @@ MainWindow::MainWindow(QWidget* parent)
                 if (!m_inputRouter) {
                     return;
                 }
+                captureLearnBaseline();
+                m_learnCellBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
                 m_inputRouter->beginLearnPropertyCc(bankSetIndex, bankIndex, cellIndex, propertyId);
                 statusBar()->showMessage(tr("Learn: move a MIDI CC (0–127)…"), 15000);
             });
@@ -567,6 +612,8 @@ MainWindow::MainWindow(QWidget* parent)
                 if (!m_inputRouter) {
                     return;
                 }
+                captureLearnBaseline();
+                m_learnCellBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
                 m_inputRouter->beginLearnPropertyNote(
                     bankSetIndex, bankIndex, cellIndex, propertyId,
                     toggle ? pvj::core::PropertyButtonMode::Toggle
@@ -579,7 +626,15 @@ MainWindow::MainWindow(QWidget* parent)
                 if (!m_inputRouter) {
                     return;
                 }
+                auto before = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
                 m_inputRouter->clearPropertyMappingForCell(bankSetIndex, bankIndex, cellIndex, propertyId);
+                if (before) {
+                    if (auto after = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex)) {
+                        if (before->cell.propertyMappings.size() != after->cell.propertyMappings.size()) {
+                            pushCellsReplaceCommand({*before}, {*after}, tr("Clear MIDI mapping"));
+                        }
+                    }
+                }
                 statusBar()->showMessage(tr("Cleared MIDI mapping for %1").arg(propertyId), 4000);
                 if (m_filterEditor) {
                     m_filterEditor->refreshMidiMapOverlays();
@@ -698,18 +753,42 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    shutdownUndoStack();
     if (qApp) {
         qApp->removeEventFilter(this);
     }
 }
 
+void MainWindow::shutdownUndoStack()
+{
+    if (m_filterParamsUndoTimer) {
+        m_filterParamsUndoTimer->stop();
+        disconnect(m_filterParamsUndoTimer, nullptr, this, nullptr);
+    }
+    if (!m_undoStack) {
+        return;
+    }
+    // indexChanged would otherwise refresh UI / touch project lists during teardown.
+    disconnect(m_undoStack, nullptr, this, nullptr);
+    m_undoStack->clear();
+}
+
 void MainWindow::closeEvent(QCloseEvent* event)
 {
-    if (m_mainSplit) {
-        QSettings settings;
-        settings.setValue(QLatin1String(kUiMainSplitterState), m_mainSplit->saveState());
+    if (m_closing) {
+        QMainWindow::closeEvent(event);
+        return;
     }
+    if (!maybeSave()) {
+        event->ignore();
+        return;
+    }
+    m_closing = true;
+    rememberLastProjectPath();
+    shutdownUndoStack();
+    saveViewSettings();
     if (m_actMidiMappingEdit && m_actMidiMappingEdit->isChecked()) {
+        QSignalBlocker blocker(m_actMidiMappingEdit);
         m_actMidiMappingEdit->setChecked(false);
     }
     if (m_fullscreenOut && m_fullscreenOut->isVisible()) {
@@ -739,18 +818,23 @@ void MainWindow::setupCentralLayout()
     m_mainSplit = new PvjSplitter(Qt::Vertical, central);
     m_mainSplit->setChildrenCollapsible(false);
 
-    auto* upperSplit = new PvjSplitter(Qt::Horizontal, m_mainSplit);
+    m_upperSplit = new PvjSplitter(Qt::Horizontal, m_mainSplit);
+    m_upperSplit->setChildrenCollapsible(true);
 
     // Left of upper split: parameter inspector tabs
-    m_inspector = new ParameterInspector(upperSplit);
-    upperSplit->addWidget(m_inspector);
+    m_inspector = new ParameterInspector(m_upperSplit);
+    m_upperSplit->addWidget(m_inspector);
     connect(m_inspector, &ParameterInspector::cellChanged,
-            this, &MainWindow::onCellEdited);
+            this, &MainWindow::onInspectorDiscreteCellChanged);
     connect(m_inspector, &ParameterInspector::cellPlaybackChanged,
             this, &MainWindow::onCellPlaybackChanged);
+    connect(m_inspector, &ParameterInspector::continuousEditBegan,
+            this, &MainWindow::beginInspectorContinuousEdit);
+    connect(m_inspector, &ParameterInspector::continuousEditEnded,
+            this, &MainWindow::endInspectorContinuousEdit);
 
     // Right of upper split: layer preview + mixer output
-    auto* previewHost = new QWidget(upperSplit);
+    auto* previewHost = new QWidget(m_upperSplit);
     auto* previewLayout = new QHBoxLayout(previewHost);
     previewLayout->setContentsMargins(0, 0, 0, 0);
     previewLayout->setSpacing(4);
@@ -769,10 +853,10 @@ void MainWindow::setupCentralLayout()
     previewLayout->addWidget(m_clipPreviewFrame, 1);
     previewLayout->addWidget(m_previewB, 1);
 
-    upperSplit->addWidget(previewHost);
-    upperSplit->setStretchFactor(0, 2);
-    upperSplit->setStretchFactor(1, 5);
-    m_mainSplit->addWidget(upperSplit);
+    m_upperSplit->addWidget(previewHost);
+    m_upperSplit->setStretchFactor(0, 2);
+    m_upperSplit->setStretchFactor(1, 5);
+    m_mainSplit->addWidget(m_upperSplit);
 
     // Bottom: bank grid
     auto* bankHost = new QWidget(m_mainSplit);
@@ -786,13 +870,6 @@ void MainWindow::setupCentralLayout()
     m_mainSplit->addWidget(bankHost);
     m_mainSplit->setStretchFactor(0, 5);
     m_mainSplit->setStretchFactor(1, 2);
-    {
-        QSettings settings;
-        const QByteArray state = settings.value(QLatin1String(kUiMainSplitterState)).toByteArray();
-        if (!state.isEmpty()) {
-            m_mainSplit->restoreState(state);
-        }
-    }
     centralLayout->addWidget(m_mainSplit, 1);
 
     connect(m_bankGrid, &BankGridWidget::cellSelected,
@@ -858,7 +935,8 @@ void MainWindow::setupMenus()
     fileMenu->addSeparator();
 
     auto* importMenu = fileMenu->addMenu(tr("&Import"));
-    importMenu->addAction(tr("GrandVJ Project (.vj2)..."),      this, &MainWindow::onImportVj2);
+    importMenu->addAction(tr("GrandVJ Project (.vj2)..."), this, &MainWindow::onImportVj2);
+    importMenu->addAction(tr("GrandVJ into bank… (.vj2)..."), this, &MainWindow::onImportVj2IntoBank);
     importMenu->addAction(tr("Resolume Composition (.avc)..."), this, &MainWindow::onImportAvc);
 
     fileMenu->addSeparator();
@@ -873,10 +951,21 @@ void MainWindow::setupMenus()
     fileMenu->addAction(tr("E&xit"), this, &QMainWindow::close);
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    auto* actUndo = m_undoStack->createUndoAction(this, tr("&Undo"));
+    actUndo->setShortcuts(QKeySequence::Undo);
+    editMenu->addAction(actUndo);
+    auto* actRedo = m_undoStack->createRedoAction(this, tr("&Redo"));
+    actRedo->setShortcuts(QKeySequence::Redo);
+    editMenu->addAction(actRedo);
+    editMenu->addSeparator();
     editMenu->addAction(tr("&Copy cell"), this, &MainWindow::copySelectedCell)
         ->setShortcut(QKeySequence::Copy);
-    editMenu->addAction(tr("&Paste into cell"), this, &MainWindow::pasteIntoSelectedCell)
+    editMenu->addAction(tr("&Paste (with MIDI)"), this, &MainWindow::pasteIntoSelectedCellWithMidi)
         ->setShortcut(QKeySequence::Paste);
+    editMenu->addAction(tr("Paste &without MIDI"), this, &MainWindow::pasteIntoSelectedCellWithoutMidi)
+        ->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+V")));
+    editMenu->addAction(tr("Paste &parameters + MIDI"), this, &MainWindow::pasteIntoSelectedCellParamsWithMidi)
+        ->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+V")));
     editMenu->addSeparator();
     auto* actPrefs = editMenu->addAction(tr("&Preferences..."), this, &MainWindow::onEditPreferences);
     actPrefs->setShortcut(QKeySequence::Preferences);
@@ -884,7 +973,15 @@ void MainWindow::setupMenus()
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_mediaDock->toggleViewAction());
+    m_actToggleInspector = viewMenu->addAction(tr("&Parameter inspector"));
+    m_actToggleInspector->setCheckable(true);
+    m_actToggleInspector->setChecked(true);
+    m_actToggleInspector->setShortcut(QKeySequence(QStringLiteral("Ctrl+I")));
+    m_actToggleInspector->setShortcutContext(Qt::ApplicationShortcut);
+    connect(m_actToggleInspector, &QAction::toggled, this, &MainWindow::setParameterInspectorVisible);
     viewMenu->addAction(tr("Bank grid size..."), this, &MainWindow::onConfigureBankGrid);
+
+    restoreViewSettings();
 
     m_outputMenu = menuBar()->addMenu(tr("&Output"));
     connect(m_outputMenu, &QMenu::aboutToShow, this, &MainWindow::rebuildOutputScreenMenu);
@@ -911,7 +1008,15 @@ void MainWindow::setupMenus()
     bankLearn->addAction(tr("&Select bank…"), this, &MainWindow::onLearnBankSelect);
     m_midiPortMenu = mapMenu->addMenu(tr("MIDI input port"));
     mapMenu->addSeparator();
-    m_actApplyMappingAllBanks = mapMenu->addAction(tr("Apply mapping to all banks"));
+    auto* applyMenu = mapMenu->addMenu(tr("Copy to all banks"));
+    applyMenu->addAction(tr("Keyboard mapping (all cells)…"), this,
+                         &MainWindow::onCopyKeyboardMappingToAllBanks);
+    applyMenu->addAction(tr("Layer selection (all cells)…"), this,
+                         &MainWindow::onCopyLayerMappingToAllBanks);
+    applyMenu->addAction(tr("MIDI mapping (all cells)…"), this,
+                         &MainWindow::onCopyMidiMappingToAllBanks);
+    applyMenu->addSeparator();
+    m_actApplyMappingAllBanks = applyMenu->addAction(tr("All cell settings (legacy)"));
     m_actApplyMappingAllBanks->setCheckable(true);
     m_actApplyMappingAllBanks->setToolTip(
         tr("Copy the selected cell's MIDI mappings, layer settings (preferred mix "
@@ -932,7 +1037,10 @@ void MainWindow::setupMenus()
                "<p><b>Grid:</b> <span style=\"color:#3a9cff\">blue</span> = clip on a mix layer; "
                "<span style=\"color:#ff913a\">orange</span> = large clip preview (right-click peek).</p>"
                "<p><b>Right-click</b> a cell: context menu (peek preview, copy, paste). "
-               "<b>Ctrl+C</b> / <b>Ctrl+V</b> copy and paste the selected cell content.</p>"));
+               "<b>Ctrl+C</b> copies the selected cell. "
+               "<b>Ctrl+V</b> paste with MIDI, <b>Ctrl+Shift+V</b> without MIDI, "
+               "<b>Ctrl+Alt+V</b> parameters + MIDI. "
+               "<b>Ctrl+Z</b> / <b>Ctrl+Shift+Z</b> undo / redo.</p>"));
     });
 
     menuBar()->addMenu(tr("&Help"));
@@ -1043,9 +1151,7 @@ void MainWindow::closeMediaPreloadHint()
 void MainWindow::onMediaPreloadFinished()
 {
     closeMediaPreloadHint();
-    QTimer::singleShot(0, this, [this] {
-        resolveMissingProjectMedia();
-    });
+    scheduleResolveMissingProjectMedia();
 }
 
 void MainWindow::promptOpenLastProjectIfNeeded()
@@ -1109,20 +1215,33 @@ MainWindow::MissingMediaAction MainWindow::promptMissingMediaFile(const QString&
 {
     QMessageBox box(this);
     box.setIcon(QMessageBox::Warning);
+    box.setWindowModality(Qt::ApplicationModal);
     box.setWindowTitle(tr("Media file not found"));
     box.setText(tr("The media file could not be found:"));
     box.setInformativeText(path);
-    auto* locateBtn  = box.addButton(tr("Locate…"), QMessageBox::ActionRole);
-    box.addButton(tr("Skip"), QMessageBox::RejectRole);
-    auto* skipAllBtn = box.addButton(tr("Skip all"), QMessageBox::DestructiveRole);
+    auto* locateBtn    = box.addButton(tr("Locate…"), QMessageBox::AcceptRole);
+    auto* skipBtn      = box.addButton(tr("Skip"), QMessageBox::ActionRole);
+    auto* skipAllBtn   = box.addButton(tr("Skip all"), QMessageBox::ActionRole);
+    auto* deleteBtn    = box.addButton(tr("Delete"), QMessageBox::DestructiveRole);
+    auto* deleteAllBtn = box.addButton(tr("Delete all"), QMessageBox::DestructiveRole);
     box.setDefaultButton(locateBtn);
     box.exec();
 
-    if (box.clickedButton() == locateBtn) {
+    const QAbstractButton* clicked = box.clickedButton();
+    if (clicked == locateBtn) {
         return MissingMediaAction::Locate;
     }
-    if (box.clickedButton() == skipAllBtn) {
+    if (clicked == skipAllBtn) {
         return MissingMediaAction::SkipAll;
+    }
+    if (clicked == deleteBtn) {
+        return MissingMediaAction::Delete;
+    }
+    if (clicked == deleteAllBtn) {
+        return MissingMediaAction::DeleteAll;
+    }
+    if (clicked == skipBtn) {
+        return MissingMediaAction::Skip;
     }
     return MissingMediaAction::Skip;
 }
@@ -1169,29 +1288,67 @@ bool MainWindow::ensureMediaFileAvailable(const QUuid& mediaId, const QString& p
         return false;
     }
 
-    if (m_skipAllMissingMedia) {
-        clearCellsUsingMedia(mediaId);
+    // Never open nested missing-media dialogs (e.g. while resolve is already prompting,
+    // or while QMessageBox::exec() is pumping events and playback tries to open media).
+    if (m_missingMediaPassActive || m_missingMediaDialogOpen) {
         return false;
     }
 
+    if (m_skipAllMissingMedia) {
+        return false;
+    }
+    if (m_deleteAllMissingMedia) {
+        clearCellsUsingMedia(mediaId);
+        if (m_bankGrid) {
+            m_bankGrid->refreshCellLabels();
+        }
+        updateMixerFromPlayingCells();
+        refreshPreviewForSelectedCell();
+        return false;
+    }
+
+    m_missingMediaDialogOpen = true;
     const MissingMediaAction act = promptMissingMediaFile(path);
-    if (act == MissingMediaAction::Locate) {
+    m_missingMediaDialogOpen = false;
+
+    switch (act) {
+    case MissingMediaAction::Locate:
         if (tryLocateMissingMedia(mediaId, path)) {
             return true;
         }
-        clearCellsUsingMedia(mediaId);
         return false;
-    }
-    if (act == MissingMediaAction::SkipAll) {
+    case MissingMediaAction::Skip:
+        return false;
+    case MissingMediaAction::SkipAll:
         m_skipAllMissingMedia = true;
+        return false;
+    case MissingMediaAction::Delete:
+        clearCellsUsingMedia(mediaId);
+        break;
+    case MissingMediaAction::DeleteAll:
+        m_deleteAllMissingMedia = true;
+        clearCellsUsingMedia(mediaId);
+        break;
     }
-    clearCellsUsingMedia(mediaId);
     if (m_bankGrid) {
         m_bankGrid->refresh();
     }
     updateMixerFromPlayingCells();
     refreshPreviewForSelectedCell();
+    markProjectDirty();
     return false;
+}
+
+void MainWindow::scheduleResolveMissingProjectMedia()
+{
+    if (m_missingMediaResolveScheduled) {
+        return;
+    }
+    m_missingMediaResolveScheduled = true;
+    QTimer::singleShot(0, this, [this] {
+        m_missingMediaResolveScheduled = false;
+        resolveMissingProjectMedia();
+    });
 }
 
 void MainWindow::resolveMissingProjectMedia()
@@ -1199,13 +1356,20 @@ void MainWindow::resolveMissingProjectMedia()
     if (!m_project) {
         return;
     }
+    // Already walking the queue — don't start a parallel pass.
+    if (m_missingMediaPassActive || m_missingMediaDialogOpen) {
+        return;
+    }
 
     m_skipAllMissingMedia = false;
+    m_deleteAllMissingMedia = false;
+    m_missingMediaCellsCleared = false;
+    m_missingMediaUpdated = false;
 
-    QSet<QUuid> missingIds;
+    QSet<QUuid> missingIdSet;
     for (const pvj::core::MediaItem& item : m_project->mediaLibrary) {
         if (!item.id.isNull() && !mediaFileExists(item.path)) {
-            missingIds.insert(item.id);
+            missingIdSet.insert(item.id);
         }
     }
 
@@ -1218,54 +1382,116 @@ void MainWindow::resolveMissingProjectMedia()
                 }
                 const pvj::core::MediaItem* m = m_project->findMedia(cell.visual.mediaId);
                 if (!m || !mediaFileExists(m->path)) {
-                    missingIds.insert(cell.visual.mediaId);
+                    missingIdSet.insert(cell.visual.mediaId);
                 }
             }
         }
     }
 
-    bool cellsCleared = false;
-    bool mediaUpdated = false;
-    for (const QUuid& id : missingIds) {
+    m_missingMediaQueue = missingIdSet.values();
+    std::sort(m_missingMediaQueue.begin(), m_missingMediaQueue.end(),
+              [](const QUuid& a, const QUuid& b) { return a.toString() < b.toString(); });
+
+    if (m_missingMediaQueue.isEmpty()) {
+        return;
+    }
+
+    m_missingMediaPassActive = true;
+    processNextMissingMedia();
+}
+
+void MainWindow::finishMissingMediaPass()
+{
+    m_missingMediaPassActive = false;
+    m_missingMediaQueue.clear();
+
+    if (!m_missingMediaCellsCleared && !m_missingMediaUpdated) {
+        return;
+    }
+    if (m_bankGrid) {
+        m_bankGrid->refresh();
+    }
+    if (m_mediaDock && m_missingMediaUpdated) {
+        m_mediaDock->refreshProjectMedia();
+    }
+    if (m_missingMediaCellsCleared) {
+        updateMixerFromPlayingCells();
+        refreshPreviewForSelectedCell();
+        markProjectDirty();
+    }
+}
+
+void MainWindow::processNextMissingMedia()
+{
+    if (!m_project) {
+        finishMissingMediaPass();
+        return;
+    }
+
+    // Advance past entries that were fixed meanwhile or are no longer missing.
+    while (!m_missingMediaQueue.isEmpty()) {
+        const QUuid id = m_missingMediaQueue.first();
         const pvj::core::MediaItem* item = m_project->findMedia(id);
-        const QString path = item ? item->path : QStringLiteral("(unknown)");
-
         if (item && mediaFileExists(item->path)) {
+            m_missingMediaQueue.removeFirst();
             continue;
         }
-
-        if (m_skipAllMissingMedia) {
-            clearCellsUsingMedia(id);
-            cellsCleared = true;
-            continue;
-        }
-
-        const MissingMediaAction act = promptMissingMediaFile(path);
-        if (act == MissingMediaAction::Locate) {
-            if (tryLocateMissingMedia(id, path)) {
-                mediaUpdated = true;
-                continue;
-            }
-            clearCellsUsingMedia(id);
-            cellsCleared = true;
-        } else {
-            if (act == MissingMediaAction::SkipAll) {
-                m_skipAllMissingMedia = true;
-            }
-            clearCellsUsingMedia(id);
-            cellsCleared = true;
-        }
+        break;
     }
 
-    if (cellsCleared || mediaUpdated) {
-        if (m_bankGrid) {
-            m_bankGrid->refresh();
-        }
-        if (cellsCleared) {
-            updateMixerFromPlayingCells();
-            refreshPreviewForSelectedCell();
-        }
+    if (m_missingMediaQueue.isEmpty() || m_skipAllMissingMedia) {
+        finishMissingMediaPass();
+        return;
     }
+
+    if (m_deleteAllMissingMedia) {
+        for (const QUuid& id : m_missingMediaQueue) {
+            clearCellsUsingMedia(id);
+            m_missingMediaCellsCleared = true;
+        }
+        m_missingMediaQueue.clear();
+        finishMissingMediaPass();
+        return;
+    }
+
+    if (m_missingMediaDialogOpen) {
+        return;
+    }
+
+    const QUuid id = m_missingMediaQueue.takeFirst();
+    const pvj::core::MediaItem* item = m_project->findMedia(id);
+    const QString path = item ? item->path : QStringLiteral("(unknown)");
+
+    m_missingMediaDialogOpen = true;
+    const MissingMediaAction act = promptMissingMediaFile(path);
+    m_missingMediaDialogOpen = false;
+
+    switch (act) {
+    case MissingMediaAction::Locate:
+        if (tryLocateMissingMedia(id, path)) {
+            m_missingMediaUpdated = true;
+        }
+        break;
+    case MissingMediaAction::Skip:
+        break;
+    case MissingMediaAction::SkipAll:
+        m_skipAllMissingMedia = true;
+        m_missingMediaQueue.clear();
+        break;
+    case MissingMediaAction::Delete:
+        clearCellsUsingMedia(id);
+        m_missingMediaCellsCleared = true;
+        break;
+    case MissingMediaAction::DeleteAll:
+        m_deleteAllMissingMedia = true;
+        clearCellsUsingMedia(id);
+        m_missingMediaCellsCleared = true;
+        break;
+    }
+
+    // Continue on the next event-loop turn so nested processEvents cannot re-enter
+    // this function while a dialog is still tearing down.
+    QTimer::singleShot(0, this, &MainWindow::processNextMissingMedia);
 }
 
 void MainWindow::applyBankGridDimensions(int rows, int cols)
@@ -1377,21 +1603,169 @@ void MainWindow::syncMidiPreferencesDialog(PreferencesDialog& dlg)
     dlg.setMidiInputPorts(ports, selected, open);
 }
 
+void MainWindow::saveViewSettings()
+{
+    QSettings settings;
+    if (m_mainSplit) {
+        settings.setValue(QLatin1String(kUiMainSplitterState), m_mainSplit->saveState());
+    }
+    if (m_upperSplit) {
+        settings.setValue(QLatin1String(kUiUpperSplitterState), m_upperSplit->saveState());
+    }
+    if (m_inspector) {
+        settings.setValue(QLatin1String(kUiParameterInspectorVisible), m_inspector->isVisible());
+    }
+    if (m_mediaDock) {
+        settings.setValue(QLatin1String(kUiMediaLibraryVisible), !m_mediaDock->isHidden());
+    }
+}
+
+void MainWindow::restoreViewSettings()
+{
+    QSettings settings;
+
+    const bool inspectorVisible =
+        settings.value(QLatin1String(kUiParameterInspectorVisible), true).toBool();
+    if (m_actToggleInspector) {
+        QSignalBlocker blocker(m_actToggleInspector);
+        m_actToggleInspector->setChecked(inspectorVisible);
+    }
+    if (m_inspector) {
+        m_inspector->setVisible(inspectorVisible);
+    }
+
+    const bool mediaVisible =
+        settings.value(QLatin1String(kUiMediaLibraryVisible), true).toBool();
+    if (m_mediaDock) {
+        m_mediaDock->setVisible(mediaVisible);
+    }
+
+    if (m_mainSplit) {
+        const QByteArray state = settings.value(QLatin1String(kUiMainSplitterState)).toByteArray();
+        if (!state.isEmpty()) {
+            m_mainSplit->restoreState(state);
+        }
+    }
+    if (m_upperSplit) {
+        const QByteArray state = settings.value(QLatin1String(kUiUpperSplitterState)).toByteArray();
+        if (!state.isEmpty()) {
+            m_upperSplit->restoreState(state);
+        } else if (!inspectorVisible) {
+            setParameterInspectorVisible(false);
+        }
+    }
+}
+
+void MainWindow::setParameterInspectorVisible(bool visible)
+{
+    if (!m_inspector) {
+        return;
+    }
+    m_inspector->setVisible(visible);
+    if (m_upperSplit) {
+        // Keep preview pane usable when inspector is hidden.
+        QList<int> sizes = m_upperSplit->sizes();
+        if (sizes.size() >= 2) {
+            if (!visible) {
+                sizes[0] = 0;
+                if (sizes[1] <= 0) {
+                    sizes[1] = 400;
+                }
+            } else if (sizes[0] <= 0) {
+                const int total = qMax(1, sizes[0] + sizes[1]);
+                sizes[0] = total * 2 / 7;
+                sizes[1] = total - sizes[0];
+            }
+            m_upperSplit->setSizes(sizes);
+        }
+    }
+    if (m_actToggleInspector && m_actToggleInspector->isChecked() != visible) {
+        QSignalBlocker blocker(m_actToggleInspector);
+        m_actToggleInspector->setChecked(visible);
+    }
+}
+
 void MainWindow::updateWindowTitle()
 {
     QString title = QStringLiteral("PerformanieVJ");
-    if (!m_project->filePath.isEmpty()) {
+    if (m_project && !m_project->filePath.isEmpty()) {
         title += QStringLiteral(" - ") + QFileInfo(m_project->filePath).fileName();
     } else {
         title += QStringLiteral(" - ") + tr("Untitled");
     }
-    if (m_project->sourceFormat != QLatin1String("pvj")) {
+    if (m_project && m_project->sourceFormat != QLatin1String("pvj")) {
         title += QStringLiteral(" [imported from ") + m_project->sourceFormat.toUpper() + QLatin1Char(']');
+    }
+    if (isProjectDirty()) {
+        title += QLatin1Char('*');
     }
     if (m_actMidiMappingEdit && m_actMidiMappingEdit->isChecked()) {
         title += tr(" — Map");
     }
     setWindowTitle(title);
+    setWindowModified(isProjectDirty());
+}
+
+void MainWindow::markProjectDirty()
+{
+    if (m_projectDirty) {
+        return;
+    }
+    m_projectDirty = true;
+    updateWindowTitle();
+}
+
+void MainWindow::clearProjectDirty()
+{
+    m_projectDirty = false;
+    if (m_undoStack) {
+        m_undoStack->setClean();
+    }
+    updateWindowTitle();
+}
+
+bool MainWindow::isProjectDirty() const
+{
+    if (m_projectDirty) {
+        return true;
+    }
+    return m_undoStack && !m_undoStack->isClean();
+}
+
+bool MainWindow::maybeSave()
+{
+    if (!isProjectDirty()) {
+        return true;
+    }
+
+    const QString name = (m_project && !m_project->filePath.isEmpty())
+                             ? QFileInfo(m_project->filePath).fileName()
+                             : tr("Untitled");
+    const auto answer = QMessageBox::warning(
+        this,
+        tr("Unsaved changes"),
+        tr("Save changes to \"%1\"?").arg(name),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+        QMessageBox::Save);
+
+    if (answer == QMessageBox::Save) {
+        return saveProject();
+    }
+    if (answer == QMessageBox::Cancel) {
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::rememberLastProjectPath()
+{
+    if (!m_project) {
+        return;
+    }
+    if (m_project->filePath.isEmpty() || m_project->sourceFormat != QLatin1String("pvj")) {
+        return;
+    }
+    saveLastProjectPathSetting(m_project->filePath);
 }
 
 void MainWindow::stopAllPlaybackAndClear()
@@ -1429,17 +1803,25 @@ void MainWindow::stopAllPlaybackAndClear()
 
 void MainWindow::onFileNew()
 {
+    if (!maybeSave()) {
+        return;
+    }
     stopAllPlaybackAndClear();
 
+    clearUndoStack();
     m_project = std::make_unique<Project>();
     m_project->initializeDefault();
     rebindUiToProject(/*preloadMedia=*/false);
+    clearProjectDirty();
     updateWindowTitle();
     statusBar()->showMessage(tr("New project"), 3000);
 }
 
 void MainWindow::onFileOpen()
 {
+    if (!maybeSave()) {
+        return;
+    }
     const QString path = QFileDialog::getOpenFileName(this, tr("Open Project"),
                                                       {}, QString::fromLatin1(kPvjFilter));
     if (path.isEmpty()) return;
@@ -1471,8 +1853,10 @@ void MainWindow::openProjectFromPath(const QString& path)
         m_inputRouter->setProject(nullptr);
     }
 
+    clearUndoStack();
     m_project = std::move(next);
     rebindUiToProject();
+    clearProjectDirty();
     updateWindowTitle();
     statusBar()->showMessage(tr("Opened %1").arg(path), 5000);
     rememberRecentProject(path);
@@ -1526,6 +1910,9 @@ void MainWindow::onRecentFileTriggered()
     const QString path = a->data().toString();
     const bool exists = !path.isEmpty() && QFileInfo::exists(path);
     if (exists) {
+        if (!maybeSave()) {
+            return;
+        }
         openProjectFromPath(path);
     } else if (!path.isEmpty()) {
         QMessageBox::warning(this, tr("Open failed"),
@@ -1542,23 +1929,30 @@ bool MainWindow::saveToPath(const QString& path)
     }
     m_project->filePath = path;
     m_project->sourceFormat = QStringLiteral("pvj");
+    clearProjectDirty();
     updateWindowTitle();
     statusBar()->showMessage(tr("Saved %1").arg(path), 5000);
     rememberRecentProject(path);
+    saveLastProjectPathSetting(path);
     return true;
 }
 
-void MainWindow::onFileSave()
+bool MainWindow::saveProject()
 {
-    if (m_project->filePath.isEmpty() || m_project->sourceFormat != QLatin1String("pvj")) {
-        onFileSaveAs();
-        return;
+    if (!m_project) {
+        return false;
     }
-    saveToPath(m_project->filePath);
+    if (m_project->filePath.isEmpty() || m_project->sourceFormat != QLatin1String("pvj")) {
+        return saveProjectAs();
+    }
+    return saveToPath(m_project->filePath);
 }
 
-void MainWindow::onFileSaveAs()
+bool MainWindow::saveProjectAs()
 {
+    if (!m_project) {
+        return false;
+    }
     QString suggested = m_project->filePath;
     if (suggested.isEmpty()) {
         suggested = QStringLiteral("Untitled.pvj");
@@ -1568,8 +1962,20 @@ void MainWindow::onFileSaveAs()
     }
     const QString path = QFileDialog::getSaveFileName(this, tr("Save Project As"),
                                                       suggested, QString::fromLatin1(kPvjFilter));
-    if (path.isEmpty()) return;
-    saveToPath(path);
+    if (path.isEmpty()) {
+        return false;
+    }
+    return saveToPath(path);
+}
+
+void MainWindow::onFileSave()
+{
+    saveProject();
+}
+
+void MainWindow::onFileSaveAs()
+{
+    saveProjectAs();
 }
 
 void MainWindow::onConfigureBankGrid()
@@ -1621,12 +2027,20 @@ void MainWindow::onConfigureBankGrid()
         }
     }
 
+    const Project before = *m_project;
     applyBankGridDimensions(rows, cols);
+    if (m_undoStack) {
+        m_undoStack->push(new ProjectReplaceCommand(m_project.get(), before, *m_project,
+                                                    tr("Resize bank grid")));
+    }
     statusBar()->showMessage(tr("Bank grid set to %1 x %2").arg(rows).arg(cols), 4000);
 }
 
 void MainWindow::onImportVj2()
 {
+    if (!maybeSave()) {
+        return;
+    }
     const QString path = QFileDialog::getOpenFileName(this, tr("Import GrandVJ Project"),
                                                       {}, QString::fromLatin1(kVj2Filter));
     if (path.isEmpty()) return;
@@ -1642,17 +2056,105 @@ void MainWindow::onImportVj2()
     }
     stopAllPlaybackAndClear();
 
+    clearUndoStack();
     m_project = std::move(next);
     rebindUiToProject();
+    applyBankGridDimensions(m_project->settings.matrix.gridRows, m_project->settings.matrix.gridCols);
+    markProjectDirty();
     updateWindowTitle();
     if (!res.warnings.isEmpty()) {
         QMessageBox::information(this, tr("Import warnings"), res.warnings.join(QLatin1Char('\n')));
     }
-    statusBar()->showMessage(tr("Imported %1 (save as .pvj to keep changes)").arg(path), 8000);
+    statusBar()->showMessage(
+        tr("Imported %1 — bank grid %2×%3 (save as .pvj to keep changes)")
+            .arg(path)
+            .arg(m_project->settings.matrix.gridRows)
+            .arg(m_project->settings.matrix.gridCols),
+        8000);
+}
+
+void MainWindow::onImportVj2IntoBank()
+{
+    if (!m_project) {
+        return;
+    }
+
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import GrandVJ into bank"),
+                                                      {}, QString::fromLatin1(kVj2Filter));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    m_project->ensureSingleBankSet();
+    const int bankCount = m_project->bankSets.isEmpty() ? 64 : m_project->bankSets[0].banks.size();
+    const int currentBank1Based =
+        m_bankGrid ? qBound(1, m_bankGrid->activeBankIndex() + 1, qMax(1, bankCount)) : 1;
+
+    bool ok = false;
+    const int destBank1 = QInputDialog::getInt(
+        this,
+        tr("Import into bank"),
+        tr("Destination start bank (existing banks from this index are overwritten):"),
+        currentBank1Based,
+        1,
+        256,
+        1,
+        &ok);
+    if (!ok) {
+        return;
+    }
+
+    const int sourceBank1 = QInputDialog::getInt(
+        this,
+        tr("Import from bank"),
+        tr("Source start bank in the GrandVJ file (1 = first bank):"),
+        1,
+        1,
+        256,
+        1,
+        &ok);
+    if (!ok) {
+        return;
+    }
+
+    showProjectLoadProgress(tr("Importing GrandVJ banks…"), -1);
+
+    const Project before = *m_project;
+    auto res = Vj2Importer::mergeFile(*m_project, path, destBank1 - 1, sourceBank1 - 1);
+    if (!res.ok) {
+        closeMediaPreloadHint();
+        QMessageBox::warning(this, tr("Import failed"), res.errorMessage);
+        return;
+    }
+
+    if (m_undoStack) {
+        m_undoStack->push(new ProjectReplaceCommand(m_project.get(), before, *m_project,
+                                                    tr("Import GrandVJ into bank")));
+    }
+
+    stopAllPlaybackAndClear();
+    rebindUiToProject();
+    applyBankGridDimensions(m_project->settings.matrix.gridRows, m_project->settings.matrix.gridCols);
+    if (m_bankGrid) {
+        m_bankGrid->selectBank(destBank1 - 1);
+    }
+    updateWindowTitle();
+    if (!res.warnings.isEmpty()) {
+        QMessageBox::information(this, tr("Import warnings"), res.warnings.join(QLatin1Char('\n')));
+    }
+    statusBar()->showMessage(
+        tr("Merged %1 banks from %2 into bank %3 (save as .pvj to keep changes)")
+            .arg(res.banksMerged)
+            .arg(path)
+            .arg(destBank1),
+        8000);
 }
 
 void MainWindow::onImportAvc()
 {
+    if (!maybeSave()) {
+        return;
+    }
     const QString path = QFileDialog::getOpenFileName(this, tr("Import Resolume Composition"),
                                                       {}, QString::fromLatin1(kAvcFilter));
     if (path.isEmpty()) return;
@@ -1668,8 +2170,10 @@ void MainWindow::onImportAvc()
     }
     stopAllPlaybackAndClear();
 
+    clearUndoStack();
     m_project = std::move(next);
     rebindUiToProject();
+    markProjectDirty();
     updateWindowTitle();
     if (!res.warnings.isEmpty()) {
         QMessageBox::information(this, tr("Import warnings"),
@@ -1692,6 +2196,7 @@ void MainWindow::onCellSelected(int bankSetIndex, int bankIndex, int cellIndex)
     if (m_inspector) {
         m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     }
+    m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     refreshPreviewForSelectedCell();
 }
 
@@ -1723,6 +2228,7 @@ void MainWindow::onCellEditRequested(int bankSetIndex, int bankIndex, int cellIn
     if (cellIndex >= bank.cells.size()) {
         return;
     }
+    m_filterEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     m_filterEditor->openForCell(bankSetIndex, bankIndex, cellIndex,
                                 &bank.cells[cellIndex], m_project.get());
 }
@@ -1924,6 +2430,7 @@ bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex,
             m_fullscreenOut->mixerWidget()->clearFrame(layer);
         }
         m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
+        reapplyCurrentMidiControllersToPlayingCell(bankSetIndex, bankIndex, cellIndex);
         syncMixLayerFromCell(layer);
         return true;
     }
@@ -1938,10 +2445,51 @@ bool MainWindow::startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex,
         syncInspectorLayerKeyingOverride();
         playMediaOnLayer(layer, m.path);
         m_layerFadeAnimating[static_cast<size_t>(layer)] = false;
+        reapplyCurrentMidiControllersToPlayingCell(bankSetIndex, bankIndex, cellIndex);
         syncMixLayerFromCell(layer);
         return true;
     }
     return false;
+}
+
+void MainWindow::reapplyCurrentMidiControllersToPlayingCell(int bankSetIndex, int bankIndex,
+                                                            int cellIndex)
+{
+    if (!m_inputRouter || !m_project) {
+        return;
+    }
+    if (findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex) < 0) {
+        return;
+    }
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+    const auto& bank = set.banks[bankIndex];
+    if (cellIndex < 0 || cellIndex >= bank.cells.size()) {
+        return;
+    }
+    const Cell& cell = bank.cells[cellIndex];
+    for (const auto& pm : cell.propertyMappings) {
+        if (pm.input != pvj::core::InputType::MidiCC
+            && pm.input != pvj::core::InputType::MidiAftertouch) {
+            continue;
+        }
+        const std::optional<int> raw =
+            m_inputRouter->lastContinuousValue(pm.input, pm.channel, pm.number);
+        if (!raw.has_value()) {
+            continue;
+        }
+        QString prop;
+        double value = 0.0;
+        if (!m_inputRouter->scaleContinuousMapping(pm, *raw, &prop, &value)) {
+            continue;
+        }
+        onInputPropertyMapped(bankSetIndex, bankIndex, cellIndex, prop, value);
+    }
 }
 
 void MainWindow::reapplyPlayingCell(int bankSetIndex, int bankIndex, int cellIndex)
@@ -2284,7 +2832,7 @@ void MainWindow::syncPlayingFeedbackCellToMixer(int bankSetIndex, int bankIndex,
         mix->setLayerActive(layer, true);
         mix->setLayerCopyMode(layer, c->props.copyMode);
         mix->setLayerMatteRole(layer, c->props.matteRole);
-        mix->setLayerPicture(layer, c->props.picture);
+        mix->setLayerPicture(layer, pictureParamsForMixer(*c));
         mix->setLayerFilterChain(layer, chain);
         mix->setLayerKeyChannels(layer, float(kr), float(kg), float(kb));
         if (!fadeAnimating) {
@@ -2335,7 +2883,7 @@ void MainWindow::syncMixLayerFromCell(int layer, bool requestRepaint)
         m_previewB->setLayerActive(layer, true);
         m_previewB->setLayerCopyMode(layer, c->props.copyMode);
         m_previewB->setLayerMatteRole(layer, c->props.matteRole);
-        m_previewB->setLayerPicture(layer, c->props.picture);
+        m_previewB->setLayerPicture(layer, pictureParamsForMixer(*c));
         m_previewB->setLayerFilterChain(layer, effectiveFilterChainForMixer(c, keyingPtr));
         const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
         const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
@@ -2379,7 +2927,7 @@ void MainWindow::syncMixLayerFromCell(int layer, bool requestRepaint)
     m_previewB->setLayerActive(layer, true);
     m_previewB->setLayerCopyMode(layer, c->props.copyMode);
     m_previewB->setLayerMatteRole(layer, c->props.matteRole);
-    m_previewB->setLayerPicture(layer, c->props.picture);
+    m_previewB->setLayerPicture(layer, pictureParamsForMixer(*c));
     m_previewB->setLayerFilterChain(layer, effectiveFilterChainForMixer(c, keyingPtr));
     const double kr = keyingPtr ? keyingPtr->keyChannelR : c->props.keyChannelR;
     const double kg = keyingPtr ? keyingPtr->keyChannelG : c->props.keyChannelG;
@@ -2676,6 +3224,462 @@ int MainWindow::applyCellLayerSettingsToAllBanks(int bankSetIndex, int sourceBan
     return copied;
 }
 
+int MainWindow::applyPreferredLayerToAllBanks(int bankSetIndex, int sourceBankIndex, int cellIndex,
+                                              int preferredLayer)
+{
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return 0;
+    }
+    auto& set = m_project->bankSets[bankSetIndex];
+    int copied = 0;
+    for (int i = 0; i < set.banks.size(); ++i) {
+        if (i == sourceBankIndex) {
+            continue;
+        }
+        Bank& bank = set.banks[i];
+        if (cellIndex < 0 || cellIndex >= bank.cells.size()) {
+            continue;
+        }
+        bank.cells[cellIndex].props.preferredLayer = preferredLayer;
+        ++copied;
+    }
+    return copied;
+}
+
+int MainWindow::applyMidiMappingsToAllBanks(int bankSetIndex, int sourceBankIndex, int cellIndex,
+                                            const Cell& src)
+{
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return 0;
+    }
+    auto& set = m_project->bankSets[bankSetIndex];
+    int copied = 0;
+    for (int i = 0; i < set.banks.size(); ++i) {
+        if (i == sourceBankIndex) {
+            continue;
+        }
+        Bank& bank = set.banks[i];
+        if (cellIndex < 0 || cellIndex >= bank.cells.size()) {
+            continue;
+        }
+        pvj::core::copyCellMidiPropertyMappings(bank.cells[cellIndex], src);
+        ++copied;
+    }
+    return copied;
+}
+
+bool MainWindow::applyKeyboardTriggerToAllBanks(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (!m_project) {
+        return false;
+    }
+    const QString keyText = m_project->keyboardTriggerForCell(bankSetIndex, bankIndex, cellIndex);
+    int midiCh = -1;
+    int midiNote = -1;
+    m_project->midiCellTriggerForCell(bankSetIndex, bankIndex, cellIndex, &midiCh, &midiNote);
+
+    int qtKey = 0;
+    for (const auto& t : m_project->triggerMappings) {
+        if (t.input != pvj::core::InputType::Key || t.cellIndex != cellIndex
+            || t.bankSetIndex != bankSetIndex || t.keyText.isEmpty()) {
+            continue;
+        }
+        if (!keyText.isEmpty() && t.keyText != keyText) {
+            continue;
+        }
+        qtKey = t.number;
+        if (t.bankIndex == pvj::core::kBankIndexAllBanks || t.bankIndex == bankIndex) {
+            break;
+        }
+    }
+
+    const bool hadKey = !keyText.isEmpty();
+    const bool hadMidi = midiCh >= 0 && midiNote >= 0;
+    if (!hadKey && !hadMidi) {
+        return false;
+    }
+
+    if (hadKey) {
+        m_project->setKeyboardTriggerForCell(bankSetIndex, bankIndex, cellIndex, keyText, qtKey);
+    }
+    if (hadMidi) {
+        m_project->setMidiCellTriggerForCell(bankSetIndex, cellIndex, midiCh, midiNote);
+    }
+    return true;
+}
+
+void MainWindow::refreshAfterMappingApplyToAllBanks(int bankSetIndex, int bankIndex, int cellIndex,
+                                                    int playingLayer)
+{
+    if (m_bankGrid) {
+        m_bankGrid->refresh();
+    }
+    if (playingLayer >= 0) {
+        reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
+    }
+    if (m_inspector) {
+        m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
+    }
+    m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
+    refreshPreviewForSelectedCell();
+    onCellEdited(bankSetIndex, bankIndex, cellIndex);
+    if (m_filterEditor) {
+        m_filterEditor->refreshMidiMapOverlays();
+    }
+}
+
+void MainWindow::clearUndoStack()
+{
+    if (m_undoStack) {
+        m_undoStack->clear();
+    }
+    m_inspectorContinuousEdit = false;
+    m_inspectorEditBefore.reset();
+    m_learnBaselineValid = false;
+    m_learnCellBefore.reset();
+    m_filterEditBefore.reset();
+    m_suppressInspectorUndo = false;
+    m_refreshingUiAfterEdit = false;
+    if (m_filterParamsUndoTimer) {
+        m_filterParamsUndoTimer->stop();
+    }
+    m_filterParamsUndoBankSet = -1;
+}
+
+void MainWindow::refreshUiAfterProjectEdit()
+{
+    if (m_closing || !m_project || m_refreshingUiAfterEdit) {
+        return;
+    }
+    m_refreshingUiAfterEdit = true;
+    m_suppressInspectorUndo = true;
+    if (m_bankGrid) {
+        m_bankGrid->setGridDimensions(m_project->settings.matrix.gridRows,
+                                      m_project->settings.matrix.gridCols);
+        m_bankGrid->refresh();
+    }
+    if (m_inspector) {
+        const int bs = m_bankGrid ? m_bankGrid->activeBankSetIndex() : 0;
+        const int b  = m_bankGrid ? m_bankGrid->activeBankIndex() : 0;
+        const int c  = m_bankGrid ? m_bankGrid->selectedCellIndex() : -1;
+        m_inspector->setSelection(bs, b, c);
+        m_inspectorEditBefore = snapshotSingleCell(bs, b, c);
+    }
+    if (m_mediaDock) {
+        m_mediaDock->refreshProjectMedia();
+    }
+    if (m_filterEditor) {
+        m_filterEditor->refreshMidiMapOverlays();
+        if (m_filterEditBefore) {
+            m_filterEditBefore = snapshotSingleCell(m_filterEditBefore->ref.bankSet,
+                                                    m_filterEditBefore->ref.bank,
+                                                    m_filterEditBefore->ref.cell);
+        }
+    }
+    refreshPreviewForSelectedCell();
+    updateMixerFromPlayingCells();
+    syncOutputFilterChainToMixers();
+    syncMixerFilterHighlightsToBankGrid();
+    updateWindowTitle();
+    m_suppressInspectorUndo = false;
+    m_refreshingUiAfterEdit = false;
+}
+
+void MainWindow::pushCellsReplaceCommand(QVector<CellSnapshot> before, QVector<CellSnapshot> after,
+                                         const QString& text)
+{
+    if (!m_undoStack || !m_project || before.isEmpty() || before.size() != after.size()) {
+        return;
+    }
+    m_undoStack->push(new CellsReplaceCommand(m_project.get(), std::move(before), std::move(after), text));
+}
+
+QVector<CellSnapshot> MainWindow::snapshotCellAcrossBanks(int bankSetIndex, int /*bankIndex*/,
+                                                          int cellIndex) const
+{
+    QVector<CellSnapshot> snaps;
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return snaps;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    snaps.reserve(set.banks.size());
+    for (int i = 0; i < set.banks.size(); ++i) {
+        if (cellIndex < 0 || cellIndex >= set.banks[i].cells.size()) {
+            continue;
+        }
+        CellSnapshot snap;
+        snap.ref = {bankSetIndex, i, cellIndex};
+        snap.cell = set.banks[i].cells[cellIndex];
+        snaps.append(std::move(snap));
+    }
+    return snaps;
+}
+
+QVector<CellSnapshot> MainWindow::snapshotAllCellsInBankSet(int bankSetIndex) const
+{
+    QVector<CellSnapshot> snaps;
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return snaps;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    for (int bi = 0; bi < set.banks.size(); ++bi) {
+        const auto& bank = set.banks[bi];
+        for (int ci = 0; ci < bank.cells.size(); ++ci) {
+            CellSnapshot snap;
+            snap.ref = {bankSetIndex, bi, ci};
+            snap.cell = bank.cells[ci];
+            snaps.append(std::move(snap));
+        }
+    }
+    return snaps;
+}
+
+std::optional<CellSnapshot> MainWindow::snapshotSingleCell(int bankSetIndex, int bankIndex,
+                                                           int cellIndex) const
+{
+    if (!m_project || bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return std::nullopt;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return std::nullopt;
+    }
+    const auto& bank = set.banks[bankIndex];
+    if (cellIndex < 0 || cellIndex >= bank.cells.size()) {
+        return std::nullopt;
+    }
+    CellSnapshot snap;
+    snap.ref = {bankSetIndex, bankIndex, cellIndex};
+    snap.cell = bank.cells[cellIndex];
+    return snap;
+}
+
+void MainWindow::syncInspectorEditBaselines()
+{
+    if (!m_project) {
+        return;
+    }
+    if (m_inspector) {
+        const int bs = m_inspector->selectedBankSetIndex();
+        const int b  = m_inspector->selectedBankIndex();
+        const int c  = m_inspector->selectedCellIndex();
+        if (c >= 0) {
+            m_inspectorEditBefore = snapshotSingleCell(bs, b, c);
+        }
+    }
+    if (m_filterEditBefore) {
+        m_filterEditBefore = snapshotSingleCell(m_filterEditBefore->ref.bankSet,
+                                                m_filterEditBefore->ref.bank,
+                                                m_filterEditBefore->ref.cell);
+    }
+}
+
+void MainWindow::beginInspectorContinuousEdit()
+{
+    if (!m_inspector) {
+        return;
+    }
+    m_inspectorContinuousEdit = true;
+    // Always capture at gesture start so MIDI learns during/before the drag cannot poison undo.
+    m_inspectorEditBefore = snapshotSingleCell(m_inspector->selectedBankSetIndex(),
+                                               m_inspector->selectedBankIndex(),
+                                               m_inspector->selectedCellIndex());
+}
+
+void MainWindow::endInspectorContinuousEdit()
+{
+    if (!m_inspectorContinuousEdit) {
+        return;
+    }
+    m_inspectorContinuousEdit = false;
+    if (m_suppressInspectorUndo || !m_inspector || !m_inspectorEditBefore) {
+        if (m_inspector) {
+            m_inspectorEditBefore = snapshotSingleCell(m_inspector->selectedBankSetIndex(),
+                                                       m_inspector->selectedBankIndex(),
+                                                       m_inspector->selectedCellIndex());
+        }
+        return;
+    }
+    const int bs = m_inspector->selectedBankSetIndex();
+    const int b  = m_inspector->selectedBankIndex();
+    const int c  = m_inspector->selectedCellIndex();
+    auto after = snapshotSingleCell(bs, b, c);
+    if (!after) {
+        return;
+    }
+    // Inspector parameter edits must not undo MIDI mappings learned outside this gesture.
+    CellSnapshot before = *m_inspectorEditBefore;
+    before.cell.propertyMappings = after->cell.propertyMappings;
+
+    // Avoid stacking no-ops: compare a few high-signal fields (not MIDI mappings).
+    const Cell& a = before.cell;
+    const Cell& bCell = after->cell;
+    const bool changed = a.name != bCell.name
+        || a.visual.type != bCell.visual.type
+        || a.visual.mediaId != bCell.visual.mediaId
+        || a.props.transparency != bCell.props.transparency
+        || a.props.movieSpeed != bCell.props.movieSpeed
+        || a.props.fade != bCell.props.fade
+        || a.props.rotationZ != bCell.props.rotationZ
+        || a.props.copyMode != bCell.props.copyMode
+        || a.props.keyingEnabled != bCell.props.keyingEnabled
+        || a.props.keyThreshold != bCell.props.keyThreshold
+        || a.props.keySoftness != bCell.props.keySoftness
+        || a.props.preferredLayer != bCell.props.preferredLayer
+        || a.filterChain.size() != bCell.filterChain.size();
+    if (changed) {
+        pushCellsReplaceCommand({before}, {*after}, tr("Edit cell parameters"));
+    }
+    m_inspectorEditBefore = after;
+    onCellEdited(bs, b, c);
+}
+
+void MainWindow::onInspectorDiscreteCellChanged(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (m_inspectorContinuousEdit) {
+        onCellEdited(bankSetIndex, bankIndex, cellIndex);
+        return;
+    }
+    auto after = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
+    if (m_suppressInspectorUndo) {
+        if (after) {
+            m_inspectorEditBefore = after;
+        }
+        onCellEdited(bankSetIndex, bankIndex, cellIndex);
+        return;
+    }
+    if (m_inspectorEditBefore && after
+        && m_inspectorEditBefore->ref.bankSet == bankSetIndex
+        && m_inspectorEditBefore->ref.bank == bankIndex
+        && m_inspectorEditBefore->ref.cell == cellIndex) {
+        // Keep current MIDI mappings on undo of unrelated inspector field edits.
+        CellSnapshot before = *m_inspectorEditBefore;
+        before.cell.propertyMappings = after->cell.propertyMappings;
+        pushCellsReplaceCommand({before}, {*after}, tr("Edit cell"));
+        m_inspectorEditBefore = after;
+    } else if (after) {
+        m_inspectorEditBefore = after;
+    }
+    onCellEdited(bankSetIndex, bankIndex, cellIndex);
+    if (m_bankGrid) {
+        m_bankGrid->refreshCellLabels();
+    }
+}
+
+void MainWindow::captureLearnBaseline()
+{
+    m_learnBaselineValid = false;
+    m_learnCellBefore.reset();
+    m_learnTriggersBefore.clear();
+    if (!m_project) {
+        return;
+    }
+    m_learnTriggersBefore = m_project->triggerMappings;
+    if (m_bankGrid) {
+        const int ci = m_bankGrid->selectedCellIndex();
+        if (ci >= 0) {
+            m_learnCellBefore = snapshotSingleCell(m_bankGrid->activeBankSetIndex(),
+                                                   m_bankGrid->activeBankIndex(),
+                                                   ci);
+        }
+    }
+    // Filter-editor learn uses explicit bank/cell in beginLearn* — also set from callers.
+    m_learnBaselineValid = true;
+}
+
+void MainWindow::commitLearnUndoIfNeeded(const QString& text)
+{
+    if (!m_learnBaselineValid || !m_undoStack || !m_project) {
+        m_learnBaselineValid = false;
+        return;
+    }
+    m_learnBaselineValid = false;
+
+    const auto& afterTriggers = m_project->triggerMappings;
+    bool triggersChanged = m_learnTriggersBefore.size() != afterTriggers.size();
+    if (!triggersChanged) {
+        for (int i = 0; i < afterTriggers.size(); ++i) {
+            const auto& a = m_learnTriggersBefore[i];
+            const auto& b = afterTriggers[i];
+            if (a.input != b.input || a.channel != b.channel || a.number != b.number
+                || a.keyText != b.keyText || a.target != b.target
+                || a.bankSetIndex != b.bankSetIndex || a.bankIndex != b.bankIndex
+                || a.cellIndex != b.cellIndex || a.propertyName != b.propertyName) {
+                triggersChanged = true;
+                break;
+            }
+        }
+    }
+    if (triggersChanged) {
+        m_undoStack->push(new TriggerMappingsReplaceCommand(
+            m_project.get(), m_learnTriggersBefore, m_project->triggerMappings, text));
+    }
+
+    if (m_learnCellBefore) {
+        if (auto after = snapshotSingleCell(m_learnCellBefore->ref.bankSet,
+                                            m_learnCellBefore->ref.bank,
+                                            m_learnCellBefore->ref.cell)) {
+            if (m_learnCellBefore->cell.propertyMappings.size()
+                != after->cell.propertyMappings.size()) {
+                pushCellsReplaceCommand({*m_learnCellBefore}, {*after}, text);
+            } else {
+                bool mappingsChanged = false;
+                for (int i = 0; i < after->cell.propertyMappings.size(); ++i) {
+                    const auto& a = m_learnCellBefore->cell.propertyMappings[i];
+                    const auto& b = after->cell.propertyMappings[i];
+                    if (a.property != b.property || a.input != b.input || a.channel != b.channel
+                        || a.number != b.number || a.minValue != b.minValue || a.maxValue != b.maxValue
+                        || a.buttonMode != b.buttonMode || a.buttonValue != b.buttonValue) {
+                        mappingsChanged = true;
+                        break;
+                    }
+                }
+                if (mappingsChanged) {
+                    pushCellsReplaceCommand({*m_learnCellBefore}, {*after}, text);
+                }
+            }
+        }
+    }
+    m_learnCellBefore.reset();
+}
+
+void MainWindow::commitFilterCellUndo(int bankSetIndex, int bankIndex, int cellIndex,
+                                      const QString& text)
+{
+    auto after = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
+    if (!after) {
+        return;
+    }
+    if (!m_filterEditBefore
+        || m_filterEditBefore->ref.bankSet != bankSetIndex
+        || m_filterEditBefore->ref.bank != bankIndex
+        || m_filterEditBefore->ref.cell != cellIndex) {
+        m_filterEditBefore = after;
+        return;
+    }
+    // Filter-param undo must not roll back MIDI mappings learned while the debounce was open.
+    CellSnapshot before = *m_filterEditBefore;
+    before.cell.propertyMappings = after->cell.propertyMappings;
+    pushCellsReplaceCommand({before}, {*after}, text);
+    m_filterEditBefore = after;
+}
+
+void MainWindow::scheduleFilterParamsUndo(int bankSetIndex, int bankIndex, int cellIndex)
+{
+    if (!m_filterEditBefore
+        || m_filterEditBefore->ref.bankSet != bankSetIndex
+        || m_filterEditBefore->ref.bank != bankIndex
+        || m_filterEditBefore->ref.cell != cellIndex) {
+        m_filterEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
+    }
+    m_filterParamsUndoBankSet = bankSetIndex;
+    m_filterParamsUndoBank = bankIndex;
+    m_filterParamsUndoCell = cellIndex;
+    if (m_filterParamsUndoTimer) {
+        m_filterParamsUndoTimer->start();
+    }
+}
+
 int MainWindow::pickMixSlotForTrigger(int bankSet, int bank, int cell)
 {
     const int existing = findLayerPlayingCell(bankSet, bank, cell);
@@ -2941,6 +3945,8 @@ void MainWindow::assignMediaToCell(int bankSetIndex, int bankIndex, int cellInde
         return;
     }
 
+    auto before = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
+
     QUuid id;
     for (const auto& m : m_project->mediaLibrary) {
         if (m.path.compare(absolutePath, Qt::CaseInsensitive) == 0) {
@@ -2963,9 +3969,15 @@ void MainWindow::assignMediaToCell(int bankSetIndex, int bankIndex, int cellInde
     auto& cellRef = bank.cells[cellIndex];
     cellRef.visual.type = VisualType::Media;
     cellRef.visual.mediaId = id;
+    if (before) {
+        if (auto after = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex)) {
+            pushCellsReplaceCommand({*before}, {*after}, tr("Assign media"));
+        }
+    }
     m_bankGrid->selectCell(cellIndex);
     m_bankGrid->refresh();
     m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
+    m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     refreshPreviewForSelectedCell();
     reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
     if (m_previewA) {
@@ -3017,6 +4029,26 @@ void MainWindow::copySelectedCell()
 
 void MainWindow::pasteIntoSelectedCell()
 {
+    pasteIntoSelectedCell(pvj::core::CellPasteMode::FullWithMidi);
+}
+
+void MainWindow::pasteIntoSelectedCellWithMidi()
+{
+    pasteIntoSelectedCell(pvj::core::CellPasteMode::FullWithMidi);
+}
+
+void MainWindow::pasteIntoSelectedCellWithoutMidi()
+{
+    pasteIntoSelectedCell(pvj::core::CellPasteMode::FullWithoutMidi);
+}
+
+void MainWindow::pasteIntoSelectedCellParamsWithMidi()
+{
+    pasteIntoSelectedCell(pvj::core::CellPasteMode::ParamsWithMidi);
+}
+
+void MainWindow::pasteIntoSelectedCell(pvj::core::CellPasteMode mode)
+{
     if (!m_cellClipboardValid) {
         statusBar()->showMessage(tr("Copy a cell first (Ctrl+C)"), 3000);
         return;
@@ -3035,13 +4067,31 @@ void MainWindow::pasteIntoSelectedCell()
     if (!dst) {
         return;
     }
-    pvj::core::copyCellContent(*dst, m_cellClipboard);
+
+    QVector<CellSnapshot> before = snapshotCellAcrossBanks(bankSetIndex, bankIndex, cellIndex);
+    pvj::core::pasteCellContent(*dst, m_cellClipboard, mode);
     const int layerBanks =
-        applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, cellIndex, m_cellClipboard);
+        applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, cellIndex, *dst);
+    QVector<CellSnapshot> after = snapshotCellAcrossBanks(bankSetIndex, bankIndex, cellIndex);
+    QString undoText;
+    switch (mode) {
+    case pvj::core::CellPasteMode::FullWithMidi:
+        undoText = tr("Paste cell (with MIDI)");
+        break;
+    case pvj::core::CellPasteMode::FullWithoutMidi:
+        undoText = tr("Paste cell (without MIDI)");
+        break;
+    case pvj::core::CellPasteMode::ParamsWithMidi:
+        undoText = tr("Paste parameters + MIDI");
+        break;
+    }
+    pushCellsReplaceCommand(std::move(before), std::move(after), undoText);
+
     m_bankGrid->refresh();
     if (m_inspector) {
         m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     }
+    m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     refreshPreviewForSelectedCell();
     reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
     onCellEdited(bankSetIndex, bankIndex, cellIndex);
@@ -3070,17 +4120,26 @@ void MainWindow::onCellContextMenu(int bankSetIndex, int bankIndex, int cellInde
                                    if (!m_project) {
                                        return;
                                    }
+                                   auto before = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
                                    auto& setRef = m_project->bankSets[bankSetIndex];
                                    Cell& c = setRef.banks[bankIndex].cells[cellIndex];
                                    c.visual.type = VisualType::MixerFilter;
                                    c.visual.generator = GeneratorKind::None;
                                    c.visual.mediaId = {};
+                                   if (before) {
+                                       if (auto after = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex)) {
+                                           pushCellsReplaceCommand({*before}, {*after},
+                                                                   tr("Set mixer filter cell"));
+                                       }
+                                   }
                                    if (m_bankGrid) {
                                        m_bankGrid->refresh();
                                    }
                                    if (m_inspector) {
                                        m_inspector->refreshFromModel();
                                    }
+                                   m_inspectorEditBefore =
+                                       snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
                                    statusBar()->showMessage(
                                        tr("Cell %1 is now a mixer filter cell — pick a filter (double-click)")
                                            .arg(cellIndex + 1),
@@ -3095,8 +4154,15 @@ void MainWindow::onCellContextMenu(int bankSetIndex, int bankIndex, int cellInde
     });
     menu.addSeparator();
     menu.addAction(tr("Copy cell"), this, &MainWindow::copySelectedCell);
-    auto* pasteAct = menu.addAction(tr("Paste into cell"), this, &MainWindow::pasteIntoSelectedCell);
-    pasteAct->setEnabled(m_cellClipboardValid);
+    auto* pasteWithMidi = menu.addAction(tr("Paste (with MIDI)"), this,
+                                         &MainWindow::pasteIntoSelectedCellWithMidi);
+    pasteWithMidi->setEnabled(m_cellClipboardValid);
+    auto* pasteWithoutMidi = menu.addAction(tr("Paste without MIDI"), this,
+                                            &MainWindow::pasteIntoSelectedCellWithoutMidi);
+    pasteWithoutMidi->setEnabled(m_cellClipboardValid);
+    auto* pasteParams = menu.addAction(tr("Paste parameters + MIDI"), this,
+                                       &MainWindow::pasteIntoSelectedCellParamsWithMidi);
+    pasteParams->setEnabled(m_cellClipboardValid);
     if (m_project && bankSetIndex >= 0 && bankSetIndex < m_project->bankSets.size()) {
         const auto& set = m_project->bankSets[bankSetIndex];
         if (bankIndex >= 0 && bankIndex < set.banks.size()
@@ -3164,11 +4230,17 @@ void MainWindow::pasteBankIntoActive()
     if (bankIndex < 0 || bankIndex >= set.banks.size()) {
         return;
     }
+
+    const Project before = *m_project;
     Bank& dst = set.banks[bankIndex];
     pvj::core::copyBankContent(dst, m_bankClipboard);
     int layerCells = 0;
     for (int i = 0; i < dst.cells.size(); ++i) {
         layerCells += applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, i, dst.cells[i]);
+    }
+    if (m_undoStack) {
+        m_undoStack->push(new ProjectReplaceCommand(m_project.get(), before, *m_project,
+                                                    tr("Paste bank")));
     }
     m_bankGrid->refresh();
     for (int i = 0; i < dst.cells.size(); ++i) {
@@ -3179,6 +4251,7 @@ void MainWindow::pasteBankIntoActive()
     if (m_inspector) {
         m_inspector->setSelection(bankSetIndex, bankIndex, m_bankGrid->selectedCellIndex());
     }
+    m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, m_bankGrid->selectedCellIndex());
     refreshPreviewForSelectedCell();
     const QString label = dst.name.isEmpty() ? tr("Bank %1").arg(bankIndex + 1) : dst.name;
     if (layerCells > 0) {
@@ -3205,6 +4278,7 @@ void MainWindow::renameBank(int bankSetIndex, int bankIndex)
         return;
     }
     Bank& bank = set.banks[bankIndex];
+    const Bank beforeBank = bank;
     const QString current =
         bank.name.isEmpty() ? tr("Bank %1").arg(bankIndex + 1) : bank.name;
     bool ok = false;
@@ -3218,6 +4292,10 @@ void MainWindow::renameBank(int bankSetIndex, int bankIndex)
         name = QStringLiteral("Bank %1").arg(bankIndex + 1);
     }
     bank.name = name;
+    if (m_undoStack) {
+        m_undoStack->push(new BankReplaceCommand(m_project.get(), bankSetIndex, bankIndex,
+                                                 beforeBank, bank, tr("Rename bank")));
+    }
     m_bankGrid->refresh();
     statusBar()->showMessage(tr("Renamed bank to “%1”").arg(name), 3000);
 }
@@ -3242,6 +4320,7 @@ void MainWindow::renameCell(int bankSetIndex, int bankIndex, int cellIndex)
     if (!cellAllowsRename(cell)) {
         return;
     }
+    auto before = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     bool ok = false;
     QString name = QInputDialog::getText(this, tr("Rename cell"), tr("Cell name:"),
                                          QLineEdit::Normal, cell.name, &ok);
@@ -3249,10 +4328,16 @@ void MainWindow::renameCell(int bankSetIndex, int bankIndex, int cellIndex)
         return;
     }
     cell.name = name.trimmed();
+    if (before) {
+        if (auto after = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex)) {
+            pushCellsReplaceCommand({*before}, {*after}, tr("Rename cell"));
+        }
+    }
     m_bankGrid->refresh();
     if (m_inspector) {
         m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     }
+    m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     statusBar()->showMessage(cell.name.isEmpty()
                                  ? tr("Cleared cell name")
                                  : tr("Renamed cell to “%1”").arg(cell.name),
@@ -3385,7 +4470,7 @@ void MainWindow::setupInputMapping()
                     reinterpret_cast<const unsigned char*>(b.constData()),
                     size_t(b.size()));
             },
-            Qt::QueuedConnection);
+            Qt::DirectConnection);
 
     connect(m_inputRouter.get(), &pvj::input::InputRouter::triggerCell,
             this, &MainWindow::onInputTriggerCell);
@@ -3406,6 +4491,8 @@ void MainWindow::setupInputMapping()
 
     connect(m_inputRouter.get(), &pvj::input::InputRouter::learnFinished,
             this, [this](const QString& msg) {
+        commitLearnUndoIfNeeded(tr("Learn mapping"));
+        syncInspectorEditBaselines();
         statusBar()->showMessage(msg, 6000);
         if (m_inspector) {
             m_inspector->refreshFromModel();
@@ -3419,6 +4506,7 @@ void MainWindow::setupInputMapping()
     });
     connect(m_inputRouter.get(), &pvj::input::InputRouter::triggerMappingsChanged,
             this, [this]() {
+        syncInspectorEditBaselines();
         if (m_inspector) {
             m_inspector->refreshFromModel();
         }
@@ -3431,6 +4519,7 @@ void MainWindow::setupInputMapping()
     });
     connect(m_inputRouter.get(), &pvj::input::InputRouter::propertyMappingsChanged,
             this, [this]() {
+        syncInspectorEditBaselines();
         if (m_inspector) {
             m_inspector->refreshFromModel();
         }
@@ -3443,6 +4532,8 @@ void MainWindow::setupInputMapping()
     });
     connect(m_inputRouter.get(), &pvj::input::InputRouter::learnCancelled,
             this, [this]() {
+        m_learnBaselineValid = false;
+        m_learnCellBefore.reset();
         statusBar()->showMessage(tr("Learn cancelled"), 3000);
     });
     connect(m_inputRouter.get(), &pvj::input::InputRouter::learnHint,
@@ -3535,15 +4626,25 @@ bool MainWindow::eventFilter(QObject* /*watched*/, QEvent* event)
     if (!focusAllowsGlobalShortcuts()) {
         return false;
     }
-    const bool ctrlOnly = (ke->modifiers() & Qt::ControlModifier)
-        && !(ke->modifiers() & (Qt::AltModifier | Qt::MetaModifier | Qt::ShiftModifier));
-    if (ctrlOnly) {
-        if (ke->key() == Qt::Key_C) {
+    const bool ctrl = (ke->modifiers() & Qt::ControlModifier);
+    const bool shift = (ke->modifiers() & Qt::ShiftModifier);
+    const bool alt = (ke->modifiers() & Qt::AltModifier);
+    const bool meta = (ke->modifiers() & Qt::MetaModifier);
+    if (ctrl && !meta) {
+        if (ke->key() == Qt::Key_C && !shift && !alt) {
             copySelectedCell();
             return true;
         }
-        if (ke->key() == Qt::Key_V) {
-            pasteIntoSelectedCell();
+        if (ke->key() == Qt::Key_V && !shift && !alt) {
+            pasteIntoSelectedCellWithMidi();
+            return true;
+        }
+        if (ke->key() == Qt::Key_V && shift && !alt) {
+            pasteIntoSelectedCellWithoutMidi();
+            return true;
+        }
+        if (ke->key() == Qt::Key_V && alt && !shift) {
+            pasteIntoSelectedCellParamsWithMidi();
             return true;
         }
     }
@@ -3564,6 +4665,7 @@ void MainWindow::onLearnCellTrigger()
                                  tr("Select a cell in the bank grid first."));
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnCellTrigger(m_bankGrid->activeBankSetIndex(),
                                          m_bankGrid->activeBankIndex(),
                                          ci);
@@ -3596,6 +4698,7 @@ void MainWindow::onLearnPropertyCc()
     }
     const int idx = display.indexOf(pick);
     const QString prop = (idx >= 0) ? items.at(idx) : pick.section(QStringLiteral(" — "), 0, 0);
+    captureLearnBaseline();
     m_inputRouter->beginLearnPropertyCc(m_bankGrid->activeBankSetIndex(),
                                         m_bankGrid->activeBankIndex(),
                                         ci,
@@ -3614,6 +4717,7 @@ void MainWindow::onLearnMidiFadeTransparency()
                                  tr("Select a cell in the bank grid first."));
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnPropertyCc(m_bankGrid->activeBankSetIndex(),
                                         m_bankGrid->activeBankIndex(),
                                         ci,
@@ -3654,6 +4758,141 @@ void MainWindow::onMidiMappingEditToggled(bool on)
     updateWindowTitle();
 }
 
+void MainWindow::onCopyKeyboardMappingToAllBanks()
+{
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    const int bankSetIndex = m_bankGrid->activeBankSetIndex();
+    const int bankIndex    = m_bankGrid->activeBankIndex();
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+
+    const QList<pvj::core::TriggerMapping> beforeTriggers = m_project->triggerMappings;
+    int applied = 0;
+    const int cellCount = set.banks[bankIndex].cells.size();
+    for (int ci = 0; ci < cellCount; ++ci) {
+        if (applyKeyboardTriggerToAllBanks(bankSetIndex, bankIndex, ci)) {
+            ++applied;
+        }
+    }
+    if (applied == 0) {
+        statusBar()->showMessage(tr("No keyboard or MIDI note triggers on this bank"), 4000);
+        return;
+    }
+
+    if (m_undoStack) {
+        m_undoStack->push(new TriggerMappingsReplaceCommand(
+            m_project.get(), beforeTriggers, m_project->triggerMappings,
+            tr("Copy keyboard mapping to all banks")));
+    }
+    markProjectDirty();
+    if (m_bankGrid) {
+        m_bankGrid->refresh();
+    }
+    statusBar()->showMessage(
+        tr("Applied keyboard/MIDI note triggers for %1 cells to all banks").arg(applied),
+        4000);
+}
+
+void MainWindow::onCopyLayerMappingToAllBanks()
+{
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    const int bankSetIndex = m_bankGrid->activeBankSetIndex();
+    const int bankIndex    = m_bankGrid->activeBankIndex();
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+
+    QVector<CellSnapshot> before = snapshotAllCellsInBankSet(bankSetIndex);
+    int cellUpdates = 0;
+    const Bank& srcBank = set.banks[bankIndex];
+    for (int ci = 0; ci < srcBank.cells.size(); ++ci) {
+        const int preferred = qBound(0, srcBank.cells[ci].props.preferredLayer, 12);
+        cellUpdates +=
+            applyPreferredLayerToAllBanks(bankSetIndex, bankIndex, ci, preferred);
+    }
+    QVector<CellSnapshot> after = snapshotAllCellsInBankSet(bankSetIndex);
+    pushCellsReplaceCommand(std::move(before), std::move(after),
+                            tr("Copy layer selection to all banks"));
+
+    if (m_bankGrid) {
+        m_bankGrid->refresh();
+    }
+    if (m_inspector) {
+        m_inspector->refreshFromModel();
+        m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex,
+                                                   m_bankGrid->selectedCellIndex());
+    }
+    updateMixerFromPlayingCells();
+    statusBar()->showMessage(
+        tr("Copied layer selection for all cells to other banks (%1 cell updates)")
+            .arg(cellUpdates),
+        4000);
+}
+
+void MainWindow::onCopyMidiMappingToAllBanks()
+{
+    if (!m_project || !m_bankGrid) {
+        return;
+    }
+    const int bankSetIndex = m_bankGrid->activeBankSetIndex();
+    const int bankIndex    = m_bankGrid->activeBankIndex();
+    if (bankSetIndex < 0 || bankSetIndex >= m_project->bankSets.size()) {
+        return;
+    }
+    const auto& set = m_project->bankSets[bankSetIndex];
+    if (bankIndex < 0 || bankIndex >= set.banks.size()) {
+        return;
+    }
+
+    QVector<CellSnapshot> before = snapshotAllCellsInBankSet(bankSetIndex);
+    int cellUpdates = 0;
+    int cellsWithMidi = 0;
+    const Bank& srcBank = set.banks[bankIndex];
+    for (int ci = 0; ci < srcBank.cells.size(); ++ci) {
+        const Cell& src = srcBank.cells[ci];
+        if (src.propertyMappings.isEmpty()) {
+            // Still clear/copy empty mappings so other banks match source.
+            cellUpdates += applyMidiMappingsToAllBanks(bankSetIndex, bankIndex, ci, src);
+            continue;
+        }
+        ++cellsWithMidi;
+        cellUpdates += applyMidiMappingsToAllBanks(bankSetIndex, bankIndex, ci, src);
+    }
+    QVector<CellSnapshot> after = snapshotAllCellsInBankSet(bankSetIndex);
+    pushCellsReplaceCommand(std::move(before), std::move(after),
+                            tr("Copy MIDI mapping to all banks"));
+
+    if (m_bankGrid) {
+        m_bankGrid->refresh();
+    }
+    if (m_inspector) {
+        m_inspector->refreshFromModel();
+        m_inspectorEditBefore = snapshotSingleCell(bankSetIndex, bankIndex,
+                                                   m_bankGrid->selectedCellIndex());
+    }
+    if (m_filterEditor) {
+        m_filterEditor->refreshMidiMapOverlays();
+    }
+    statusBar()->showMessage(
+        tr("Copied MIDI mappings for all cells (%1 with mappings, %2 bank cell updates)")
+            .arg(cellsWithMidi)
+            .arg(cellUpdates),
+        4000);
+}
+
 void MainWindow::onApplyMappingToAllBanksToggled(bool on)
 {
     if (!on) {
@@ -3687,6 +4926,8 @@ void MainWindow::onApplyMappingToAllBanksToggled(bool on)
         return;
     }
 
+    QVector<CellSnapshot> before = snapshotCellAcrossBanks(bankSetIndex, bankIndex, cellIndex);
+
     const int playingLayer = findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex);
     if (playingLayer >= kUserLayerMin && playingLayer < kMixLayers) {
         const LayerKeyingState& layerKeying =
@@ -3699,16 +4940,10 @@ void MainWindow::onApplyMappingToAllBanksToggled(bool on)
     const Cell src = *srcCell;
 
     const int copied = applyCellLayerSettingsToAllBanks(bankSetIndex, bankIndex, cellIndex, src);
+    QVector<CellSnapshot> after = snapshotCellAcrossBanks(bankSetIndex, bankIndex, cellIndex);
+    pushCellsReplaceCommand(std::move(before), std::move(after), tr("Apply mapping to all banks"));
 
-    m_bankGrid->refresh();
-    if (playingLayer >= 0) {
-        reapplyPlayingCell(bankSetIndex, bankIndex, cellIndex);
-    }
-    if (m_inspector) {
-        m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
-    }
-    refreshPreviewForSelectedCell();
-    onCellEdited(bankSetIndex, bankIndex, cellIndex);
+    refreshAfterMappingApplyToAllBanks(bankSetIndex, bankIndex, cellIndex, playingLayer);
 
     statusBar()->showMessage(
         tr("Applied cell %1 mappings, layer, and playback settings to %2 banks")
@@ -3729,6 +4964,7 @@ void MainWindow::onInspectorMidiLearnCc(const QString& propertyName)
                                  tr("Select a cell in the bank grid first."));
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnPropertyCc(m_bankGrid->activeBankSetIndex(),
                                         m_bankGrid->activeBankIndex(),
                                         ci,
@@ -3747,6 +4983,7 @@ void MainWindow::onInspectorMidiLearnNote(const QString& propertyName, bool togg
                                  tr("Select a cell in the bank grid first."));
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnPropertyNote(
         m_bankGrid->activeBankSetIndex(),
         m_bankGrid->activeBankIndex(),
@@ -3766,10 +5003,17 @@ void MainWindow::onInspectorMidiClearMapping(const QString& propertyName)
     if (ci < 0) {
         return;
     }
-    m_inputRouter->clearPropertyMappingForCell(m_bankGrid->activeBankSetIndex(),
-                                                 m_bankGrid->activeBankIndex(),
-                                                 ci,
-                                                 propertyName);
+    const int bs = m_bankGrid->activeBankSetIndex();
+    const int bi = m_bankGrid->activeBankIndex();
+    auto before = snapshotSingleCell(bs, bi, ci);
+    m_inputRouter->clearPropertyMappingForCell(bs, bi, ci, propertyName);
+    if (before) {
+        if (auto after = snapshotSingleCell(bs, bi, ci)) {
+            if (before->cell.propertyMappings.size() != after->cell.propertyMappings.size()) {
+                pushCellsReplaceCommand({*before}, {*after}, tr("Clear MIDI mapping"));
+            }
+        }
+    }
     statusBar()->showMessage(tr("Cleared MIDI mapping for %1").arg(propertyName), 4000);
     if (m_inspector) {
         m_inspector->refreshFromModel();
@@ -3787,6 +5031,7 @@ void MainWindow::onLearnBankNext()
     if (!m_inputRouter || !m_bankGrid) {
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnBankNav(pvj::core::TriggerTarget::BankNext, m_bankGrid->activeBankSetIndex());
     statusBar()->showMessage(tr("Learn: press a MIDI note for bank next…"), 15000);
 }
@@ -3796,6 +5041,7 @@ void MainWindow::onLearnBankPrev()
     if (!m_inputRouter || !m_bankGrid) {
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnBankNav(pvj::core::TriggerTarget::BankPrev, m_bankGrid->activeBankSetIndex());
     statusBar()->showMessage(tr("Learn: press a MIDI note for bank previous…"), 15000);
 }
@@ -3820,6 +5066,7 @@ void MainWindow::onLearnBankSelect()
     if (!ok) {
         return;
     }
+    captureLearnBaseline();
     m_inputRouter->beginLearnBankNav(pvj::core::TriggerTarget::BankSelect, bs, oneBased - 1);
     statusBar()->showMessage(tr("Learn: press a MIDI note to jump to this bank…"), 15000);
 }
@@ -3833,6 +5080,8 @@ void MainWindow::onMidiLearnCellTriggerFromGrid(int bankSetIndex, int bankIndex,
     if (m_inspector) {
         m_inspector->setSelection(bankSetIndex, bankIndex, cellIndex);
     }
+    captureLearnBaseline();
+    m_learnCellBefore = snapshotSingleCell(bankSetIndex, bankIndex, cellIndex);
     m_inputRouter->beginLearnCellTrigger(bankSetIndex, bankIndex, cellIndex);
     statusBar()->showMessage(tr("Mapping: press a keyboard key or MIDI note for this cell…"), 15000);
 }
@@ -3924,6 +5173,10 @@ void MainWindow::onInputPropertyMapped(int bankSetIndex, int bankIndex, int cell
     if (!m_project) {
         return;
     }
+    // MIDI property writes apply only to cells currently on a mix layer.
+    if (findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex) < 0) {
+        return;
+    }
     if (propertyName.compare(QStringLiteral("transparency"), Qt::CaseInsensitive) == 0) {
         for (int i = 0; i < kMixLayers; ++i) {
             const auto& s = m_layerSlots[static_cast<size_t>(i)];
@@ -3947,6 +5200,7 @@ void MainWindow::onInputPropertyMapped(int bankSetIndex, int bankIndex, int cell
     if (!applyMappedProperty(bank.cells[cellIndex], propertyName, value)) {
         return;
     }
+    markProjectDirty();
 
     for (int i = kUserLayerMin; i < kMixLayers; ++i) {
         const DeckSlot& slot = m_layerSlots[static_cast<size_t>(i)];
@@ -3971,14 +5225,14 @@ void MainWindow::onInputPropertyMapped(int bankSetIndex, int bankIndex, int cell
     if (feedbackPlaying) {
         syncPlayingFeedbackCellAfterPropertyChange(bankSetIndex, bankIndex, cellIndex,
                                                    propertyName);
-    } else {
-        syncLiveMixerOpacityForCell(bankSetIndex, bankIndex, cellIndex);
-        const QString resolved = pvj::core::PropertyRegistry::resolvePropertyId(propertyName);
-        if (pvj::core::PropertyRegistry::isFilterParamProperty(resolved)) {
-            syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
-        } else {
-            scheduleMixerUpdateFromCells();
-        }
+        return;
+    }
+    syncLiveMixerOpacityForCell(bankSetIndex, bankIndex, cellIndex);
+    const QString resolved = pvj::core::PropertyRegistry::resolvePropertyId(propertyName);
+    if (pvj::core::PropertyRegistry::isFilterParamProperty(resolved)) {
+        syncFilterParamsToMixer(bankSetIndex, bankIndex, cellIndex);
+    } else if (resolved.compare(QStringLiteral("transparency"), Qt::CaseInsensitive) != 0) {
+        scheduleMixerUpdateFromCells();
     }
 }
 
@@ -3986,6 +5240,9 @@ void MainWindow::onInputPropertyToggle(int bankSetIndex, int bankIndex, int cell
                                        const QString& propertyName)
 {
     if (!m_project) {
+        return;
+    }
+    if (findLayerPlayingCell(bankSetIndex, bankIndex, cellIndex) < 0) {
         return;
     }
     if (propertyName.compare(QStringLiteral("transparency"), Qt::CaseInsensitive) == 0) {

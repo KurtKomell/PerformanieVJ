@@ -6,6 +6,7 @@
 
 #include <QKeyCombination>
 #include <QKeySequence>
+#include <QtGlobal>
 #include <cmath>
 
 namespace pvj::input {
@@ -492,8 +493,9 @@ void InputRouter::applyLearnCellTrigger(const InputEvent& ev)
     if (ev.type == pvj::core::InputType::Key) {
         const QKeyCombination combo = QKeyCombination::fromCombined(ev.qtKey | ev.keyboardModifiers);
         if (isModifierOnlyKey(combo) || !isUsableCellKeyboardKeyText(ev.keyText)) {
-            emit learnFinished(tr("Key is empty — press a letter, number, or function key "
-                                 "(modifier keys alone are not supported)."));
+            // Keep learn mode active; do not emit learnFinished (that commits/clears undo baseline).
+            emit learnHint(tr("Key is empty — press a letter, number, or function key "
+                              "(modifier keys alone are not supported)."));
             return;
         }
         m_project->setKeyboardTriggerForCell(m_learnBankSet, m_learnBank, m_learnCell, ev.keyText,
@@ -839,6 +841,59 @@ double InputRouter::scaleCcToProperty(double normalized01, double minV, double m
     return minV + (maxV - minV) * normalized01;
 }
 
+std::optional<int> InputRouter::lastContinuousValue(pvj::core::InputType type, int channel,
+                                                    int number) const
+{
+    const quint32 k = ccKey(channel, number);
+    if (type == pvj::core::InputType::MidiCC) {
+        const auto it = m_lastCcValue.constFind(k);
+        if (it == m_lastCcValue.cend()) {
+            return std::nullopt;
+        }
+        return int(*it);
+    }
+    if (type == pvj::core::InputType::MidiAftertouch) {
+        const auto it = m_lastAftertouchValue.constFind(k);
+        if (it == m_lastAftertouchValue.cend()) {
+            return std::nullopt;
+        }
+        return int(*it);
+    }
+    return std::nullopt;
+}
+
+bool InputRouter::scaleContinuousMapping(const pvj::core::PropertyMapping& pm, int raw0to127,
+                                         QString* outProperty, double* outValue) const
+{
+    if (!outProperty || !outValue) {
+        return false;
+    }
+    if (pm.input != pvj::core::InputType::MidiCC
+        && pm.input != pvj::core::InputType::MidiAftertouch) {
+        return false;
+    }
+    const QString prop = pvj::core::PropertyRegistry::resolvePropertyId(pm.property);
+    if (prop.isEmpty()) {
+        return false;
+    }
+    double minV = pm.minValue;
+    double maxV = pm.maxValue;
+    const QString pl = prop.toLower();
+    if (pl == QLatin1String("feedbackinhueshift") || pl == QLatin1String("feedbackhueshift")) {
+        minV = 0.0;
+        maxV = 1.0;
+    }
+    const double n = qBound(0, raw0to127, 127) / 127.0;
+    double scaled = scaleCcToProperty(n, minV, maxV);
+    if (pvj::core::PropertyRegistry::kindOf(prop) == pvj::core::PropertyRegistry::Kind::Enum) {
+        const double span = maxV - minV;
+        scaled = span > 1e-9 ? (scaled - minV) / span : 0.0;
+    }
+    *outProperty = prop;
+    *outValue = scaled;
+    return true;
+}
+
 bool InputRouter::keyboardTriggersMatch(const QString& stored, const QString& incoming)
 {
     if (stored == incoming) {
@@ -900,9 +955,9 @@ bool InputRouter::dispatchPlayback(const InputEvent& ev)
     }
 
     // 1) Property mappings — CC faders / knobs / poly aftertouch (per cell)
+    bool ccUsedAsPropertyFader = false;
     if (ev.type == pvj::core::InputType::MidiCC
         || ev.type == pvj::core::InputType::MidiAftertouch) {
-        const double n = ev.value / 127.0;
         for (int bi = 0; bi < m_project->bankSets.size(); ++bi) {
             const auto& set = m_project->bankSets[bi];
             for (int bj = 0; bj < set.banks.size(); ++bj) {
@@ -915,17 +970,13 @@ bool InputRouter::dispatchPlayback(const InputEvent& ev)
                         if (pm.channel != ev.channel || pm.number != ev.number) {
                             continue;
                         }
-                        const double scaled = scaleCcToProperty(n, pm.minValue, pm.maxValue);
-                        const QString prop =
-                            pvj::core::PropertyRegistry::resolvePropertyId(pm.property);
-                        if (pvj::core::PropertyRegistry::kindOf(prop)
-                            == pvj::core::PropertyRegistry::Kind::Enum) {
-                            const double span = pm.maxValue - pm.minValue;
-                            const double n01  = span > 1e-9 ? (scaled - pm.minValue) / span : 0.0;
-                            emit propertyValueChanged(bi, bj, ci, prop, n01);
-                        } else {
-                            emit propertyValueChanged(bi, bj, ci, prop, scaled);
+                        ccUsedAsPropertyFader = true;
+                        QString prop;
+                        double scaled = 0.0;
+                        if (!scaleContinuousMapping(pm, ev.value, &prop, &scaled)) {
+                            continue;
                         }
+                        emit propertyValueChanged(bi, bj, ci, prop, scaled);
                     }
                 }
             }
@@ -970,6 +1021,11 @@ bool InputRouter::dispatchPlayback(const InputEvent& ev)
         }
 
         if (t.input == pvj::core::InputType::MidiCC) {
+            // A CC used as a continuous fader (e.g. Input Hue) must not also launch a
+            // cell when it crosses 64 — GrandVJ clip-launch CCs often collide with knobs.
+            if (ccUsedAsPropertyFader && t.target == pvj::core::TriggerTarget::Cell) {
+                continue;
+            }
             if (!(prevCc < 64 && ev.value >= 64)) {
                 continue;
             }
@@ -1034,6 +1090,9 @@ bool InputRouter::dispatchPlayback(const InputEvent& ev)
     if (ev.type == pvj::core::InputType::MidiCC) {
         const quint32 k = ccKey(ev.channel, ev.number);
         m_lastCcValue.insert(k, ev.value);
+    } else if (ev.type == pvj::core::InputType::MidiAftertouch) {
+        const quint32 k = ccKey(ev.channel, ev.number);
+        m_lastAftertouchValue.insert(k, ev.value);
     }
 
     return cellTriggered;

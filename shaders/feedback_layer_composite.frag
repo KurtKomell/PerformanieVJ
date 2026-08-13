@@ -22,4 +22,3 @@ void main()
     // mixer.frag will use `alpha = c.a * layerOpacity`, so we output the mask only.
     fragColor = vec4(hist.rgb, alpha);
 }
-

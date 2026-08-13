@@ -96,8 +96,6 @@ const QHash<QString, QString>& grandVjPropertyAliasMap()
         add("PLAYMODE", "playMode");
         add("PAUS", "clipPaused");
         add("PAUSED", "clipPaused");
-        add("FBLR", "feedbackLoopRetention");
-        add("FBLI", "feedbackLiveInject");
         add("FBIS", "feedbackInSaturation");
         add("FBIB", "feedbackInBrightness");
         add("FBIC", "feedbackInContrast");
@@ -328,8 +326,6 @@ QStringList allPropertyNames()
         QStringLiteral("pictureSaturation"),
         QStringLiteral("pictureCircularMotion"),
         QStringLiteral("pictureWrapMode"),
-        QStringLiteral("feedbackLoopRetention"),
-        QStringLiteral("feedbackLiveInject"),
         QStringLiteral("feedbackInSaturation"),
         QStringLiteral("feedbackInBrightness"),
         QStringLiteral("feedbackInContrast"),
@@ -400,8 +396,11 @@ QString labelFor(const QString& name)
         { QStringLiteral("picturesaturation"), QStringLiteral("Picture saturation") },
         { QStringLiteral("picturecircularmotion"), QStringLiteral("Picture circular motion") },
         { QStringLiteral("picturewrapmode"), QStringLiteral("Picture wrap mode") },
-        { QStringLiteral("feedbackloopretention"), QStringLiteral("Feedback loop retention") },
-        { QStringLiteral("feedbackliveinject"), QStringLiteral("Feedback live inject") },
+        { QStringLiteral("feedbackinsaturation"), QStringLiteral("Feedback input saturation") },
+        { QStringLiteral("feedbackinbrightness"), QStringLiteral("Feedback input brightness") },
+        { QStringLiteral("feedbackincontrast"), QStringLiteral("Feedback input contrast") },
+        { QStringLiteral("feedbackinhueshift"), QStringLiteral("Feedback input hue") },
+        { QStringLiteral("feedbackingamma"), QStringLiteral("Feedback input gamma") },
         { QStringLiteral("feedbacksaturation"), QStringLiteral("Feedback saturation") },
         { QStringLiteral("feedbackbrightness"), QStringLiteral("Feedback brightness") },
         { QStringLiteral("feedbackcontrast"), QStringLiteral("Feedback contrast") },
@@ -540,9 +539,6 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("picturecircularmotion")) {
         *minV = 0.0;
         *maxV = 1.0;
-    } else if (p == QLatin1String("feedbackloopretention") || p == QLatin1String("feedbackliveinject")) {
-        *minV = 0.0;
-        *maxV = 1.0;
     } else if (p == QLatin1String("feedbackinsaturation") || p == QLatin1String("feedbackincontrast")
                || p == QLatin1String("feedbacksaturation") || p == QLatin1String("feedbackcontrast")) {
         *minV = 0.0;
@@ -551,7 +547,7 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
         *minV = -1.0;
         *maxV = 1.0;
     } else if (p == QLatin1String("feedbackinhueshift") || p == QLatin1String("feedbackhueshift")) {
-        *minV = -1.0;
+        *minV = 0.0;
         *maxV = 1.0;
     } else if (p == QLatin1String("feedbackzoom")) {
         *minV = kFeedbackZoomMin;
@@ -717,14 +713,6 @@ bool readValue(const Cell& c, const QString& raw, double* out)
     }
     if (p == QLatin1String("picturewrapmode")) {
         *out = double(int(c.props.picture.wrapMode));
-        return true;
-    }
-    if (p == QLatin1String("feedbackloopretention")) {
-        *out = c.props.feedback.loopRetention;
-        return true;
-    }
-    if (p == QLatin1String("feedbackliveinject")) {
-        *out = c.props.feedback.liveInject;
         return true;
     }
     if (p == QLatin1String("feedbackinsaturation")) {
@@ -1020,14 +1008,6 @@ bool applyValue(Cell& c, const QString& raw, double v)
         c.props.picture.wrapMode = static_cast<WrapMode>(qBound(0, mode, 4));
         return true;
     }
-    if (p == QLatin1String("feedbackloopretention")) {
-        c.props.feedback.loopRetention = qBound(0.0, v, 1.0);
-        return true;
-    }
-    if (p == QLatin1String("feedbackliveinject")) {
-        c.props.feedback.liveInject = qBound(0.0, v, 1.0);
-        return true;
-    }
     if (p == QLatin1String("feedbackinsaturation")) {
         c.props.feedback.inSaturation = qBound(0.0, v, 2.0);
         return true;
@@ -1041,7 +1021,7 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("feedbackinhueshift")) {
-        c.props.feedback.inHueShift = qBound(-1.0, v, 1.0);
+        c.props.feedback.inHueShift = qBound(0.0, v, 1.0);
         return true;
     }
     if (p == QLatin1String("feedbackingamma")) {
@@ -1061,7 +1041,7 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("feedbackhueshift")) {
-        c.props.feedback.hueShift = qBound(-1.0, v, 1.0);
+        c.props.feedback.hueShift = qBound(0.0, v, 1.0);
         return true;
     }
     if (p == QLatin1String("feedbackgamma")) {
@@ -1081,7 +1061,9 @@ bool applyValue(Cell& c, const QString& raw, double v)
         return true;
     }
     if (p == QLatin1String("feedbackinputmode")) {
-        c.props.feedback.inputMode = FeedbackInputMode::SceneLoopback;
+        const int mode = int(qRound(v));
+        c.props.feedback.inputMode =
+            static_cast<FeedbackInputMode>(qBound(0, mode, int(FeedbackInputMode::SceneLoopback)));
         return true;
     }
     if (p == QLatin1String("feedbackwrapmode")) {

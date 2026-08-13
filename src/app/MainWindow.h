@@ -8,6 +8,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
 class QAction;
 class QActionGroup;
@@ -18,9 +19,12 @@ class QLabel;
 class QMenu;
 class QProgressDialog;
 class QTimer;
+class QUndoStack;
 
+#include "core/CellOps.h"
 #include "core/Model.h"
 #include "core/Project.h"
+#include "undo/ProjectUndoCommands.h"
 
 namespace pvj::video {
 class VideoDecoder;
@@ -88,6 +92,7 @@ private slots:
     void onFileSaveAs();
     void onRecentFileTriggered();
     void onImportVj2();
+    void onImportVj2IntoBank();
     void onImportAvc();
     void onConfigureBankGrid();
     void onEditPreferences();
@@ -100,6 +105,9 @@ private slots:
     void onBankContextMenu(int bankSetIndex, int bankIndex, QPoint globalPos);
     void copySelectedCell();
     void pasteIntoSelectedCell();
+    void pasteIntoSelectedCellWithMidi();
+    void pasteIntoSelectedCellWithoutMidi();
+    void pasteIntoSelectedCellParamsWithMidi();
     void copyBank(int bankSetIndex, int bankIndex);
     void pasteBankIntoActive();
     void renameBank(int bankSetIndex, int bankIndex);
@@ -117,6 +125,9 @@ private slots:
     void onCancelLearn();
     void onMidiMappingEditToggled(bool on);
     void onApplyMappingToAllBanksToggled(bool on);
+    void onCopyKeyboardMappingToAllBanks();
+    void onCopyLayerMappingToAllBanks();
+    void onCopyMidiMappingToAllBanks();
     void onMidiLearnCellTriggerFromGrid(int bankSetIndex, int bankIndex, int cellIndex);
 
     void onInputTriggerCell(int bankSetIndex, int bankIndex, int cellIndex, bool fromMidiNote);
@@ -147,10 +158,21 @@ protected:
 private:
     void setupMenus();
     void setupCentralLayout();
+    void restoreViewSettings();
+    void saveViewSettings();
+    void setParameterInspectorVisible(bool visible);
     void updateWindowTitle();
     bool saveToPath(const QString& path);
+    bool saveProject();
+    bool saveProjectAs();
+    /// Returns false if the user cancelled (keep current project / abort close).
+    bool maybeSave();
+    void markProjectDirty();
+    void clearProjectDirty();
+    bool isProjectDirty() const;
     void openProjectFromPath(const QString& path);
     void rememberRecentProject(const QString& path);
+    void rememberLastProjectPath();
     void updateRecentFilesMenu();
     void rebindUiToProject(bool preloadMedia = true);
     void showProjectLoadProgress(const QString& label, int percent);
@@ -163,6 +185,8 @@ private:
     void playMediaOnLayer(int layer, const QString& path);
     void stopMixLayer(int layer);
     bool startCellOnMixLayer(int layer, int bankSetIndex, int bankIndex, int cellIndex);
+    /// Apply last-seen MIDI CC/aftertouch positions to a newly started playing cell.
+    void reapplyCurrentMidiControllersToPlayingCell(int bankSetIndex, int bankIndex, int cellIndex);
     void reapplyPlayingCell(int bankSetIndex, int bankIndex, int cellIndex);
     static bool cellIsPlayable(const pvj::core::Cell& cell);
     static bool cellIsMixerFilterType(const pvj::core::Cell& cell);
@@ -174,10 +198,13 @@ private:
 
     void assignMediaToCell(int bankSetIndex, int bankIndex, int cellIndex, const QString& absolutePath);
     void resolveMissingProjectMedia();
+    void scheduleResolveMissingProjectMedia();
+    void processNextMissingMedia();
+    void finishMissingMediaPass();
     void clearCellsUsingMedia(const QUuid& mediaId);
     bool ensureMediaFileAvailable(const QUuid& mediaId, const QString& path);
     bool tryLocateMissingMedia(const QUuid& mediaId, const QString& oldPath);
-    enum class MissingMediaAction { Locate, Skip, SkipAll };
+    enum class MissingMediaAction { Locate, Skip, SkipAll, Delete, DeleteAll };
     MissingMediaAction promptMissingMediaFile(const QString& path);
     void applyBankGridDimensions(int rows, int cols);
     void applyStagePixelSize(QSize px);
@@ -226,6 +253,14 @@ private:
     /// Returns the number of banks updated (excluding `sourceBankIndex`).
     int applyCellLayerSettingsToAllBanks(int bankSetIndex, int sourceBankIndex, int cellIndex,
                                          const pvj::core::Cell& src);
+    int applyPreferredLayerToAllBanks(int bankSetIndex, int sourceBankIndex, int cellIndex,
+                                      int preferredLayer);
+    int applyMidiMappingsToAllBanks(int bankSetIndex, int sourceBankIndex, int cellIndex,
+                                    const pvj::core::Cell& src);
+    /// Promotes the selected cell's keyboard + MIDI-note triggers to all-banks form.
+    bool applyKeyboardTriggerToAllBanks(int bankSetIndex, int bankIndex, int cellIndex);
+    void refreshAfterMappingApplyToAllBanks(int bankSetIndex, int bankIndex, int cellIndex,
+                                            int playingLayer);
     /// Active bank for slot triggers (`kBankIndexAllBanks`), else mapping bank index.
     int resolveCellTriggerBankIndex(int mappingBankIndex) const;
     int pickMixSlotForTrigger(int bankSet, int bank, int cell);
@@ -244,11 +279,48 @@ private:
     void syncMixerFilterHighlightsToBankGrid();
     void syncPeekHighlightToBankGrid();
 
+    void pasteIntoSelectedCell(pvj::core::CellPasteMode mode);
+    void clearUndoStack();
+    void shutdownUndoStack();
+    void refreshUiAfterProjectEdit();
+    void pushCellsReplaceCommand(QVector<CellSnapshot> before, QVector<CellSnapshot> after,
+                                 const QString& text);
+    QVector<CellSnapshot> snapshotCellAcrossBanks(int bankSetIndex, int bankIndex,
+                                                  int cellIndex) const;
+    QVector<CellSnapshot> snapshotAllCellsInBankSet(int bankSetIndex) const;
+    std::optional<CellSnapshot> snapshotSingleCell(int bankSetIndex, int bankIndex,
+                                                   int cellIndex) const;
+    void beginInspectorContinuousEdit();
+    void endInspectorContinuousEdit();
+    void onInspectorDiscreteCellChanged(int bankSetIndex, int bankIndex, int cellIndex);
+    void syncInspectorEditBaselines();
+    void captureLearnBaseline();
+    void commitLearnUndoIfNeeded(const QString& text);
+    void commitFilterCellUndo(int bankSetIndex, int bankIndex, int cellIndex, const QString& text);
+    void scheduleFilterParamsUndo(int bankSetIndex, int bankIndex, int cellIndex);
+
     std::unique_ptr<pvj::core::Project> m_project;
+    QUndoStack* m_undoStack = nullptr;
+    bool m_projectDirty = false;
+    bool m_closing = false;
+    bool m_refreshingUiAfterEdit = false;
+    bool m_suppressInspectorUndo = false;
     bool m_cellClipboardValid = false;
     pvj::core::Cell m_cellClipboard;
     bool m_bankClipboardValid = false;
     pvj::core::Bank m_bankClipboard;
+
+    bool m_inspectorContinuousEdit = false;
+    std::optional<CellSnapshot> m_inspectorEditBefore;
+    QList<pvj::core::TriggerMapping> m_learnTriggersBefore;
+    std::optional<CellSnapshot> m_learnCellBefore;
+    bool m_learnBaselineValid = false;
+
+    std::optional<CellSnapshot> m_filterEditBefore;
+    QTimer* m_filterParamsUndoTimer = nullptr;
+    int m_filterParamsUndoBankSet = -1;
+    int m_filterParamsUndoBank = -1;
+    int m_filterParamsUndoCell = -1;
 
     static constexpr int kMixLayers = 14;
     static constexpr int kBackgroundLayer = 0;
@@ -265,6 +337,8 @@ private:
     ParameterInspector*          m_inspector = nullptr;
     BankGridWidget*                m_bankGrid  = nullptr;
     PvjSplitter*                   m_mainSplit = nullptr;
+    PvjSplitter*                   m_upperSplit = nullptr;
+    QAction*                       m_actToggleInspector = nullptr;
     std::unique_ptr<FilterNodeEditorWindow> m_filterEditor;
 
     std::unique_ptr<pvj::input::InputRouter> m_inputRouter;
@@ -317,6 +391,13 @@ private:
     QMenu*   m_recentFilesMenu           = nullptr;
 
     bool m_skipAllMissingMedia = false;
+    bool m_deleteAllMissingMedia = false;
+    bool m_missingMediaPassActive = false;
+    bool m_missingMediaDialogOpen = false;
+    bool m_missingMediaResolveScheduled = false;
+    bool m_missingMediaCellsCleared = false;
+    bool m_missingMediaUpdated = false;
+    QList<QUuid> m_missingMediaQueue;
     bool m_startupProjectPromptDone = false;
 
     QProgressDialog* m_mediaPreloadDialog = nullptr;

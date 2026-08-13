@@ -11,4 +11,5 @@ function(pvj_add_input_test name)
 endfunction()
 
 pvj_add_core_test(test_vj2_import)
+pvj_add_core_test(test_cell_ops)
 pvj_add_input_test(test_input_router)

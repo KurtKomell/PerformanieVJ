@@ -346,9 +346,17 @@ QString toString(FeedbackInputMode m)
 
 FeedbackInputMode feedbackInputModeFromString(const QString& s, FeedbackInputMode fallback)
 {
-    Q_UNUSED(s);
-    Q_UNUSED(fallback);
-    return FeedbackInputMode::SceneLoopback;
+    const QString t = s.trimmed().toLower();
+    if (t == QLatin1String("belowonly") || t == QLatin1String("below")) {
+        return FeedbackInputMode::BelowOnly;
+    }
+    if (t == QLatin1String("stackcomposite") || t == QLatin1String("stack")) {
+        return FeedbackInputMode::StackComposite;
+    }
+    if (t == QLatin1String("sceneloopback") || t == QLatin1String("scene")) {
+        return FeedbackInputMode::SceneLoopback;
+    }
+    return fallback;
 }
 
 QString toString(WrapMode m)

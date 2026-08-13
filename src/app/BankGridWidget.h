@@ -51,6 +51,8 @@ public:
     int mediaPreloadTotal() const { return m_preloadBatchTotal; }
     void setGridDimensions(int rows, int cols);
     void refresh();
+    /// Updates cell labels/highlights without reloading filmstrip thumbnails.
+    void refreshCellLabels();
 
     int activeBankSetIndex() const { return m_bankSetIndex; }
     int activeBankIndex()    const { return m_bankIndex; }

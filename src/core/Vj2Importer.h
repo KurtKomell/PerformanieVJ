@@ -20,9 +20,17 @@ public:
         bool        ok = false;
         QString     errorMessage;
         QStringList warnings;
+        int         banksMerged = 0; ///< set by mergeFile()
     };
 
     static Result importFile(Project& project, const QString& filePath);
+
+    /// Import banks from a .vj2 into an existing project without replacing it.
+    /// `destinationStartBank` / `sourceStartBank` are 0-based indices.
+    /// Media is merged by path (UUIDs remapped); cell keyboard/MIDI triggers from
+    /// the file replace matching cell-slot triggers on the destination.
+    static Result mergeFile(Project& destination, const QString& filePath,
+                            int destinationStartBank, int sourceStartBank = 0);
 };
 
 } // namespace pvj::core

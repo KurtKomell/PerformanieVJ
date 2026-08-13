@@ -86,9 +86,7 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
     w.writeEndElement();
 
     const FeedbackParams fbDefault;
-    const bool fbNonDefault = p.feedback.loopRetention != fbDefault.loopRetention
-        || p.feedback.liveInject != fbDefault.liveInject
-        || p.feedback.inSaturation != fbDefault.inSaturation
+    const bool fbNonDefault = p.feedback.inSaturation != fbDefault.inSaturation
         || p.feedback.inBrightness != fbDefault.inBrightness
         || p.feedback.inContrast != fbDefault.inContrast
         || p.feedback.inHueShift != fbDefault.inHueShift
@@ -105,8 +103,6 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         || p.feedback.wrapMode != fbDefault.wrapMode;
     if (fbNonDefault) {
         w.writeStartElement(QStringLiteral("Feedback"));
-        w.writeAttribute(QStringLiteral("loopRetention"), QString::number(p.feedback.loopRetention, 'g', 6));
-        w.writeAttribute(QStringLiteral("liveInject"),    QString::number(p.feedback.liveInject,    'g', 6));
         if (p.feedback.inSaturation != fbDefault.inSaturation) {
             w.writeAttribute(QStringLiteral("inSaturation"),
                              QString::number(p.feedback.inSaturation, 'g', 6));
@@ -274,8 +270,6 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.picture.saturation == 1.0
             && c.props.picture.circularMotion == 0.0
             && c.props.picture.wrapMode == WrapMode::Clamp
-            && c.props.feedback.loopRetention == 1.0
-            && c.props.feedback.liveInject == 0.04
             && c.props.feedback.inSaturation == 1.0
             && c.props.feedback.inBrightness == 0.0
             && c.props.feedback.inContrast == 1.0
@@ -289,7 +283,7 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.feedback.rotationDeg == 0.0
             && c.props.feedback.zoom == 0.0
             && c.props.feedback.frameDelay == 0
-            && c.props.feedback.inputMode == FeedbackInputMode::SceneLoopback
+            && c.props.feedback.inputMode == FeedbackInputMode::StackComposite
             && c.props.feedback.wrapMode == WrapMode::Black;
         if (isDefault) {
             continue;
@@ -553,26 +547,24 @@ CellProps readProps(QXmlStreamReader& r)
             auto rd = [&](const char* k, double def) {
                 return fbAttrs.hasAttribute(k) ? fbAttrs.value(k).toDouble() : def;
             };
-            if (fbAttrs.hasAttribute(QStringLiteral("loopRetention"))) {
-                p.feedback.loopRetention = rd("loopRetention", 1.0);
-            } else if (fbAttrs.hasAttribute(QStringLiteral("strength"))) {
-                const double legacy = rd("strength", 0.5);
-                p.feedback.loopRetention = legacy;
-            }
-            if (fbAttrs.hasAttribute(QStringLiteral("liveInject"))) {
-                p.feedback.liveInject = rd("liveInject", 0.04);
-            } else if (fbAttrs.hasAttribute(QStringLiteral("strength"))) {
-                p.feedback.liveInject = 1.0 - rd("strength", 0.5);
-            }
+            // Legacy retention/smear/liveInject ignored.
             p.feedback.inSaturation = rd("inSaturation", 1.0);
             p.feedback.inBrightness = rd("inBrightness", 0.0);
             p.feedback.inContrast   = rd("inContrast", 1.0);
-            p.feedback.inHueShift   = rd("inHueShift", 0.0);
+            {
+                const double raw = rd("inHueShift", 0.0);
+                p.feedback.inHueShift = raw < 0.0 ? qBound(0.0, (raw + 1.0) * 0.5, 1.0)
+                                                  : qBound(0.0, raw, 1.0);
+            }
             p.feedback.inGamma      = rd("inGamma", 1.0);
             p.feedback.saturation  = rd("saturation", 1.0);
             p.feedback.brightness  = rd("brightness", 0.0);
             p.feedback.contrast    = rd("contrast", 1.0);
-            p.feedback.hueShift    = rd("hueShift", 0.0);
+            {
+                const double raw = rd("hueShift", 0.0);
+                p.feedback.hueShift = raw < 0.0 ? qBound(0.0, (raw + 1.0) * 0.5, 1.0)
+                                               : qBound(0.0, raw, 1.0);
+            }
             p.feedback.gamma       = rd("gamma", 1.0);
             p.feedback.rotationDeg = rd("rotationDeg", 0.0);
             p.feedback.zoom = qBound(kFeedbackZoomMin, rd("zoom", 0.0), kFeedbackZoomMax);
@@ -583,9 +575,9 @@ CellProps readProps(QXmlStreamReader& r)
             if (fbAttrs.hasAttribute(QStringLiteral("inputMode"))) {
                 p.feedback.inputMode = enums::feedbackInputModeFromString(
                     fbAttrs.value(QStringLiteral("inputMode")).toString(),
-                    FeedbackInputMode::SceneLoopback);
+                    FeedbackInputMode::StackComposite);
             } else {
-                p.feedback.inputMode = FeedbackInputMode::SceneLoopback;
+                p.feedback.inputMode = FeedbackInputMode::StackComposite;
             }
             if (fbAttrs.hasAttribute(QStringLiteral("wrapMode"))) {
                 p.feedback.wrapMode = enums::wrapModeFromString(

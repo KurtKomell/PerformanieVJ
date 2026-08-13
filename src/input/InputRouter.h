@@ -11,6 +11,8 @@
 #include <QObject>
 #include <QString>
 
+#include <optional>
+
 namespace pvj::core {
 class Project;
 }
@@ -51,6 +53,12 @@ public:
 
     void assignKeyboardTriggerForCell(int bankSetIndex, int bankIndex, int cellIndex,
                                       const QString& keyText, int qtKey = 0);
+
+    /// Last seen raw 0..127 value for a continuous controller, if any message was received.
+    std::optional<int> lastContinuousValue(pvj::core::InputType type, int channel, int number) const;
+    /// Scale a CC/aftertouch mapping to a property id + value (incl. hue 0..1).
+    bool scaleContinuousMapping(const pvj::core::PropertyMapping& pm, int raw0to127,
+                                QString* outProperty, double* outValue) const;
 
     /// Portable `QKeySequence` text for persistence / matching (empty when invalid).
     static QString portableTextFromCombination(const QKeyCombination& combo);
@@ -120,8 +128,10 @@ private:
     int                 m_learnBankNavSet    = 0;
     int                 m_learnBankNavBankIdx  = 0;
 
-    /// Last CC values for edge detection when TRIGGERMAPPINGS use MidiCC → cell.
+    /// Last CC values for edge detection when TRIGGERMAPPINGS use MidiCC → cell,
+    /// and for re-applying faders when a cell starts playing.
     QHash<quint32, int> m_lastCcValue;
+    QHash<quint32, int> m_lastAftertouchValue;
     /// Note-on latch per ch+note (cleared on note-off) so cell triggers fire once per press.
     QHash<quint32, bool> m_midiNoteDown;
 

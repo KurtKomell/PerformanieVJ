@@ -5,6 +5,7 @@
 #include "MidiMapOverlay.h"
 
 #include "core/EnumStrings.h"
+#include "core/FilterEffectIds.h"
 #include "core/Project.h"
 #include "core/PropertyRegistry.h"
 
@@ -42,6 +43,7 @@
 #include <QVBoxLayout>
 
 #include <functional>
+#include <algorithm>
 
 namespace pvj::app {
 
@@ -53,6 +55,24 @@ using pvj::core::MaskType;
 using pvj::core::PlayMode;
 using pvj::core::Project;
 using pvj::core::VisualType;
+
+bool cellAllowsUserName(const pvj::core::Cell& cell)
+{
+    if (cell.visual.type == VisualType::Generator
+        && cell.visual.generator == GeneratorKind::InternalFeedback) {
+        return true;
+    }
+    if (cell.visual.type == VisualType::MixerFilter) {
+        return true;
+    }
+    if (cell.visual.type == VisualType::Empty) {
+        return std::any_of(cell.filterChain.cbegin(), cell.filterChain.cend(),
+                           [](const pvj::core::CellFilterNode& n) {
+                               return !pvj::core::isFeedbackMarkerNode(n.typeId);
+                           });
+    }
+    return false;
+}
 
 class VisualThumbnailLabel final : public QWidget
 {
@@ -666,6 +686,15 @@ ParameterInspector::ParameterInspector(QWidget* parent)
 
     registerMidiWidgets();
 
+    for (QSlider* slider : findChildren<QSlider*>()) {
+        connect(slider, &QSlider::sliderPressed, this, &ParameterInspector::continuousEditBegan);
+        connect(slider, &QSlider::sliderReleased, this, &ParameterInspector::continuousEditEnded);
+    }
+    for (QDial* dial : findChildren<QDial*>()) {
+        connect(dial, &QDial::sliderPressed, this, &ParameterInspector::continuousEditBegan);
+        connect(dial, &QDial::sliderReleased, this, &ParameterInspector::continuousEditEnded);
+    }
+
     refreshFromCell();
 }
 
@@ -740,6 +769,24 @@ QWidget* ParameterInspector::buildVisualTab()
                 this, &ParameterInspector::onVisualSourceChanged);
         srcGrid->addWidget(m_visualSourceCombo, 0, 1);
         stdLay->addWidget(srcRow);
+    }
+
+    {
+        m_cellNameRow = new QWidget(m_visualStandardSection);
+        auto* nameGrid = new QGridLayout(m_cellNameRow);
+        nameGrid->setColumnStretch(1, 1);
+        nameGrid->addWidget(new QLabel(tr("Name"), m_cellNameRow), 0, 0,
+                            Qt::AlignRight | Qt::AlignVCenter);
+        m_cellNameEdit = new QLineEdit(m_cellNameRow);
+        m_cellNameEdit->setPlaceholderText(tr("Optional display name"));
+        connect(m_cellNameEdit, &QLineEdit::editingFinished, this, [this]() {
+            if (m_cellNameEdit) {
+                onCellNameEdited(m_cellNameEdit->text());
+            }
+        });
+        nameGrid->addWidget(m_cellNameEdit, 0, 1);
+        m_cellNameRow->setVisible(false);
+        stdLay->addWidget(m_cellNameRow);
     }
 
     m_visualLabel = new QLabel(tr("(no cell selected)"), m_visualStandardSection);
@@ -1388,12 +1435,13 @@ QWidget* ParameterInspector::buildFeedbackTab()
         cb->setMinimumContentsLength(16);
     };
 
-    m_feedbackInputLabel = new QLabel(tr("Scene loopback"), host);
+    m_feedbackInputLabel = new QLabel(tr("Layers below + above"), host);
     m_feedbackInputLabel->setStyleSheet(QStringLiteral("color: palette(text);"));
     form->addRow(tr("Input"), m_feedbackInputLabel);
 
     m_feedbackInputModeHint = new QLabel(
-        tr("Uses the previous mixer frame as feedback source."),
+        tr("Below without keying + above with keying → input grade → feedback grade → "
+           "layer fade into the mix (0 = empty)."),
         host);
     m_feedbackInputModeHint->setWordWrap(true);
     m_feedbackInputModeHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
@@ -1419,20 +1467,6 @@ QWidget* ParameterInspector::buildFeedbackTab()
         form->addRow(title, row);
     };
 
-    addSliderRow(tr("Loop retention"), &m_feedbackLoopRetentionSlider, &m_feedbackLoopRetentionValue,
-                 &ParameterInspector::onFeedbackLoopRetentionChanged, unitToSlider(1.0));
-    addSliderRow(tr("Live inject"), &m_feedbackLiveInjectSlider, &m_feedbackLiveInjectValue,
-                 &ParameterInspector::onFeedbackLiveInjectChanged, unitToSlider(0.04));
-
-    {
-        auto* hint = new QLabel(
-            tr("Retention = ping-pong history; inject = fresh video per frame."),
-            host);
-        hint->setWordWrap(true);
-        hint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
-        form->addRow(QString(), hint);
-    }
-
     {
         auto* section = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Input color (pre-feedback)")), host);
         form->addRow(section);
@@ -1444,12 +1478,12 @@ QWidget* ParameterInspector::buildFeedbackTab()
     addSliderRow(tr("Contrast"), &m_feedbackInContrastSlider, &m_feedbackInContrastValue,
                  &ParameterInspector::onFeedbackInContrastChanged, rangeToSlider(1.0, 0.0, 2.0));
     addSliderRow(tr("Hue"), &m_feedbackInHueShiftSlider, &m_feedbackInHueShiftValue,
-                 &ParameterInspector::onFeedbackInHueShiftChanged, signedToSlider(0.0, -1.0, 1.0));
+                 &ParameterInspector::onFeedbackInHueShiftChanged, unitToSlider(0.0));
     addSliderRow(tr("Gamma"), &m_feedbackInGammaSlider, &m_feedbackInGammaValue,
                  &ParameterInspector::onFeedbackInGammaChanged, rangeToSlider(1.0, 0.1, 4.0));
 
     {
-        auto* section = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("History color")), host);
+        auto* section = new QLabel(QStringLiteral("<b>%1</b>").arg(tr("Feedback color")), host);
         form->addRow(section);
     }
     addSliderRow(tr("Saturation"), &m_feedbackSaturationSlider, &m_feedbackSaturationValue,
@@ -1459,13 +1493,13 @@ QWidget* ParameterInspector::buildFeedbackTab()
     addSliderRow(tr("Contrast"), &m_feedbackContrastSlider, &m_feedbackContrastValue,
                  &ParameterInspector::onFeedbackContrastChanged, rangeToSlider(1.0, 0.0, 2.0));
     addSliderRow(tr("Hue"), &m_feedbackHueShiftSlider, &m_feedbackHueShiftValue,
-                 &ParameterInspector::onFeedbackHueShiftChanged, signedToSlider(0.0, -1.0, 1.0));
+                 &ParameterInspector::onFeedbackHueShiftChanged, unitToSlider(0.0));
     addSliderRow(tr("Gamma"), &m_feedbackGammaSlider, &m_feedbackGammaValue,
                  &ParameterInspector::onFeedbackGammaChanged, rangeToSlider(1.0, 0.1, 4.0));
     addSliderRow(tr("Rotation"), &m_feedbackRotationSlider, &m_feedbackRotationValue,
                  &ParameterInspector::onFeedbackRotationChanged, rangeToSlider(0.0, 0.0, 360.0));
     if (m_feedbackRotationSlider) {
-        m_feedbackRotationSlider->setToolTip(tr("Feedback history rotation (0–360°)."));
+        m_feedbackRotationSlider->setToolTip(tr("Feedback path rotation (0–360°)."));
     }
 
     addSliderRow(tr("Zoom"), &m_feedbackZoomSlider, &m_feedbackZoomValue,
@@ -1476,7 +1510,7 @@ QWidget* ParameterInspector::buildFeedbackTab()
     fillWrapModeCombo(m_feedbackWrapCombo);
     styleCombo(m_feedbackWrapCombo);
     m_feedbackWrapCombo->setToolTip(
-        tr("UV border for feedback history (live, like rotation and zoom)."));
+        tr("UV border for feedback path (live, like rotation and zoom)."));
     connect(m_feedbackWrapCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &ParameterInspector::onFeedbackWrapModeChanged);
     form->addRow(tr("Wrap"), m_feedbackWrapCombo);
@@ -1491,7 +1525,7 @@ QWidget* ParameterInspector::buildFeedbackTab()
         m_feedbackFrameDelaySlider->setSingleStep(1);
         m_feedbackFrameDelaySlider->setPageStep(1);
         m_feedbackFrameDelaySlider->setToolTip(
-            tr("Frames between trail copies (0 = every frame, higher = wider gaps)."));
+            tr("Extra frames of delay in the feedback ring (0 = Spout In of previous mix)."));
         m_feedbackFrameDelayValue = new QLabel(QStringLiteral("0"), row);
         m_feedbackFrameDelayValue->setMinimumWidth(44);
         m_feedbackFrameDelayValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -1529,9 +1563,12 @@ QWidget* ParameterInspector::buildPositionTab()
     auto* form = new QFormLayout(host);
 
     m_rotation = new QDoubleSpinBox(host);
-    m_rotation->setRange(-1.0, 1.0);
-    m_rotation->setSingleStep(0.05);
-    m_rotation->setDecimals(3);
+    // UI in degrees; stored as rotationZ −1…+1 (GrandVJ). Full MIDI CC range = 360°.
+    m_rotation->setRange(-180.0, 180.0);
+    m_rotation->setSingleStep(1.0);
+    m_rotation->setDecimals(1);
+    m_rotation->setSuffix(tr("°"));
+    m_rotation->setToolTip(tr("Layer rotation (−180° … +180°). MIDI CC 0→−180°, 64→0°, 127→+180°."));
     connect(m_rotation, &QDoubleSpinBox::valueChanged,
             this, &ParameterInspector::onRotationChanged);
     form->addRow(tr("Rotation Z"), m_rotation);
@@ -1942,8 +1979,11 @@ void ParameterInspector::syncFeedbackForVisualSource(bool hasCell, int visualSou
         }
     }
 
-    for (auto* w : {static_cast<QWidget*>(m_feedbackLoopRetentionSlider),
-                     static_cast<QWidget*>(m_feedbackLiveInjectSlider),
+    for (auto* w : {static_cast<QWidget*>(m_feedbackInSaturationSlider),
+                     static_cast<QWidget*>(m_feedbackInBrightnessSlider),
+                     static_cast<QWidget*>(m_feedbackInContrastSlider),
+                     static_cast<QWidget*>(m_feedbackInHueShiftSlider),
+                     static_cast<QWidget*>(m_feedbackInGammaSlider),
                      static_cast<QWidget*>(m_feedbackSaturationSlider),
                      static_cast<QWidget*>(m_feedbackBrightnessSlider),
                      static_cast<QWidget*>(m_feedbackContrastSlider),
@@ -2015,16 +2055,20 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b17(m_overlayLineEdit);
     QSignalBlocker b18(m_tcStartEdit);
     QSignalBlocker b19(m_keyRangeSlider);
+    QSignalBlocker bName(m_cellNameEdit);
     QSignalBlocker b20(m_keyChromaRangeSlider);
     QSignalBlocker b33(m_preferredLayerGroup);
     QSignalBlocker b34(m_visualSourceCombo);
-    QSignalBlocker b35(m_feedbackLoopRetentionSlider);
-    QSignalBlocker b35a(m_feedbackLiveInjectSlider);
-    QSignalBlocker b36(m_feedbackSaturationSlider);
-    QSignalBlocker b37(m_feedbackBrightnessSlider);
-    QSignalBlocker b38(m_feedbackContrastSlider);
-    QSignalBlocker b39(m_feedbackHueShiftSlider);
-    QSignalBlocker b40(m_feedbackGammaSlider);
+    QSignalBlocker b36(m_feedbackInSaturationSlider);
+    QSignalBlocker b36b(m_feedbackInBrightnessSlider);
+    QSignalBlocker b36c(m_feedbackInContrastSlider);
+    QSignalBlocker b36d(m_feedbackInHueShiftSlider);
+    QSignalBlocker b36e(m_feedbackInGammaSlider);
+    QSignalBlocker b37(m_feedbackSaturationSlider);
+    QSignalBlocker b38(m_feedbackBrightnessSlider);
+    QSignalBlocker b39(m_feedbackContrastSlider);
+    QSignalBlocker b40(m_feedbackHueShiftSlider);
+    QSignalBlocker b40g(m_feedbackGammaSlider);
     QSignalBlocker b41(m_feedbackRotationSlider);
     QSignalBlocker b42(m_feedbackZoomSlider);
     QSignalBlocker b42a(m_feedbackFrameDelaySlider);
@@ -2127,6 +2171,12 @@ void ParameterInspector::refreshFromCell()
 
     if (!hasCell) {
         m_visualLabel->setText(tr("(no cell selected)"));
+        if (m_cellNameRow) {
+            m_cellNameRow->setVisible(false);
+        }
+        if (m_cellNameEdit) {
+            m_cellNameEdit->clear();
+        }
         clearVisualThumbnail();
         m_transparencySlider->setValue(unitToSlider(1.0));
         m_transparencyValue->setText(formatUnit(1.0));
@@ -2217,6 +2267,15 @@ void ParameterInspector::refreshFromCell()
         }
     }
 
+    const bool showName = cellAllowsUserName(*cell);
+    if (m_cellNameRow) {
+        m_cellNameRow->setVisible(showName);
+    }
+    if (m_cellNameEdit) {
+        m_cellNameEdit->setEnabled(showName);
+        m_cellNameEdit->setText(showName ? cell->name : QString());
+    }
+
     QString visualText;
     switch (cell->visual.type) {
     case VisualType::Empty:
@@ -2251,7 +2310,7 @@ void ParameterInspector::refreshFromCell()
     m_speedValueLabel->setText(formatMovieSpeed(cell->props.movieSpeed));
     m_fadeSlider->setValue(unitToSlider(cell->props.fade));
     m_fadeValue->setText(formatUnit(cell->props.fade));
-    m_rotation->setValue(cell->props.rotationZ);
+    m_rotation->setValue(cell->props.rotationZ * 180.0);
     {
         const int dv = int(qRound(qBound(0.0, cell->props.audioGain, 4.0) * 100.0));
         m_audioDial->setValue(dv);
@@ -2324,14 +2383,6 @@ void ParameterInspector::refreshFromCell()
     const int presetIdx = qBound(0, cell->props.mixingPresetIndex, m_mixingPreset->count() - 1);
     m_mixingPreset->setCurrentIndex(presetIdx);
 
-    if (m_feedbackLoopRetentionSlider) {
-        m_feedbackLoopRetentionSlider->setValue(unitToSlider(cell->props.feedback.loopRetention));
-        m_feedbackLoopRetentionValue->setText(formatUnit(cell->props.feedback.loopRetention));
-    }
-    if (m_feedbackLiveInjectSlider) {
-        m_feedbackLiveInjectSlider->setValue(unitToSlider(cell->props.feedback.liveInject));
-        m_feedbackLiveInjectValue->setText(formatUnit(cell->props.feedback.liveInject));
-    }
     if (m_feedbackInSaturationSlider) {
         m_feedbackInSaturationSlider->setValue(rangeToSlider(cell->props.feedback.inSaturation, 0.0, 2.0));
         m_feedbackInSaturationValue->setText(formatUnit(cell->props.feedback.inSaturation));
@@ -2346,8 +2397,12 @@ void ParameterInspector::refreshFromCell()
         m_feedbackInContrastValue->setText(formatUnit(cell->props.feedback.inContrast));
     }
     if (m_feedbackInHueShiftSlider) {
-        m_feedbackInHueShiftSlider->setValue(signedToSlider(cell->props.feedback.inHueShift, -1.0, 1.0));
-        m_feedbackInHueShiftValue->setText(formatSignedUnit(cell->props.feedback.inHueShift));
+        const double inHue01 = cell->props.feedback.inHueShift < 0.0
+            ? qBound(0.0, (cell->props.feedback.inHueShift + 1.0) * 0.5, 1.0)
+            : qBound(0.0, cell->props.feedback.inHueShift, 1.0);
+        cell->props.feedback.inHueShift = inHue01;
+        m_feedbackInHueShiftSlider->setValue(unitToSlider(inHue01));
+        m_feedbackInHueShiftValue->setText(formatUnit(inHue01));
     }
     if (m_feedbackInGammaSlider) {
         m_feedbackInGammaSlider->setValue(rangeToSlider(cell->props.feedback.inGamma, 0.1, 4.0));
@@ -2366,8 +2421,12 @@ void ParameterInspector::refreshFromCell()
         m_feedbackContrastValue->setText(formatUnit(cell->props.feedback.contrast));
     }
     if (m_feedbackHueShiftSlider) {
-        m_feedbackHueShiftSlider->setValue(signedToSlider(cell->props.feedback.hueShift, -1.0, 1.0));
-        m_feedbackHueShiftValue->setText(formatSignedUnit(cell->props.feedback.hueShift));
+        const double hue01 = cell->props.feedback.hueShift < 0.0
+            ? qBound(0.0, (cell->props.feedback.hueShift + 1.0) * 0.5, 1.0)
+            : qBound(0.0, cell->props.feedback.hueShift, 1.0);
+        cell->props.feedback.hueShift = hue01;
+        m_feedbackHueShiftSlider->setValue(unitToSlider(hue01));
+        m_feedbackHueShiftValue->setText(formatUnit(hue01));
     }
     if (m_feedbackGammaSlider) {
         m_feedbackGammaSlider->setValue(rangeToSlider(cell->props.feedback.gamma, 0.1, 4.0));
@@ -2447,22 +2506,6 @@ void ParameterInspector::onVisualSourceChanged(int /*idx*/)
     emitPlaybackChanged();
 }
 
-void ParameterInspector::onFeedbackLoopRetentionChanged(int v)
-{
-    if (m_loading) return;
-    const double u = sliderToUnit(v);
-    if (m_feedbackLoopRetentionValue) m_feedbackLoopRetentionValue->setText(formatUnit(u));
-    if (auto* c = currentCell()) { c->props.feedback.loopRetention = u; emitChanged(); }
-}
-
-void ParameterInspector::onFeedbackLiveInjectChanged(int v)
-{
-    if (m_loading) return;
-    const double u = sliderToUnit(v);
-    if (m_feedbackLiveInjectValue) m_feedbackLiveInjectValue->setText(formatUnit(u));
-    if (auto* c = currentCell()) { c->props.feedback.liveInject = u; emitChanged(); }
-}
-
 void ParameterInspector::onFeedbackInSaturationChanged(int v)
 {
     if (m_loading) return;
@@ -2490,8 +2533,8 @@ void ParameterInspector::onFeedbackInContrastChanged(int v)
 void ParameterInspector::onFeedbackInHueShiftChanged(int v)
 {
     if (m_loading) return;
-    const double u = sliderToSigned(v, -1.0, 1.0);
-    if (m_feedbackInHueShiftValue) m_feedbackInHueShiftValue->setText(formatSignedUnit(u));
+    const double u = sliderToUnit(v);
+    if (m_feedbackInHueShiftValue) m_feedbackInHueShiftValue->setText(formatUnit(u));
     if (auto* c = currentCell()) { c->props.feedback.inHueShift = u; emitChanged(); }
 }
 
@@ -2530,8 +2573,8 @@ void ParameterInspector::onFeedbackContrastChanged(int v)
 void ParameterInspector::onFeedbackHueShiftChanged(int v)
 {
     if (m_loading) return;
-    const double u = sliderToSigned(v, -1.0, 1.0);
-    if (m_feedbackHueShiftValue) m_feedbackHueShiftValue->setText(formatSignedUnit(u));
+    const double u = sliderToUnit(v);
+    if (m_feedbackHueShiftValue) m_feedbackHueShiftValue->setText(formatUnit(u));
     if (auto* c = currentCell()) { c->props.feedback.hueShift = u; emitChanged(); }
 }
 
@@ -2741,6 +2784,23 @@ void ParameterInspector::onOverlayTextEdited(const QString& t)
     }
 }
 
+void ParameterInspector::onCellNameEdited(const QString& t)
+{
+    if (m_loading) {
+        return;
+    }
+    auto* c = currentCell();
+    if (!c || !cellAllowsUserName(*c)) {
+        return;
+    }
+    const QString trimmed = t.trimmed();
+    if (c->name == trimmed) {
+        return;
+    }
+    c->name = trimmed;
+    emitChanged();
+}
+
 void ParameterInspector::onTcStartEdited(const QString& t)
 {
     if (m_loading) return;
@@ -2785,7 +2845,7 @@ void ParameterInspector::onRotationChanged(double v)
 {
     if (m_loading) return;
     if (auto* c = currentCell()) {
-        c->props.rotationZ = v;
+        c->props.rotationZ = qBound(-1.0, v / 180.0, 1.0);
         emitChanged();
     }
 }
@@ -3217,8 +3277,6 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_keyRSlider, QStringLiteral("keyChannelR"));
     tagMidiWidget(m_keyGSlider, QStringLiteral("keyChannelG"));
     tagMidiWidget(m_keyBSlider, QStringLiteral("keyChannelB"));
-    tagMidiWidget(m_feedbackLoopRetentionSlider, QStringLiteral("feedbackLoopRetention"));
-    tagMidiWidget(m_feedbackLiveInjectSlider, QStringLiteral("feedbackLiveInject"));
     tagMidiWidget(m_feedbackInSaturationSlider, QStringLiteral("feedbackInSaturation"));
     tagMidiWidget(m_feedbackInBrightnessSlider, QStringLiteral("feedbackInBrightness"));
     tagMidiWidget(m_feedbackInContrastSlider, QStringLiteral("feedbackInContrast"));

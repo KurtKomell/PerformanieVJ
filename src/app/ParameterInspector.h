@@ -65,6 +65,9 @@ signals:
     void cellChanged(int bankSetIndex, int bankIndex, int cellIndex);
     /// Layer, visual source, or media assignment changed — re-apply live playback if active.
     void cellPlaybackChanged(int bankSetIndex, int bankIndex, int cellIndex);
+    /// Continuous control gesture (slider drag) for undo coalescing.
+    void continuousEditBegan();
+    void continuousEditEnded();
     /// Step playback by whole seconds (±1 from arrow buttons).
     void visualSeekStepRequested(int seconds);
     /// Apply scratch head position to the playing decoder (see `scratchHeadU`).
@@ -115,10 +118,9 @@ private slots:
     void onScratchSliderReleased();
     void onOverlayTextEdited(const QString& t);
     void onTcStartEdited(const QString& t);
+    void onCellNameEdited(const QString& t);
 
     void onVisualSourceChanged(int idx);
-    void onFeedbackLoopRetentionChanged(int v);
-    void onFeedbackLiveInjectChanged(int v);
     void onFeedbackInSaturationChanged(int v);
     void onFeedbackInBrightnessChanged(int v);
     void onFeedbackInContrastChanged(int v);
@@ -177,6 +179,8 @@ private:
     bool m_midiMappingEditMode = false;
 
     QLabel*               m_visualLabel    = nullptr;
+    QWidget*              m_cellNameRow    = nullptr;
+    QLineEdit*            m_cellNameEdit   = nullptr;
     QComboBox*            m_visualSourceCombo = nullptr;
     VisualThumbnailLabel* m_visualThumb    = nullptr;
     QToolButton*    m_visualPrevBtn  = nullptr;
@@ -255,10 +259,6 @@ private:
     QWidget*        m_feedbackKeyingSlot = nullptr;
     QWidget*        m_feedbackKeyingSection = nullptr;
 
-    QSlider*        m_feedbackLoopRetentionSlider = nullptr;
-    QLabel*         m_feedbackLoopRetentionValue = nullptr;
-    QSlider*        m_feedbackLiveInjectSlider = nullptr;
-    QLabel*         m_feedbackLiveInjectValue = nullptr;
     QSlider*        m_feedbackInSaturationSlider = nullptr;
     QLabel*         m_feedbackInSaturationValue = nullptr;
     QSlider*        m_feedbackInBrightnessSlider = nullptr;

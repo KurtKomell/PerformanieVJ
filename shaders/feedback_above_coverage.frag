@@ -31,8 +31,6 @@ layout(std140, binding = 0) uniform Block {
     vec4 mixerCfg; // x=maxLayerExclusive, y=minLayerInclusive, z/w unused
 } ubuf;
 
-const vec3 kBg = vec3(0.0, 0.0, 0.0);
-
 vec2 applyWrap(vec2 uv, int mode)
 {
     if (mode == 1) {
@@ -116,11 +114,12 @@ void main()
 
         vec4 aboveSample = sampleLayer(j);
         float aboveOp = clamp(aboveLp.x, 0.0, 1.0);
+        // Key filters keep source RGB and put the key in alpha — coverage must
+        // follow alpha only. Luma-of-RGB would punch holes over the whole frame
+        // and hide the feedback trail under keyed layers.
         float alphaCov = clamp(aboveSample.a * aboveOp, 0.0, 1.0);
-        float lumaCov = clamp(length(aboveSample.rgb - kBg) * 1.8, 0.0, 1.0) * aboveOp;
-        upperCov = max(upperCov, max(alphaCov, lumaCov));
+        upperCov = max(upperCov, alphaCov);
     }
 
     fragColor = vec4(vec3(upperCov), 1.0);
 }
-

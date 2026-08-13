@@ -9,6 +9,7 @@
 #include <QStringList>
 
 #include <memory>
+#include <vector>
 
 namespace pvj::input {
 
@@ -60,7 +61,11 @@ signals:
     void messageReceived(const QByteArray& bytes);
 
 private:
+    static void rtMidiCallback(double stamp, std::vector<unsigned char>* message, void* userData);
+
     bool openPortAtIndex(int index, const QString& expectedName);
+    void enqueueMidiBytes(const QByteArray& bytes);
+    void flushPendingMidi();
 
     struct Impl;
     std::unique_ptr<Impl> m_impl;

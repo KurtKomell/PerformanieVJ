@@ -28,6 +28,8 @@ qt_add_executable(performanievj
     PreferencesDialog.h
     PreviewWidget.cpp
     PreviewWidget.h
+    undo/ProjectUndoCommands.cpp
+    undo/ProjectUndoCommands.h
 )
 
 target_link_libraries(performanievj

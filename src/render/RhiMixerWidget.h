@@ -12,7 +12,7 @@
 #include <array>
 #include <memory>
 
-#include "FeedbackPipeline.h"
+#include "FeedbackLoop.h"
 
 QT_BEGIN_NAMESPACE
 class QRhi;
@@ -101,7 +101,7 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    friend class FeedbackPipeline;
+    friend class FeedbackLoop;
 
     void releaseGpuResources();
     void releaseOffscreenGpuResources();
@@ -165,7 +165,7 @@ private:
 
     QString m_label;
 
-    FeedbackPipeline m_feedback;
+    FeedbackLoop m_feedback;
 
     std::array<QImage, LayerCount>   m_pending{};
     std::array<bool, LayerCount>     m_dirty{};

@@ -19,9 +19,9 @@
       </Cell>
       <Cell index="1">
         <Visual type="generator" generator="internalFeedback"/>
-        <Props priority="0" transparency="0.945" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="4" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
+        <Props priority="0" transparency="0.818" audioGain="1" movieSpeed="1" fade="0" maskType="none" matteRole="none" maskFeather="0.1" maskRectWidth="1" maskRectHeight="1" maskRadius="0.5" maskEllipseX="0.6" maskEllipseY="0.45" maskWidth="0" maskSmoothness="0" rotationZ="0" copyMode="normal" mixingPresetIndex="0" preferredLayer="0" keyChannelR="1" keyChannelG="1" keyChannelB="1" keyingMode="luma" keyingEnabled="false" keyLumaCenter="0.5" keyLumaInvert="false" keyThreshold="0.25" keySoftness="0.12" keyChromaHue="0.33" keyChromaInvert="false" playMode="0" clipPaused="false" segmentInU="0" segmentOutU="1" scratchHeadU="0.5" overlayText="" tcStart="00:00:00:00">
           <Picture zoom="0" rotationDeg="0" brightness="0" contrast="1" saturation="1" circularMotion="0"/>
-          <Feedback loopRetention="1" liveInject="1" inSaturation="1.622" inBrightness="-0.656" inContrast="1.388" saturation="1" brightness="0" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0" inputMode="sceneLoopback" wrapMode="mirrorOnce"/>
+          <Feedback loopRetention="1" liveInject="1" inSaturation="1.622" inBrightness="-0.058" inContrast="1.388" saturation="1" brightness="-0.024" contrast="1" hueShift="0" gamma="1" rotationDeg="0" zoom="0" inputMode="sceneLoopback" wrapMode="mirrorOnce"/>
         </Props>
         <FilterChain>
           <FilterNode id="7b1cee7e-108e-43bb-91d8-1261fcda6562" type="feedback_marker"/>

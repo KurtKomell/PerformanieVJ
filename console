@@ -1,0 +1,10 @@
+********* Start testing of TestVj2Import *********
+Config: Using QtTest library 6.10.2, Qt 6.10.2 (x86_64-little_endian-llp64 shared (dynamic) debug build; by MSVC 2026), windows 11
+PASS   : TestVj2Import::initTestCase()
+FAIL!  : TestVj2Import::cellPropertyMappings_importTransparencyFadeSpeed() 'cell.propertyMappings[3].minValue < 0.0' returned FALSE. ()
+D:\PerformanieVJ\tests\test_vj2_import.cpp(66) : failure location
+PASS   : TestVj2Import::cellPropertyMappings_nestedValueElements()
+PASS   : TestVj2Import::cellKeyboardTriggers_nestedInBankSet()
+PASS   : TestVj2Import::cleanupTestCase()
+Totals: 4 passed, 1 failed, 0 skipped, 0 blacklisted, 10ms
+********* Finished testing of TestVj2Import *********

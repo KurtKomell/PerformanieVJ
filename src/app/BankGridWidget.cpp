@@ -820,6 +820,11 @@ void BankGridWidget::refresh()
     updateCellVisuals();
 }
 
+void BankGridWidget::refreshCellLabels()
+{
+    updateCellVisuals(false);
+}
+
 void BankGridWidget::rebuildBankTabs()
 {
     QSignalBlocker block(m_bankTabs);
