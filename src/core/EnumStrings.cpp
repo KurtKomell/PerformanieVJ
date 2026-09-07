@@ -359,6 +359,36 @@ FeedbackInputMode feedbackInputModeFromString(const QString& s, FeedbackInputMod
     return fallback;
 }
 
+QString toString(FeedbackBlendMode m)
+{
+    switch (m) {
+    case FeedbackBlendMode::Add:        return QStringLiteral("add");
+    case FeedbackBlendMode::Mix:        return QStringLiteral("mix");
+    case FeedbackBlendMode::Screen:     return QStringLiteral("screen");
+    case FeedbackBlendMode::Lighten:    return QStringLiteral("lighten");
+    case FeedbackBlendMode::Multiply:   return QStringLiteral("multiply");
+    case FeedbackBlendMode::Difference: return QStringLiteral("difference");
+    }
+    return QStringLiteral("add");
+}
+
+FeedbackBlendMode feedbackBlendModeFromString(const QString& s, FeedbackBlendMode fallback)
+{
+    bool ok = false;
+    const int asInt = s.toInt(&ok);
+    if (ok && asInt >= 0 && asInt <= 5) {
+        return static_cast<FeedbackBlendMode>(asInt);
+    }
+    const QString k = s.toLower();
+    if (k == QLatin1String("add"))        return FeedbackBlendMode::Add;
+    if (k == QLatin1String("mix"))        return FeedbackBlendMode::Mix;
+    if (k == QLatin1String("screen"))     return FeedbackBlendMode::Screen;
+    if (k == QLatin1String("lighten"))    return FeedbackBlendMode::Lighten;
+    if (k == QLatin1String("multiply"))   return FeedbackBlendMode::Multiply;
+    if (k == QLatin1String("difference")) return FeedbackBlendMode::Difference;
+    return fallback;
+}
+
 QString toString(WrapMode m)
 {
     switch (m) {

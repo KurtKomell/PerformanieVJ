@@ -133,7 +133,11 @@ private slots:
     void onFeedbackGammaChanged(int v);
     void onFeedbackRotationChanged(int v);
     void onFeedbackZoomChanged(int v);
+    void onFeedbackTranslateXChanged(int v);
+    void onFeedbackTranslateYChanged(int v);
+    void onFeedbackRetentionChanged(int v);
     void onFeedbackFrameDelayChanged(int v);
+    void onFeedbackBlendModeChanged(int idx);
     void onFeedbackWrapModeChanged(int idx);
     void onPictureWrapModeChanged(int idx);
 
@@ -283,10 +287,17 @@ private:
     QLabel*         m_feedbackRotationValue = nullptr;
     QSlider*        m_feedbackZoomSlider = nullptr;
     QLabel*         m_feedbackZoomValue = nullptr;
+    QSlider*        m_feedbackTranslateXSlider = nullptr;
+    QLabel*         m_feedbackTranslateXValue = nullptr;
+    QSlider*        m_feedbackTranslateYSlider = nullptr;
+    QLabel*         m_feedbackTranslateYValue = nullptr;
+    QSlider*        m_feedbackRetentionSlider = nullptr;
+    QLabel*         m_feedbackRetentionValue = nullptr;
     QSlider*        m_feedbackFrameDelaySlider = nullptr;
     QLabel*         m_feedbackFrameDelayValue = nullptr;
     QLabel*         m_feedbackInputLabel = nullptr;
     QLabel*         m_feedbackInputModeHint = nullptr;
+    QComboBox*      m_feedbackBlendCombo = nullptr;
     QComboBox*      m_feedbackWrapCombo = nullptr;
 
     QComboBox*      m_pictureWrapCombo = nullptr;

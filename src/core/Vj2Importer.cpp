@@ -215,8 +215,12 @@ const QHash<QString, QString>& grandVjCellTargetMap()
         add("FBGA", "feedbackGamma");
         add("FBRT", "feedbackRotationDeg");
         add("FBZM", "feedbackZoom");
+        add("FBTX", "feedbackTranslateX");
+        add("FBTY", "feedbackTranslateY");
+        add("FBRN", "feedbackRetention");
         add("FBFD", "feedbackFrameDelay");
         add("FBIM", "feedbackInputMode");
+        add("FBBL", "feedbackBlendMode");
         add("FBWP", "feedbackWrapMode");
         add("MIXP", "mixingPresetIndex");
         add("MATTE", "matteRole");

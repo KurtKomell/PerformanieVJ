@@ -1536,7 +1536,6 @@ void RhiMixerWidget::initialize(QRhiCommandBuffer* cb)
 
 void RhiMixerWidget::uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch)
 {
-    static const quint8 dark[4] = { 12, 12, 12, 255 };
     for (int i = 0; i < LayerCount; ++i) {
         if (!m_dirty[i]) continue;
         m_dirty[i] = false;
@@ -1546,7 +1545,10 @@ void RhiMixerWidget::uploadFramesIfNeeded(QRhiResourceUpdateBatch* batch)
                 m_tex[i]->setPixelSize(QSize(1, 1));
                 m_tex[i]->create();
             }
-            QRhiTextureSubresourceUploadDescription sub(dark, sizeof(dark));
+            // True black: residual dark gray was amplified by feedback ADD*retention
+            // into a near-white steady state that never fades.
+            static const quint8 black[4] = { 0, 0, 0, 0 };
+            QRhiTextureSubresourceUploadDescription sub(black, sizeof(black));
             batch->uploadTexture(m_tex[i].get(),
                                  QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, sub)));
             m_sizes[i] = QSize();
@@ -1680,7 +1682,8 @@ void RhiMixerWidget::render(QRhiCommandBuffer* cb)
     const bool hasFeedback = hasActiveFeedbackLayer();
     const bool useOffscreen = hasStage || hasFilterChains || hasOutputFilters;
     const bool useOffscreenScene = useOffscreen || hasFeedback;
-    const int mainMinLayer = 0;
+    // Live inject already includes layers below F — skip them in the main mix to avoid doubling.
+    const int mainMinLayer = (hasFeedback && F > 0) ? F : 0;
     const int mainMaxLayer = -1;
     QRhiResourceUpdateBatch* batch = r->nextResourceUpdateBatch();
     uploadFramesIfNeeded(batch);

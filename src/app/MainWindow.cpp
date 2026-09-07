@@ -2295,10 +2295,12 @@ void MainWindow::stopMixLayer(int layer)
     }
     m_decoders[layer]->stop();
     m_previewB->clearFrame(layer);
+    m_previewB->setLayerActive(layer, false);
     m_previewB->setLayerFeedback(layer, false, {});
     m_lastFrames[static_cast<size_t>(layer)] = QImage();
     if (m_fullscreenOut && m_fullscreenOut->mixerWidget()) {
         m_fullscreenOut->mixerWidget()->clearFrame(layer);
+        m_fullscreenOut->mixerWidget()->setLayerActive(layer, false);
     }
     if (m_clipPeekLayer == layer) {
         clearClipPeek();

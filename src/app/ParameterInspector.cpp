@@ -503,6 +503,21 @@ void fillWrapModeCombo(QComboBox* cb)
     cb->addItem(QObject::tr("Black"), int(pvj::core::WrapMode::Black));
 }
 
+void fillFeedbackBlendCombo(QComboBox* cb)
+{
+    if (!cb) {
+        return;
+    }
+    cb->clear();
+    using BM = pvj::core::FeedbackBlendMode;
+    cb->addItem(QObject::tr("Add"), int(BM::Add));
+    cb->addItem(QObject::tr("Mix"), int(BM::Mix));
+    cb->addItem(QObject::tr("Screen"), int(BM::Screen));
+    cb->addItem(QObject::tr("Lighten"), int(BM::Lighten));
+    cb->addItem(QObject::tr("Multiply"), int(BM::Multiply));
+    cb->addItem(QObject::tr("Difference"), int(BM::Difference));
+}
+
 void fillCopyModeCombo(QComboBox* cb)
 {
     cb->clear();
@@ -1435,13 +1450,12 @@ QWidget* ParameterInspector::buildFeedbackTab()
         cb->setMinimumContentsLength(16);
     };
 
-    m_feedbackInputLabel = new QLabel(tr("Layers below + above"), host);
+    m_feedbackInputLabel = new QLabel(tr("Layers below (live inject)"), host);
     m_feedbackInputLabel->setStyleSheet(QStringLiteral("color: palette(text);"));
     form->addRow(tr("Input"), m_feedbackInputLabel);
 
     m_feedbackInputModeHint = new QLabel(
-        tr("Below without keying + above with keying → input grade → feedback grade → "
-           "layer fade into the mix (0 = empty)."),
+        tr("blend(live, retention×history). Empty live → fade-only; opacity≤2% clears buffer."),
         host);
     m_feedbackInputModeHint->setWordWrap(true);
     m_feedbackInputModeHint->setStyleSheet(QStringLiteral("color: palette(mid); font-size: 11px;"));
@@ -1505,6 +1519,35 @@ QWidget* ParameterInspector::buildFeedbackTab()
     addSliderRow(tr("Zoom"), &m_feedbackZoomSlider, &m_feedbackZoomValue,
                  &ParameterInspector::onFeedbackZoomChanged,
                  signedToSlider(0.0, pvj::core::kFeedbackZoomMin, pvj::core::kFeedbackZoomMax));
+    addSliderRow(tr("Translate X"), &m_feedbackTranslateXSlider, &m_feedbackTranslateXValue,
+                 &ParameterInspector::onFeedbackTranslateXChanged,
+                 signedToSlider(0.0, pvj::core::kFeedbackTranslateMin,
+                                pvj::core::kFeedbackTranslateMax));
+    if (m_feedbackTranslateXSlider) {
+        m_feedbackTranslateXSlider->setToolTip(tr("Feedback UV pan X (−0.25…0.25)."));
+    }
+    addSliderRow(tr("Translate Y"), &m_feedbackTranslateYSlider, &m_feedbackTranslateYValue,
+                 &ParameterInspector::onFeedbackTranslateYChanged,
+                 signedToSlider(0.0, pvj::core::kFeedbackTranslateMin,
+                                pvj::core::kFeedbackTranslateMax));
+    if (m_feedbackTranslateYSlider) {
+        m_feedbackTranslateYSlider->setToolTip(tr("Feedback UV pan Y (−0.25…0.25)."));
+    }
+    addSliderRow(tr("Retention"), &m_feedbackRetentionSlider, &m_feedbackRetentionValue,
+                 &ParameterInspector::onFeedbackRetentionChanged, unitToSlider(0.95));
+    if (m_feedbackRetentionSlider) {
+        m_feedbackRetentionSlider->setToolTip(
+            tr("History share 0–1 (0 = live only, 0.95 = long trail, fades when live is black)."));
+    }
+
+    m_feedbackBlendCombo = new QComboBox(host);
+    fillFeedbackBlendCombo(m_feedbackBlendCombo);
+    styleCombo(m_feedbackBlendCombo);
+    m_feedbackBlendCombo->setToolTip(
+        tr("How live inject combines with retained history inside the feedback loop."));
+    connect(m_feedbackBlendCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ParameterInspector::onFeedbackBlendModeChanged);
+    form->addRow(tr("Blend"), m_feedbackBlendCombo);
 
     m_feedbackWrapCombo = new QComboBox(host);
     fillWrapModeCombo(m_feedbackWrapCombo);
@@ -1525,7 +1568,7 @@ QWidget* ParameterInspector::buildFeedbackTab()
         m_feedbackFrameDelaySlider->setSingleStep(1);
         m_feedbackFrameDelaySlider->setPageStep(1);
         m_feedbackFrameDelaySlider->setToolTip(
-            tr("Extra frames of delay in the feedback ring (0 = Spout In of previous mix)."));
+            tr("Classic ping-pong ignores frame delay (kept for project compatibility)."));
         m_feedbackFrameDelayValue = new QLabel(QStringLiteral("0"), row);
         m_feedbackFrameDelayValue->setMinimumWidth(44);
         m_feedbackFrameDelayValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -1991,9 +2034,13 @@ void ParameterInspector::syncFeedbackForVisualSource(bool hasCell, int visualSou
                      static_cast<QWidget*>(m_feedbackGammaSlider),
                      static_cast<QWidget*>(m_feedbackRotationSlider),
                      static_cast<QWidget*>(m_feedbackZoomSlider),
+                     static_cast<QWidget*>(m_feedbackTranslateXSlider),
+                     static_cast<QWidget*>(m_feedbackTranslateYSlider),
+                     static_cast<QWidget*>(m_feedbackRetentionSlider),
                      static_cast<QWidget*>(m_feedbackFrameDelaySlider),
                      static_cast<QWidget*>(m_feedbackInputLabel),
                      static_cast<QWidget*>(m_feedbackInputModeHint),
+                     static_cast<QWidget*>(m_feedbackBlendCombo),
                      static_cast<QWidget*>(m_feedbackWrapCombo)}) {
         if (w) {
             w->setEnabled(feedbackEnabled);
@@ -2071,7 +2118,11 @@ void ParameterInspector::refreshFromCell()
     QSignalBlocker b40g(m_feedbackGammaSlider);
     QSignalBlocker b41(m_feedbackRotationSlider);
     QSignalBlocker b42(m_feedbackZoomSlider);
+    QSignalBlocker b42tx(m_feedbackTranslateXSlider);
+    QSignalBlocker b42ty(m_feedbackTranslateYSlider);
+    QSignalBlocker b42r(m_feedbackRetentionSlider);
     QSignalBlocker b42a(m_feedbackFrameDelaySlider);
+    QSignalBlocker b43(m_feedbackBlendCombo);
     QSignalBlocker b44(m_feedbackWrapCombo);
     QSignalBlocker b45(m_pictureWrapCombo);
 
@@ -2446,11 +2497,39 @@ void ParameterInspector::refreshFromCell()
                                                       pvj::core::kFeedbackZoomMax));
         m_feedbackZoomValue->setText(formatSignedUnit(cell->props.feedback.zoom));
     }
+    if (m_feedbackTranslateXSlider) {
+        m_feedbackTranslateXSlider->setValue(
+            signedToSlider(cell->props.feedback.translateX, pvj::core::kFeedbackTranslateMin,
+                           pvj::core::kFeedbackTranslateMax));
+        if (m_feedbackTranslateXValue) {
+            m_feedbackTranslateXValue->setText(formatSignedUnit(cell->props.feedback.translateX));
+        }
+    }
+    if (m_feedbackTranslateYSlider) {
+        m_feedbackTranslateYSlider->setValue(
+            signedToSlider(cell->props.feedback.translateY, pvj::core::kFeedbackTranslateMin,
+                           pvj::core::kFeedbackTranslateMax));
+        if (m_feedbackTranslateYValue) {
+            m_feedbackTranslateYValue->setText(formatSignedUnit(cell->props.feedback.translateY));
+        }
+    }
+    if (m_feedbackRetentionSlider) {
+        m_feedbackRetentionSlider->setValue(unitToSlider(cell->props.feedback.retention));
+        if (m_feedbackRetentionValue) {
+            m_feedbackRetentionValue->setText(formatUnit(cell->props.feedback.retention));
+        }
+    }
     if (m_feedbackFrameDelaySlider) {
         const int delay = qBound(0, cell->props.feedback.frameDelay, pvj::core::kFeedbackMaxFrameDelay);
         m_feedbackFrameDelaySlider->setValue(delay);
         if (m_feedbackFrameDelayValue) {
             m_feedbackFrameDelayValue->setText(QString::number(delay));
+        }
+    }
+    if (m_feedbackBlendCombo) {
+        const int blendIdx = m_feedbackBlendCombo->findData(int(cell->props.feedback.blendMode));
+        if (blendIdx >= 0) {
+            m_feedbackBlendCombo->setCurrentIndex(blendIdx);
         }
     }
     if (m_feedbackWrapCombo) {
@@ -2607,6 +2686,32 @@ void ParameterInspector::onFeedbackZoomChanged(int v)
     if (auto* c = currentCell()) { c->props.feedback.zoom = u; emitChanged(); }
 }
 
+void ParameterInspector::onFeedbackTranslateXChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToSigned(v, pvj::core::kFeedbackTranslateMin,
+                                    pvj::core::kFeedbackTranslateMax);
+    if (m_feedbackTranslateXValue) m_feedbackTranslateXValue->setText(formatSignedUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.translateX = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackTranslateYChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToSigned(v, pvj::core::kFeedbackTranslateMin,
+                                    pvj::core::kFeedbackTranslateMax);
+    if (m_feedbackTranslateYValue) m_feedbackTranslateYValue->setText(formatSignedUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.translateY = u; emitChanged(); }
+}
+
+void ParameterInspector::onFeedbackRetentionChanged(int v)
+{
+    if (m_loading) return;
+    const double u = sliderToUnit(v);
+    if (m_feedbackRetentionValue) m_feedbackRetentionValue->setText(formatUnit(u));
+    if (auto* c = currentCell()) { c->props.feedback.retention = u; emitChanged(); }
+}
+
 void ParameterInspector::onFeedbackFrameDelayChanged(int v)
 {
     if (m_loading) return;
@@ -2616,6 +2721,19 @@ void ParameterInspector::onFeedbackFrameDelayChanged(int v)
     }
     if (auto* c = currentCell()) {
         c->props.feedback.frameDelay = delay;
+        emitChanged();
+    }
+}
+
+void ParameterInspector::onFeedbackBlendModeChanged(int idx)
+{
+    if (m_loading || !m_feedbackBlendCombo || idx < 0) {
+        return;
+    }
+    const auto mode =
+        static_cast<pvj::core::FeedbackBlendMode>(m_feedbackBlendCombo->itemData(idx).toInt());
+    if (auto* c = currentCell()) {
+        c->props.feedback.blendMode = mode;
         emitChanged();
     }
 }
@@ -3289,7 +3407,11 @@ void ParameterInspector::registerMidiWidgets()
     tagMidiWidget(m_feedbackGammaSlider, QStringLiteral("feedbackGamma"));
     tagMidiWidget(m_feedbackRotationSlider, QStringLiteral("feedbackRotationDeg"));
     tagMidiWidget(m_feedbackZoomSlider, QStringLiteral("feedbackZoom"));
+    tagMidiWidget(m_feedbackTranslateXSlider, QStringLiteral("feedbackTranslateX"));
+    tagMidiWidget(m_feedbackTranslateYSlider, QStringLiteral("feedbackTranslateY"));
+    tagMidiWidget(m_feedbackRetentionSlider, QStringLiteral("feedbackRetention"));
     tagMidiWidget(m_feedbackFrameDelaySlider, QStringLiteral("feedbackFrameDelay"));
+    tagMidiWidget(m_feedbackBlendCombo, QStringLiteral("feedbackBlendMode"));
     tagMidiWidget(m_feedbackWrapCombo, QStringLiteral("feedbackWrapMode"));
     tagMidiWidget(m_pictureWrapCombo, QStringLiteral("pictureWrapMode"));
 }

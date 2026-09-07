@@ -108,8 +108,12 @@ const QHash<QString, QString>& grandVjPropertyAliasMap()
         add("FBGA", "feedbackGamma");
         add("FBRT", "feedbackRotationDeg");
         add("FBZM", "feedbackZoom");
+        add("FBTX", "feedbackTranslateX");
+        add("FBTY", "feedbackTranslateY");
+        add("FBRN", "feedbackRetention");
         add("FBFD", "feedbackFrameDelay");
         add("FBIM", "feedbackInputMode");
+        add("FBBL", "feedbackBlendMode");
         add("FBWP", "feedbackWrapMode");
         add("MIXP", "mixingPresetIndex");
         add("MATTE", "matteRole");
@@ -338,7 +342,11 @@ QStringList allPropertyNames()
         QStringLiteral("feedbackGamma"),
         QStringLiteral("feedbackRotationDeg"),
         QStringLiteral("feedbackZoom"),
+        QStringLiteral("feedbackTranslateX"),
+        QStringLiteral("feedbackTranslateY"),
+        QStringLiteral("feedbackRetention"),
         QStringLiteral("feedbackFrameDelay"),
+        QStringLiteral("feedbackBlendMode"),
         QStringLiteral("feedbackWrapMode"),
         QStringLiteral("playMode"),
         QStringLiteral("clipPaused"),
@@ -408,8 +416,12 @@ QString labelFor(const QString& name)
         { QStringLiteral("feedbackgamma"), QStringLiteral("Feedback gamma") },
         { QStringLiteral("feedbackrotationdeg"), QStringLiteral("Feedback rotation") },
         { QStringLiteral("feedbackzoom"), QStringLiteral("Feedback zoom") },
+        { QStringLiteral("feedbacktranslatex"), QStringLiteral("Feedback translate X") },
+        { QStringLiteral("feedbacktranslatey"), QStringLiteral("Feedback translate Y") },
+        { QStringLiteral("feedbackretention"), QStringLiteral("Feedback retention") },
         { QStringLiteral("feedbackframedelay"), QStringLiteral("Feedback frame delay") },
         { QStringLiteral("feedbackinputmode"), QStringLiteral("Feedback input mode") },
+        { QStringLiteral("feedbackblendmode"), QStringLiteral("Feedback blend mode") },
         { QStringLiteral("feedbackwrapmode"), QStringLiteral("Feedback wrap mode") },
         { QStringLiteral("playmode"), QStringLiteral("Play mode") },
         { QStringLiteral("clippaused"), QStringLiteral("Clip paused") },
@@ -552,6 +564,13 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("feedbackzoom")) {
         *minV = kFeedbackZoomMin;
         *maxV = kFeedbackZoomMax;
+    } else if (p == QLatin1String("feedbacktranslatex")
+               || p == QLatin1String("feedbacktranslatey")) {
+        *minV = kFeedbackTranslateMin;
+        *maxV = kFeedbackTranslateMax;
+    } else if (p == QLatin1String("feedbackretention")) {
+        *minV = 0.0;
+        *maxV = 1.0;
     } else if (p == QLatin1String("feedbackingamma") || p == QLatin1String("feedbackgamma")) {
         *minV = 0.1;
         *maxV = 4.0;
@@ -564,6 +583,9 @@ void learnMinMax(const QString& name, double* minV, double* maxV)
     } else if (p == QLatin1String("feedbackinputmode")) {
         *minV = 0.0;
         *maxV = 2.0;
+    } else if (p == QLatin1String("feedbackblendmode")) {
+        *minV = 0.0;
+        *maxV = 5.0;
     } else if (p == QLatin1String("picturewrapmode") || p == QLatin1String("feedbackwrapmode")) {
         *minV = 0.0;
         *maxV = 4.0;
@@ -763,12 +785,28 @@ bool readValue(const Cell& c, const QString& raw, double* out)
         *out = c.props.feedback.zoom;
         return true;
     }
+    if (p == QLatin1String("feedbacktranslatex")) {
+        *out = c.props.feedback.translateX;
+        return true;
+    }
+    if (p == QLatin1String("feedbacktranslatey")) {
+        *out = c.props.feedback.translateY;
+        return true;
+    }
+    if (p == QLatin1String("feedbackretention")) {
+        *out = c.props.feedback.retention;
+        return true;
+    }
     if (p == QLatin1String("feedbackframedelay")) {
         *out = double(c.props.feedback.frameDelay);
         return true;
     }
     if (p == QLatin1String("feedbackinputmode")) {
         *out = double(int(c.props.feedback.inputMode));
+        return true;
+    }
+    if (p == QLatin1String("feedbackblendmode")) {
+        *out = double(int(c.props.feedback.blendMode));
         return true;
     }
     if (p == QLatin1String("feedbackwrapmode")) {
@@ -1056,6 +1094,18 @@ bool applyValue(Cell& c, const QString& raw, double v)
         c.props.feedback.zoom = qBound(kFeedbackZoomMin, v, kFeedbackZoomMax);
         return true;
     }
+    if (p == QLatin1String("feedbacktranslatex")) {
+        c.props.feedback.translateX = qBound(kFeedbackTranslateMin, v, kFeedbackTranslateMax);
+        return true;
+    }
+    if (p == QLatin1String("feedbacktranslatey")) {
+        c.props.feedback.translateY = qBound(kFeedbackTranslateMin, v, kFeedbackTranslateMax);
+        return true;
+    }
+    if (p == QLatin1String("feedbackretention")) {
+        c.props.feedback.retention = qBound(0.0, v, 1.0);
+        return true;
+    }
     if (p == QLatin1String("feedbackframedelay")) {
         c.props.feedback.frameDelay = qBound(0, int(qRound(v)), kFeedbackMaxFrameDelay);
         return true;
@@ -1064,6 +1114,12 @@ bool applyValue(Cell& c, const QString& raw, double v)
         const int mode = int(qRound(v));
         c.props.feedback.inputMode =
             static_cast<FeedbackInputMode>(qBound(0, mode, int(FeedbackInputMode::SceneLoopback)));
+        return true;
+    }
+    if (p == QLatin1String("feedbackblendmode")) {
+        const int mode = int(qRound(v));
+        c.props.feedback.blendMode =
+            static_cast<FeedbackBlendMode>(qBound(0, mode, int(FeedbackBlendMode::Difference)));
         return true;
     }
     if (p == QLatin1String("feedbackwrapmode")) {

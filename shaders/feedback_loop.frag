@@ -3,15 +3,15 @@
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 fragColor;
 
-layout(binding = 1) uniform sampler2D u_fresh;
+layout(binding = 1) uniform sampler2D u_live;
 layout(binding = 2) uniform sampler2D u_history;
 
 layout(std140, binding = 0) uniform Block {
-    vec4 fbA; // unused, pathSaturation, pathBrightness, pathContrast
+    vec4 fbA; // passMode, pathSaturation, pathBrightness, pathContrast
     vec4 fbB; // pathHueShift, pathGamma, rotationDeg, zoom
-    vec4 fbC; // centerX, centerY, unused, wrapMode
+    vec4 fbC; // translateX, translateY, retention, wrapMode
     vec4 fbD; // inBrightness, inContrast, inSaturation, inHueShift
-    vec4 fbE; // inGamma, layerOpacity, stageWidthPx, stageHeightPx
+    vec4 fbE; // inGamma, blendMode, stageWidthPx, stageHeightPx
 } ubuf;
 
 float hue2rgb(float p, float q, float t)
@@ -76,14 +76,15 @@ vec3 applyGrading(vec3 c, float brightness, float contrast, float saturation, fl
     return c;
 }
 
+/// Classic feedback pixel shift: scale + rotate about 0.5, then UV translate.
 vec2 transformUv(vec2 uv)
 {
     float zoom = ubuf.fbB.w;
     float rotDeg = ubuf.fbB.z;
-    float cx = ubuf.fbC.x;
-    float cy = ubuf.fbC.y;
+    float tx = ubuf.fbC.x;
+    float ty = ubuf.fbC.y;
 
-    vec2 p = uv - vec2(cx, cy);
+    vec2 p = uv - vec2(0.5);
     float scale = 1.0 + zoom * 0.5;
     p /= max(scale, 0.01);
 
@@ -92,7 +93,7 @@ vec2 transformUv(vec2 uv)
     float sn = sin(ang);
     p = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y);
 
-    return p + vec2(cx, cy);
+    return p + vec2(0.5) + vec2(tx, ty);
 }
 
 vec2 applyWrap(vec2 uv, int mode)
@@ -111,32 +112,72 @@ vec2 applyWrap(vec2 uv, int mode)
     return clamp(uv, 0.0, 1.0);
 }
 
+/// Loop blend: live vs retained history (FeedbackBlendMode).
+/// histScaled = gradedHistory * retention; graded = unscaled graded history.
+vec3 blendFeedback(vec3 live, vec3 histScaled, vec3 graded, float retention, int mode)
+{
+    if (mode == 1) {
+        // Mix: retention is lerp weight (0 = live only, 1 = history only).
+        return mix(live, graded, clamp(retention, 0.0, 1.0));
+    }
+    if (mode == 2) {
+        return 1.0 - (1.0 - live) * (1.0 - histScaled); // screen
+    }
+    if (mode == 3) {
+        return max(live, histScaled); // lighten
+    }
+    if (mode == 4) {
+        return live * mix(vec3(1.0), graded, clamp(retention, 0.0, 1.0)); // multiply
+    }
+    if (mode == 5) {
+        return abs(live - histScaled); // difference
+    }
+    // Add (default)
+    return live + histScaled;
+}
+
 void main()
 {
-    // Pipeline: stack inject (below no-key + above keyed) → UV zoom/rot/wrap
-    // → input grade → feedback grade → write ring. Opacity is mixer-only.
+    // passMode 0: input-grade live only (prepare for filters)
+    // passMode 1: blend(live, retention, grade(transform(history)))
+    // passMode 2: fade-only (no live)
+    const int passMode = int(ubuf.fbA.x + 0.5);
     const int wrapMode = int(ubuf.fbC.w + 0.5);
-    vec2 uv = transformUv(v_uv);
-    const bool oob = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
-    if (wrapMode == 4 && oob) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    const int blendMode = int(ubuf.fbE.y + 0.5);
+    const float retention = clamp(ubuf.fbC.z, 0.0, 1.0);
+
+    if (passMode == 0) {
+        vec3 live = texture(u_live, v_uv).rgb;
+        live = applyGrading(live,
+                            ubuf.fbD.x,
+                            ubuf.fbD.y,
+                            ubuf.fbD.z,
+                            ubuf.fbD.w,
+                            max(ubuf.fbE.x, 0.01));
+        fragColor = vec4(clamp(live, 0.0, 1.0), 1.0);
         return;
     }
 
-    vec3 rgb = texture(u_fresh, applyWrap(uv, wrapMode)).rgb;
-    // 1) Input color grade
-    rgb = applyGrading(rgb,
-                       ubuf.fbD.x,
-                       ubuf.fbD.y,
-                       ubuf.fbD.z,
-                       ubuf.fbD.w,
-                       max(ubuf.fbE.x, 0.01));
-    // 2) Feedback path color grade
-    rgb = applyGrading(rgb,
-                       ubuf.fbA.z,
-                       ubuf.fbA.w,
-                       ubuf.fbA.y,
-                       ubuf.fbB.x,
-                       max(ubuf.fbB.y, 0.01));
-    fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+    vec3 live = texture(u_live, v_uv).rgb;
+
+    vec2 huv = transformUv(v_uv);
+    const bool oob = huv.x < 0.0 || huv.x > 1.0 || huv.y < 0.0 || huv.y > 1.0;
+    vec3 graded = vec3(0.0);
+    vec3 histScaled = vec3(0.0);
+    if (!(wrapMode == 4 && oob)) {
+        graded = texture(u_history, applyWrap(huv, wrapMode)).rgb;
+        graded = applyGrading(graded,
+                            ubuf.fbA.z,
+                            ubuf.fbA.w,
+                            ubuf.fbA.y,
+                            ubuf.fbB.x,
+                            max(ubuf.fbB.y, 0.01));
+        histScaled = graded * retention;
+    }
+
+    if (passMode == 2) {
+        fragColor = vec4(clamp(histScaled, 0.0, 1.0), 1.0);
+        return;
+    }
+    fragColor = vec4(clamp(blendFeedback(live, histScaled, graded, retention, blendMode), 0.0, 1.0), 1.0);
 }

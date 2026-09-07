@@ -202,11 +202,22 @@ struct PictureParams {
     WrapMode wrapMode     = WrapMode::Clamp;
 };
 
-/// Source image for the feedback accumulation pass.
+/// Source image for the feedback live inject.
 enum class FeedbackInputMode : int {
-    BelowOnly = 0,       // partial mix below F only; key holes masked in mixer
-    StackComposite = 1,  // below (no key) + above (keyed); default
-    SceneLoopback = 2,   // previous full mixer frame (legacy Spout Out→In)
+    BelowOnly = 0,       // partial mix below F (classic live inject)
+    StackComposite = 1,  // below (no key) + above (keyed); unused in classic path
+    SceneLoopback = 2,   // previous full mixer frame (legacy)
+};
+
+/// How live inject combines with retained history inside the feedback loop
+/// (independent of mixer CopyMode used when compositing layer F into the scene).
+enum class FeedbackBlendMode : int {
+    Add        = 0, // live + hist*retention
+    Mix        = 1, // mix(live, gradedHist, retention)
+    Screen     = 2,
+    Lighten    = 3, // max
+    Multiply   = 4,
+    Difference = 5,
 };
 
 inline constexpr int kFeedbackRingCapacity = 32;
@@ -215,25 +226,33 @@ inline constexpr int kFeedbackMaxFrameDelay = kFeedbackRingCapacity - 2;
 inline constexpr int kFeedbackRingPrimeCount = kFeedbackRingCapacity;
 inline constexpr double kFeedbackZoomMin = -0.2;
 inline constexpr double kFeedbackZoomMax = 0.2;
+inline constexpr double kFeedbackTranslateMin = -0.25;
+inline constexpr double kFeedbackTranslateMax = 0.25;
 
 struct FeedbackParams {
-    /// Input grade (applied to stack inject before path grade).
+    /// Input grade (applied to live inject before filters).
     double inSaturation  = 1.0;   // 0..2
     double inBrightness  = 0.0;   // -1..1
     double inContrast    = 1.0;   // 0..2
     double inHueShift    = 0.0;   // 0..1 hue rotate on inject (MIDI/CC maps 0..1)
     double inGamma       = 1.0;   // 0.1..4
-    /// Feedback path grade (applied after input grade).
+    /// Feedback path grade (applied to transformed history before retention).
     double saturation  = 1.0;   // 0..2
     double brightness  = 0.0;   // -1..1
     double contrast    = 1.0;   // 0..2
     double hueShift    = 0.0;   // 0..1 hue rotate (MIDI/CC maps 0..1)
     double gamma       = 1.0;   // 0.1..4
-    double rotationDeg = 0.0;   // 0..360 path rotation (applied on read, live)
-    double zoom        = 0.0;   // kFeedbackZoomMin..kFeedbackZoomMax (+ = zoom out, live on read)
-    int frameDelay     = 0;     // 0..kFeedbackMaxFrameDelay frames back for history read
-    FeedbackInputMode inputMode = FeedbackInputMode::StackComposite;
-    WrapMode wrapMode = WrapMode::Black; // UV border (applied on read, live)
+    double rotationDeg = 0.0;   // 0..360 path rotation (applied on history read)
+    double zoom        = 0.0;   // kFeedbackZoomMin..kFeedbackZoomMax (+ = zoom out)
+    /// UV pan applied after scale/rotate (pivot 0.5).
+    double translateX  = 0.0;   // kFeedbackTranslateMin..Max
+    double translateY  = 0.0;   // kFeedbackTranslateMin..Max
+    /// History dampening / mix weight depending on blendMode.
+    double retention   = 0.95;  // 0..1
+    FeedbackBlendMode blendMode = FeedbackBlendMode::Add;
+    int frameDelay     = 0;     // 0..kFeedbackMaxFrameDelay (classic path uses ping-pong)
+    FeedbackInputMode inputMode = FeedbackInputMode::BelowOnly;
+    WrapMode wrapMode = WrapMode::Black; // UV border for history sample
 };
 
 struct CellProps {

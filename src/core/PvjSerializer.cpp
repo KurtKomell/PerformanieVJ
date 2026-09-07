@@ -98,6 +98,10 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         || p.feedback.gamma != fbDefault.gamma
         || p.feedback.rotationDeg != fbDefault.rotationDeg
         || p.feedback.zoom != fbDefault.zoom
+        || p.feedback.translateX != fbDefault.translateX
+        || p.feedback.translateY != fbDefault.translateY
+        || p.feedback.retention != fbDefault.retention
+        || p.feedback.blendMode != fbDefault.blendMode
         || p.feedback.frameDelay != fbDefault.frameDelay
         || p.feedback.inputMode != fbDefault.inputMode
         || p.feedback.wrapMode != fbDefault.wrapMode;
@@ -129,6 +133,21 @@ void writeProps(QXmlStreamWriter& w, const CellProps& p)
         w.writeAttribute(QStringLiteral("gamma"),       QString::number(p.feedback.gamma,       'g', 6));
         w.writeAttribute(QStringLiteral("rotationDeg"), QString::number(p.feedback.rotationDeg, 'g', 6));
         w.writeAttribute(QStringLiteral("zoom"),        QString::number(p.feedback.zoom,        'g', 6));
+        if (p.feedback.translateX != fbDefault.translateX) {
+            w.writeAttribute(QStringLiteral("translateX"),
+                             QString::number(p.feedback.translateX, 'g', 6));
+        }
+        if (p.feedback.translateY != fbDefault.translateY) {
+            w.writeAttribute(QStringLiteral("translateY"),
+                             QString::number(p.feedback.translateY, 'g', 6));
+        }
+        if (p.feedback.retention != fbDefault.retention) {
+            w.writeAttribute(QStringLiteral("retention"),
+                             QString::number(p.feedback.retention, 'g', 6));
+        }
+        if (p.feedback.blendMode != fbDefault.blendMode) {
+            w.writeAttribute(QStringLiteral("blendMode"), enums::toString(p.feedback.blendMode));
+        }
         if (p.feedback.frameDelay != fbDefault.frameDelay) {
             w.writeAttribute(QStringLiteral("frameDelay"), QString::number(p.feedback.frameDelay));
         }
@@ -282,8 +301,12 @@ void writeBank(QXmlStreamWriter& w, const Bank& b)
             && c.props.feedback.gamma == 1.0
             && c.props.feedback.rotationDeg == 0.0
             && c.props.feedback.zoom == 0.0
+            && c.props.feedback.translateX == 0.0
+            && c.props.feedback.translateY == 0.0
+            && c.props.feedback.retention == 0.95
+            && c.props.feedback.blendMode == FeedbackBlendMode::Add
             && c.props.feedback.frameDelay == 0
-            && c.props.feedback.inputMode == FeedbackInputMode::StackComposite
+            && c.props.feedback.inputMode == FeedbackInputMode::BelowOnly
             && c.props.feedback.wrapMode == WrapMode::Black;
         if (isDefault) {
             continue;
@@ -568,6 +591,15 @@ CellProps readProps(QXmlStreamReader& r)
             p.feedback.gamma       = rd("gamma", 1.0);
             p.feedback.rotationDeg = rd("rotationDeg", 0.0);
             p.feedback.zoom = qBound(kFeedbackZoomMin, rd("zoom", 0.0), kFeedbackZoomMax);
+            p.feedback.translateX =
+                qBound(kFeedbackTranslateMin, rd("translateX", 0.0), kFeedbackTranslateMax);
+            p.feedback.translateY =
+                qBound(kFeedbackTranslateMin, rd("translateY", 0.0), kFeedbackTranslateMax);
+            p.feedback.retention = qBound(0.0, rd("retention", 0.95), 1.0);
+            if (fbAttrs.hasAttribute(QStringLiteral("blendMode"))) {
+                p.feedback.blendMode = enums::feedbackBlendModeFromString(
+                    fbAttrs.value(QStringLiteral("blendMode")).toString(), FeedbackBlendMode::Add);
+            }
             if (fbAttrs.hasAttribute(QStringLiteral("frameDelay"))) {
                 p.feedback.frameDelay =
                     qBound(0, int(qRound(rd("frameDelay", 0.0))), kFeedbackMaxFrameDelay);
@@ -575,9 +607,9 @@ CellProps readProps(QXmlStreamReader& r)
             if (fbAttrs.hasAttribute(QStringLiteral("inputMode"))) {
                 p.feedback.inputMode = enums::feedbackInputModeFromString(
                     fbAttrs.value(QStringLiteral("inputMode")).toString(),
-                    FeedbackInputMode::StackComposite);
+                    FeedbackInputMode::BelowOnly);
             } else {
-                p.feedback.inputMode = FeedbackInputMode::StackComposite;
+                p.feedback.inputMode = FeedbackInputMode::BelowOnly;
             }
             if (fbAttrs.hasAttribute(QStringLiteral("wrapMode"))) {
                 p.feedback.wrapMode = enums::wrapModeFromString(
