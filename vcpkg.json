@@ -14,7 +14,7 @@
         {
             "name": "ffmpeg",
             "default-features": false,
-            "features": ["avcodec", "avformat", "swscale", "swresample"]
+            "features": ["avcodec", "avformat", "swscale", "swresample", "nvcodec"]
         },
         "lz4",
         "miniaudio",
